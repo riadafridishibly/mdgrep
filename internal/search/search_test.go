@@ -188,6 +188,48 @@ func TestMaxCaps(t *testing.T) {
 	}
 }
 
+// Code spans are the one place where the source syntax is part of what people
+// search for, so a pattern typed with backticks has to reach them.
+const spans = "# API\n" + // 0
+	"\n" + // 1
+	"- On macOS run `brew install foo`\n" + // 2
+	"- Configure credentials in `~/.foo/config`\n" // 3
+
+func TestBacktickPattern(t *testing.T) {
+	cases := []struct {
+		mode    match.Mode
+		pattern string
+		start   int
+	}{
+		{match.Substring, "`brew install foo`", 2},
+		{match.Substring, "in `~/.foo/config`", 3},
+		{match.Fuzzy, "`brew install foo`", 2},
+		{match.Fuzzy, "`config`", 3},
+		{match.Regexp, "run `brew.*foo`$", 2},
+	}
+	for _, c := range cases {
+		m, err := match.New(c.mode, c.pattern, true, 0.55)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := File(mdoc.Parse("t.md", []byte(spans)), m, Options{})
+		if len(res) != 1 || res[0].Start != c.start {
+			t.Fatalf("mode %d pattern %q: res = %+v, want one hit at line %d",
+				c.mode, c.pattern, res, c.start)
+		}
+	}
+}
+
+func TestBacktickPatternMissesPlainText(t *testing.T) {
+	m, err := match.New(match.Substring, "`credentials`", true, 0.55)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := File(mdoc.Parse("t.md", []byte(spans)), m, Options{}); res != nil {
+		t.Fatalf("got %+v, want nil: the word is not in a code span", res)
+	}
+}
+
 func TestNoMatch(t *testing.T) {
 	if res := find(t, "quantum entanglement", Options{}); res != nil {
 		t.Fatalf("got %+v, want nil", res)

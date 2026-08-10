@@ -152,6 +152,37 @@ func TestLinkDestinationIsSearchable(t *testing.T) {
 	}
 }
 
+func TestCodeSpanKeepsItsBackticks(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{"Run `brew install foo` now.\n", "Run `brew install foo` now."},
+		{"Edit `~/.foo/config`\n", "Edit `~/.foo/config`"},
+		{"`start` of line\n", "`start` of line"},
+		{"A `` a ` b `` span.\n", "A `` a ` b `` span."},
+		{"Pad `` foo `` here.\n", "Pad `` foo `` here."},
+		{"Wrapped `multi\nline` span.\n", "Wrapped `multi\nline` span."},
+		{"Bare `` tick.\n", "Bare `` tick."},
+	}
+	for _, c := range cases {
+		d := Parse("t.md", []byte(c.src))
+		if got := firstOfKind(t, d, KindParagraph).Text; got != c.want {
+			t.Fatalf("text of %q = %q, want %q", c.src, got, c.want)
+		}
+	}
+}
+
+func TestCodeSpanInHeadingAndItem(t *testing.T) {
+	d := Parse("t.md", []byte("# The `foo` tool\n\n- run `foo doctor`\n"))
+	if got := firstOfKind(t, d, KindHeading).Text; got != "The `foo` tool" {
+		t.Fatalf("heading text = %q", got)
+	}
+	if got := firstOfKind(t, d, KindItem).Text; got != "run `foo doctor`" {
+		t.Fatalf("item text = %q", got)
+	}
+	if got := d.Breadcrumb(2); len(got) != 1 || got[0] != "The `foo` tool" {
+		t.Fatalf("breadcrumb = %v", got)
+	}
+}
+
 func TestSourceLineIndex(t *testing.T) {
 	s := NewSource("t.md", []byte("ab\ncd\nef\n"))
 	if s.NumLines() != 3 {

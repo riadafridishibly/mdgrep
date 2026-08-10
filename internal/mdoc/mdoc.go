@@ -282,6 +282,9 @@ func nodeText(n ast.Node, src []byte) string {
 		case *ast.AutoLink:
 			sb.Write(t.URL(src))
 			return
+		case *ast.CodeSpan:
+			sb.WriteString(codeSpan(t, src))
+			return
 		}
 		if n.Type() == ast.TypeBlock && n.IsRaw() {
 			if ls := n.Lines(); ls != nil {
@@ -309,6 +312,46 @@ func nodeText(n ast.Node, src []byte) string {
 	}
 	walk(n)
 	return sb.String()
+}
+
+// codeSpan reproduces an inline code span the way it is written, backticks
+// included, so a pattern typed with them still matches. The AST holds only the
+// content, and CommonMark strips one space of padding from it, so the
+// delimiters are recovered by scanning the source on either side.
+func codeSpan(n *ast.CodeSpan, src []byte) string {
+	lo, hi, ok := nodeRange(n)
+	if !ok || lo > hi {
+		return ""
+	}
+	return string(src[openTicks(src, lo):closeTicks(src, hi+1)])
+}
+
+func openTicks(src []byte, content int) int {
+	i := content
+	for i > 0 && src[i-1] == ' ' {
+		i--
+	}
+	if i == 0 || src[i-1] != '`' {
+		return content
+	}
+	for i > 0 && src[i-1] == '`' {
+		i--
+	}
+	return i
+}
+
+func closeTicks(src []byte, content int) int {
+	i := content
+	for i < len(src) && src[i] == ' ' {
+		i++
+	}
+	if i == len(src) || src[i] != '`' {
+		return content
+	}
+	for i < len(src) && src[i] == '`' {
+		i++
+	}
+	return i
 }
 
 // frontmatterEnd returns the line holding the closing delimiter of a YAML/TOML
