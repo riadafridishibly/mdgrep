@@ -61,6 +61,15 @@ func New(mode Mode, pattern string, ignoreCase bool, minScore float64) (Matcher,
 	}
 }
 
+// All matches every block and highlights nothing. It backs searches whose
+// selection is expressed entirely by filters instead of by a pattern.
+func All() Matcher { return allMatcher{} }
+
+type allMatcher struct{}
+
+func (allMatcher) Score(string) (float64, bool) { return 1, true }
+func (allMatcher) Spans(string) []Span          { return nil }
+
 // SmartCase reports whether a search should ignore case: yes unless the
 // pattern itself contains an upper-case letter.
 func SmartCase(pattern string) bool {

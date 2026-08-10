@@ -109,6 +109,7 @@ type jsonResult struct {
 	Score      float64  `json:"score"`
 	Start      int      `json:"start"`
 	End        int      `json:"end"`
+	Checked    *bool    `json:"checked,omitempty"`
 	Breadcrumb []string `json:"breadcrumb,omitempty"`
 	Text       string   `json:"text"`
 }
@@ -117,12 +118,18 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 	enc := json.NewEncoder(p.W)
 	for _, r := range results {
 		p.wroteAny = true
+		// Present only on task items, where false is meaningful.
+		var checked *bool
+		if r.Task {
+			checked = &r.Checked
+		}
 		enc.Encode(jsonResult{
 			Path:       r.Path,
 			Kind:       string(r.Kind),
 			Score:      r.Score,
 			Start:      r.Start + 1,
 			End:        r.End + 1,
+			Checked:    checked,
 			Breadcrumb: r.Breadcrumb,
 			Text:       strings.Join(src.Lines(r.Start, r.End), "\n"),
 		})

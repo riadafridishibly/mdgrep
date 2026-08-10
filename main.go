@@ -25,6 +25,11 @@ const usage = `mdgrep — loose, node-aware grep for markdown
 
 usage: mdgrep [options] PATTERN [path ...]
 
+PATTERN may be omitted when a filter (-k, --task, --checked, --unchecked)
+already says what to select: "mdgrep --todo" lists every open checkbox below
+the current directory. To scope that to a path, pass an empty pattern:
+"mdgrep '' docs --todo".
+
 Matching
   -f, --fuzzy           fuzzy match, every whitespace token must appear (default)
   -F, --fixed           plain substring match
@@ -34,6 +39,9 @@ Matching
   -s, --min-score N     fuzzy score threshold, 0..1 (default 0.55)
   -k, --kind LIST       only these node kinds: heading,item,paragraph,code,
                         quote,table,row,html,frontmatter,list
+  -t, --task            only task list items ("- [ ]" and "- [x]")
+      --unchecked       only unticked task items (alias --todo)
+      --checked         only ticked task items (alias --done)
 
 Selection
   -x, --expand N        climb N ancestor levels from the matched node
@@ -65,6 +73,9 @@ type config struct {
 	forceFold  bool
 	minScore   float64
 	kinds      string
+	task       bool
+	checked    bool
+	unchecked  bool
 	opt        search.Options
 	context    int
 	noNums     bool
@@ -101,6 +112,9 @@ func run() int {
 	bind(func(n string) { fs.BoolVar(&c.forceCase, n, false, "") }, "S", "case-sensitive")
 	bind(func(n string) { fs.Float64Var(&c.minScore, n, 0.55, "") }, "s", "min-score")
 	bind(func(n string) { fs.StringVar(&c.kinds, n, "", "") }, "k", "kind")
+	bind(func(n string) { fs.BoolVar(&c.task, n, false, "") }, "t", "task")
+	bind(func(n string) { fs.BoolVar(&c.checked, n, false, "") }, "checked", "done")
+	bind(func(n string) { fs.BoolVar(&c.unchecked, n, false, "") }, "unchecked", "todo")
 	bind(func(n string) { fs.IntVar(&c.opt.Expand, n, 0, "") }, "x", "expand")
 	fs.BoolVar(&c.opt.Section, "section", false, "")
 	bind(func(n string) { fs.IntVar(&c.opt.Before, n, 0, "") }, "B", "before")
@@ -123,7 +137,19 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n\n%s", err, usage)
 		return 2
 	}
-	if c.help || fs.NArg() == 0 {
+	kinds, err := parseKinds(c.kinds)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+		return 2
+	}
+	c.opt.Kinds = kinds
+	c.opt.Task = taskFilter(c)
+	// A filter can stand in for the pattern, so "mdgrep --todo" lists every open
+	// checkbox. Paths still have to follow a pattern: the first positional is
+	// always PATTERN, so use an empty one to scope a filter to a directory.
+	filtered := len(kinds) > 0 || c.opt.Task != search.TaskIgnore
+
+	if c.help || (fs.NArg() == 0 && !filtered) {
 		fmt.Fprint(os.Stdout, usage)
 		if fs.NArg() == 0 && !c.help {
 			return 2
@@ -139,8 +165,10 @@ func run() int {
 	default:
 		c.mode = match.Fuzzy
 	}
-	pattern := fs.Arg(0)
-	paths := fs.Args()[1:]
+	pattern, paths := "", fs.Args()
+	if fs.NArg() > 0 {
+		pattern, paths = fs.Arg(0), fs.Args()[1:]
+	}
 
 	c.ignoreCase = match.SmartCase(pattern)
 	if c.forceFold {
@@ -152,17 +180,13 @@ func run() int {
 	if c.context > 0 {
 		c.opt.Before, c.opt.After = c.context, c.context
 	}
-	kinds, err := parseKinds(c.kinds)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
-		return 2
-	}
-	c.opt.Kinds = kinds
-
-	matcher, err := match.New(c.mode, pattern, c.ignoreCase, c.minScore)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
-		return 2
+	matcher := match.All()
+	if pattern != "" || !filtered {
+		matcher, err = match.New(c.mode, pattern, c.ignoreCase, c.minScore)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+			return 2
+		}
 	}
 
 	files, useStdin, err := collectFiles(paths, splitSet(c.exts), c.hidden, c.noIgnore)
@@ -294,6 +318,22 @@ var kindAliases = map[string]mdoc.Kind{
 	"code": mdoc.KindCode, "quote": mdoc.KindQuote, "table": mdoc.KindTable,
 	"row": mdoc.KindRow, "cell": mdoc.KindCell, "html": mdoc.KindHTML,
 	"frontmatter": mdoc.KindFrontmatter, "fm": mdoc.KindFrontmatter,
+}
+
+// taskFilter folds the three checkbox flags into one filter. Asking for both
+// states is the same as asking for any checkbox item.
+func taskFilter(c config) search.TaskFilter {
+	switch {
+	case c.checked && c.unchecked:
+		return search.TaskAny
+	case c.checked:
+		return search.TaskChecked
+	case c.unchecked:
+		return search.TaskUnchecked
+	case c.task:
+		return search.TaskAny
+	}
+	return search.TaskIgnore
 }
 
 func parseKinds(spec string) (map[mdoc.Kind]bool, error) {

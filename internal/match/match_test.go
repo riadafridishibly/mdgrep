@@ -135,6 +135,18 @@ func TestRegexpMode(t *testing.T) {
 	}
 }
 
+func TestAllMatchesEverythingWithoutHighlighting(t *testing.T) {
+	m := All()
+	for _, s := range []string{"", "anything at all"} {
+		if _, ok := m.Score(s); !ok {
+			t.Fatalf("All should score %q", s)
+		}
+	}
+	if spans := m.Spans("anything at all"); spans != nil {
+		t.Fatalf("spans = %v, want none", spans)
+	}
+}
+
 func TestMergeSpans(t *testing.T) {
 	got := Merge([]Span{{5, 8}, {0, 3}, {3, 6}})
 	if len(got) != 1 || got[0] != (Span{0, 8}) {

@@ -12,6 +12,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 )
 
@@ -46,6 +47,8 @@ type Block struct {
 	Parent   *Block
 	Children []*Block
 	Located  bool // false when goldmark exposed no offsets for this node
+	Task     bool // item opens with a GFM task checkbox
+	Checked  bool // that checkbox is ticked
 }
 
 // Contains reports whether b is an ancestor of other.
@@ -116,6 +119,9 @@ func (d *Doc) build(n ast.Node, parent *Block, data []byte) {
 		if h, ok := c.(*ast.Heading); ok {
 			b.Level = h.Level
 		}
+		if b.Kind == KindItem {
+			b.Task, b.Checked = taskState(c)
+		}
 		if lo, hi, ok := nodeRange(c); ok {
 			b.Start, b.End = d.Src.LineIndex(lo), d.Src.LineIndex(hi)
 			b.Located = true
@@ -127,6 +133,19 @@ func (d *Doc) build(n ast.Node, parent *Block, data []byte) {
 		d.Blocks = append(d.Blocks, b)
 		d.build(c, b, data)
 	}
+}
+
+// taskState reads the GFM task checkbox goldmark puts at the head of a list
+// item's first inline run: "- [ ] a" and "- [x] a" are items, "- a" is not.
+func taskState(item ast.Node) (task, checked bool) {
+	first := item.FirstChild()
+	if first == nil {
+		return false, false
+	}
+	if cb, ok := first.FirstChild().(*east.TaskCheckBox); ok {
+		return true, cb.IsChecked
+	}
+	return false, false
 }
 
 func kindOf(n ast.Node) Kind {

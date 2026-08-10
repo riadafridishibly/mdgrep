@@ -9,9 +9,30 @@ import (
 	"mdgrep/internal/mdoc"
 )
 
+// TaskFilter restricts results to GFM task-list items by checkbox state.
+type TaskFilter int
+
+const (
+	TaskIgnore    TaskFilter = iota // no restriction
+	TaskAny                         // any checkbox item
+	TaskChecked                     // "- [x]" only
+	TaskUnchecked                   // "- [ ]" only
+)
+
+func (f TaskFilter) accepts(b *mdoc.Block) bool {
+	switch f {
+	case TaskChecked:
+		return b.Checked
+	case TaskUnchecked:
+		return !b.Checked
+	}
+	return true
+}
+
 // Options controls which blocks qualify and how far a hit is widened.
 type Options struct {
 	Kinds   map[mdoc.Kind]bool // nil means every kind
+	Task    TaskFilter         // checkbox state a hit must sit in
 	Before  int                // sibling blocks before the hit
 	After   int                // sibling blocks after the hit
 	Lines   int                // raw lines padded on both sides
@@ -28,6 +49,8 @@ type Result struct {
 	Start, End int // inclusive, zero-based lines, after expansion
 	HitStart   int // first line of the matched block itself
 	HitEnd     int // last line of the matched block itself
+	Task       bool
+	Checked    bool
 	Breadcrumb []string
 }
 
@@ -40,7 +63,10 @@ func File(doc *mdoc.Doc, m match.Matcher, opt Options) []Result {
 
 	var out []Result
 	for _, h := range hits {
-		sel := promote(h.block, opt.Expand)
+		sel, ok := promote(h.block, opt)
+		if !ok {
+			continue
+		}
 		start, end := sel.Start, sel.End
 		start, end = withSiblings(sel, start, end, opt.Before, opt.After)
 		if opt.Section {
@@ -58,8 +84,13 @@ func File(doc *mdoc.Doc, m match.Matcher, opt Options) []Result {
 			End:        end,
 			HitStart:   sel.Start,
 			HitEnd:     sel.End,
+			Task:       sel.Task,
+			Checked:    sel.Checked,
 			Breadcrumb: doc.Breadcrumb(sel.Start),
 		})
+	}
+	if len(out) == 0 {
+		return nil
 	}
 
 	out = mergeOverlapping(out)
@@ -112,19 +143,39 @@ func candidates(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
 }
 
 // promote lifts a hit to the node a reader thinks of as "the match": text
-// inside a list item becomes the whole item, then extra levels climb the tree.
-func promote(b *mdoc.Block, levels int) *mdoc.Block {
+// inside a list item becomes the whole item, a task filter climbs on to the
+// checkbox item owning the hit, then extra levels climb the tree. ok is false
+// when the task filter rejects the hit.
+func promote(b *mdoc.Block, opt Options) (*mdoc.Block, bool) {
 	if (b.Kind == mdoc.KindParagraph || b.Kind == mdoc.KindTextBlock) &&
 		b.Parent != nil && b.Parent.Kind == mdoc.KindItem {
 		b = b.Parent
 	}
-	for range levels {
+	if opt.Task != TaskIgnore {
+		t := nearestTask(b)
+		if t == nil || !opt.Task.accepts(t) {
+			return nil, false
+		}
+		b = t
+	}
+	for range opt.Expand {
 		if b.Parent == nil || b.Parent.Kind == mdoc.KindDocument {
 			break
 		}
 		b = b.Parent
 	}
-	return b
+	return b, true
+}
+
+// nearestTask returns b or its closest ancestor that is a checkbox item, so a
+// hit in a plain sub-bullet still reports the task it hangs under.
+func nearestTask(b *mdoc.Block) *mdoc.Block {
+	for ; b != nil; b = b.Parent {
+		if b.Task {
+			return b
+		}
+	}
+	return nil
 }
 
 func withSiblings(b *mdoc.Block, start, end, before, after int) (int, int) {
@@ -204,6 +255,7 @@ func mergeOverlapping(rs []Result) []Result {
 		if r.Score > last.Score {
 			last.Score = r.Score
 			last.Kind = r.Kind
+			last.Task, last.Checked = r.Task, r.Checked
 		}
 		if r.HitEnd > last.HitEnd {
 			last.HitEnd = r.HitEnd

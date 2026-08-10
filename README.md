@@ -39,6 +39,12 @@ Paths may be files or directories; directories are walked for `.md`,
 `.markdown`, `.mdown`, `.mkd` and `.mdx`. With no path, `mdgrep` reads stdin
 when it is a pipe, otherwise it searches the current directory.
 
+`PATTERN` is required unless a filter (`-k`, `--task`, `--checked`,
+`--unchecked`) already says what to select, in which case it may be dropped:
+`mdgrep --todo` lists every open checkbox below the current directory. The first
+positional argument is always the pattern, so to point a bare filter at a path,
+pass an empty pattern: `mdgrep "" docs --todo`.
+
 ### Matching
 
 | Flag | Meaning |
@@ -50,6 +56,9 @@ when it is a pipe, otherwise it searches the current directory.
 | `-S`, `--case-sensitive` | force case-sensitive |
 | `-s`, `--min-score N` | fuzzy threshold, 0..1 (default 0.55) |
 | `-k`, `--kind LIST` | restrict to node kinds |
+| `-t`, `--task` | only task list items |
+| `--unchecked`, `--todo` | only unticked task items |
+| `--checked`, `--done` | only ticked task items |
 
 Case is smart by default: the search folds case unless the pattern itself
 contains an upper-case letter.
@@ -68,6 +77,24 @@ Raise `--min-score` to demand tighter matches, lower it to cast a wider net.
 mdgrep "rollback" docs -k heading      # only headings
 mdgrep "TODO" notes -k item            # only bullets
 ```
+
+### Checkboxes
+
+`- [ ] …` and `- [x] …` are task list items. `--task` keeps only those,
+`--unchecked` and `--checked` narrow further by state; asking for both states is
+the same as `--task`. The checkbox itself is not part of the searchable text, so
+`mdgrep "rotate the key" --unchecked` matches what you see after the box.
+
+```bash
+mdgrep "deploy key" notes.md --unchecked   # open work mentioning the deploy key
+mdgrep "changelog" notes.md --checked      # already done
+mdgrep --todo                              # every open box below the cwd
+mdgrep "" docs --todo                      # every open box under docs/
+```
+
+A hit in a plain sub-bullet reports the checkbox item it hangs under, so
+searching the vault line above prints the whole `- [ ] Rotate the deploy key`
+task. Non-task hits — headings, paragraphs, plain bullets — are dropped.
 
 ### Selection — how much to print
 
@@ -116,7 +143,8 @@ Colour is disabled automatically when stdout is not a terminal, when `NO_COLOR`
 is set, or when `TERM=dumb`.
 
 `--json` emits newline-delimited objects with `path`, `kind`, `score`, `start`,
-`end` (1-based, inclusive), `breadcrumb` and `text`:
+`end` (1-based, inclusive), `breadcrumb` and `text`. Task items also carry
+`checked`, which is absent on everything else:
 
 ```bash
 mdgrep "rollback" docs --json | jq -r '.path + ":" + (.start|tostring)'
@@ -127,7 +155,9 @@ error.
 
 ## Notes on parsing
 
-- GFM is enabled, so tables, task lists, strikethrough and autolinks parse.
+- GFM is enabled, so tables, task lists, strikethrough and autolinks parse. A
+  task list item keeps its checkbox state, and the `[ ]` marker is stripped from
+  the text the matcher sees.
 - YAML/TOML front matter is treated as a single searchable node rather than
   being mangled into a thematic break and a setext heading.
 - Link and image destinations are part of a node's searchable text, so you can

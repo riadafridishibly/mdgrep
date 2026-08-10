@@ -106,6 +106,74 @@ func TestKindFilter(t *testing.T) {
 	}
 }
 
+// Blank lines keep the hits far enough apart that merging leaves one result
+// per item, so the filters can be asserted on start lines.
+const tasks = "# Sprint\n" + // 0
+	"\n" + // 1
+	"- [ ] deploy the canary\n" + // 2
+	"\n" + // 3
+	"Deploy prose, not a task.\n" + // 4
+	"\n" + // 5
+	"- [x] deploy the docs\n" + // 6
+	"  - link the deploy runbook\n" + // 7
+	"\n" + // 8
+	"- deploy by hand\n" // 9
+
+func findTasks(t *testing.T, pattern string, opt Options) []Result {
+	t.Helper()
+	m, err := match.New(match.Fuzzy, pattern, true, 0.55)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return File(mdoc.Parse("t.md", []byte(tasks)), m, opt)
+}
+
+func TestTaskFilters(t *testing.T) {
+	cases := []struct {
+		filter TaskFilter
+		starts []int
+	}{
+		{TaskIgnore, []int{2, 4, 6, 9}},
+		{TaskAny, []int{2, 6}},
+		{TaskChecked, []int{6}},
+		{TaskUnchecked, []int{2}},
+	}
+	for _, c := range cases {
+		res := findTasks(t, "deploy", Options{Task: c.filter})
+		var got []int
+		for _, r := range res {
+			got = append(got, r.Start)
+		}
+		if len(got) != len(c.starts) {
+			t.Fatalf("filter %d: starts = %v, want %v", c.filter, got, c.starts)
+		}
+		for i, want := range c.starts {
+			if got[i] != want {
+				t.Fatalf("filter %d: starts = %v, want %v", c.filter, got, c.starts)
+			}
+		}
+	}
+}
+
+func TestTaskFilterClimbsToOwningTask(t *testing.T) {
+	res := findTasks(t, "runbook", Options{Task: TaskAny})
+	if len(res) != 1 {
+		t.Fatalf("got %d results, want 1", len(res))
+	}
+	if res[0].Start != 6 || res[0].End != 7 {
+		t.Fatalf("range = %d..%d, want 6..7 (the checked parent task)", res[0].Start, res[0].End)
+	}
+	if !res[0].Task || !res[0].Checked {
+		t.Fatalf("task=%v checked=%v, want true/true", res[0].Task, res[0].Checked)
+	}
+}
+
+func TestTaskFilterDropsNonTaskHits(t *testing.T) {
+	if res := findTasks(t, "sprint", Options{Task: TaskAny}); res != nil {
+		t.Fatalf("got %+v, want nil for a heading hit under a task filter", res)
+	}
+}
+
 func TestBreadcrumbOnResult(t *testing.T) {
 	res := find(t, "brew install", Options{})
 	if got := res[0].Breadcrumb; len(got) != 2 || got[1] != "Install" {

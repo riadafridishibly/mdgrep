@@ -31,6 +31,14 @@ foo deploy --promote
 | canary | 10%     | ops   |
 | full   | 100%    | ops   |
 
+## Release checklist
+
+- [x] Tag the release
+- [x] Publish the changelog
+- [ ] Announce in #ops
+- [ ] Rotate the deploy key
+  - the old key lives in the vault
+
 ## Troubleshooting
 
 See [the runbook](https://example.com/runbook) for pager escalation.

@@ -82,6 +82,35 @@ func TestListItemSpansNestedChildren(t *testing.T) {
 	}
 }
 
+func TestTaskItemsCarryCheckboxState(t *testing.T) {
+	src := "- [ ] write docs\n" + // 0
+		"- [x] ship it\n" + // 1
+		"  - plain child\n" + // 2
+		"- plain\n" // 3
+	d := Parse("t.md", []byte(src))
+	var items []*Block
+	for _, b := range d.Blocks {
+		if b.Kind == KindItem {
+			items = append(items, b)
+		}
+	}
+	if len(items) != 4 {
+		t.Fatalf("got %d items, want 4", len(items))
+	}
+	want := []struct{ task, checked bool }{
+		{true, false}, {true, true}, {false, false}, {false, false},
+	}
+	for i, w := range want {
+		if items[i].Task != w.task || items[i].Checked != w.checked {
+			t.Fatalf("item %d: task=%v checked=%v, want %v/%v",
+				i, items[i].Task, items[i].Checked, w.task, w.checked)
+		}
+	}
+	if got := items[0].Text; got != "write docs" {
+		t.Fatalf("task text = %q, want the text without the checkbox", got)
+	}
+}
+
 func TestBreadcrumbAndSection(t *testing.T) {
 	d := Parse("t.md", []byte(sample))
 	if got := d.Breadcrumb(12); len(got) != 2 || got[0] != "Title" || got[1] != "Sub" {
