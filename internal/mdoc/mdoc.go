@@ -1,0 +1,376 @@
+// Package mdoc parses markdown into a line-addressable block tree.
+//
+// goldmark reports byte offsets that sometimes exclude the syntax that
+// introduced a block (the "#" of a heading, the fences around a code block).
+// mdoc converts every block to an inclusive line range and widens it back over
+// that syntax, so a block can be reproduced verbatim from the original source.
+package mdoc
+
+import (
+	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/text"
+)
+
+type Kind string
+
+const (
+	KindDocument    Kind = "document"
+	KindHeading     Kind = "heading"
+	KindParagraph   Kind = "paragraph"
+	KindTextBlock   Kind = "textblock"
+	KindList        Kind = "list"
+	KindItem        Kind = "item"
+	KindCode        Kind = "code"
+	KindQuote       Kind = "quote"
+	KindHTML        Kind = "html"
+	KindTable       Kind = "table"
+	KindRow         Kind = "row"
+	KindCell        Kind = "cell"
+	KindBreak       Kind = "break"
+	KindFrontmatter Kind = "frontmatter"
+)
+
+// Block is one addressable markdown node.
+type Block struct {
+	Kind     Kind
+	Node     ast.Node // nil for the synthetic root and for frontmatter
+	Start    int      // inclusive, zero-based line
+	End      int      // inclusive, zero-based line
+	Level    int      // heading level, else 0
+	Depth    int      // nesting depth below the document root
+	Text     string   // plain text of the whole subtree, used for matching
+	Parent   *Block
+	Children []*Block
+	Located  bool // false when goldmark exposed no offsets for this node
+}
+
+// Contains reports whether b is an ancestor of other.
+func (b *Block) Contains(other *Block) bool {
+	for p := other.Parent; p != nil; p = p.Parent {
+		if p == b {
+			return true
+		}
+	}
+	return false
+}
+
+type Doc struct {
+	Src      *Source
+	Root     *Block
+	Blocks   []*Block // document order, root excluded
+	Headings []*Block // document order
+}
+
+var parser = goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser()
+
+func Parse(path string, data []byte) *Doc {
+	src := NewSource(path, data)
+	d := &Doc{Src: src}
+	d.Root = &Block{Kind: KindDocument, Start: 0, End: src.NumLines() - 1, Located: true}
+
+	scan := data
+	if end, ok := frontmatterEnd(src); ok {
+		fm := &Block{
+			Kind:    KindFrontmatter,
+			Start:   0,
+			End:     end,
+			Depth:   1,
+			Text:    strings.Join(src.Lines(1, end-1), "\n"),
+			Parent:  d.Root,
+			Located: true,
+		}
+		d.Root.Children = append(d.Root.Children, fm)
+		d.Blocks = append(d.Blocks, fm)
+		// Blank the region so goldmark does not read "---" as a thematic break
+		// or turn the first key into a setext heading. Length is preserved so
+		// every later byte offset still lines up with the original source.
+		scan = maskLines(data, src, 0, end)
+	}
+
+	root := parser.Parse(text.NewReader(scan))
+	d.build(root, d.Root, data)
+	for _, b := range d.Blocks {
+		if b.Kind == KindHeading {
+			d.Headings = append(d.Headings, b)
+		}
+	}
+	return d
+}
+
+func (d *Doc) build(n ast.Node, parent *Block, data []byte) {
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if c.Type() != ast.TypeBlock {
+			continue
+		}
+		b := &Block{
+			Kind:   kindOf(c),
+			Node:   c,
+			Depth:  parent.Depth + 1,
+			Text:   nodeText(c, data),
+			Parent: parent,
+		}
+		if h, ok := c.(*ast.Heading); ok {
+			b.Level = h.Level
+		}
+		if lo, hi, ok := nodeRange(c); ok {
+			b.Start, b.End = d.Src.LineIndex(lo), d.Src.LineIndex(hi)
+			b.Located = true
+			widen(b, d.Src)
+		} else {
+			b.Start, b.End = -1, -1
+		}
+		parent.Children = append(parent.Children, b)
+		d.Blocks = append(d.Blocks, b)
+		d.build(c, b, data)
+	}
+}
+
+func kindOf(n ast.Node) Kind {
+	switch n.Kind() {
+	case ast.KindHeading:
+		return KindHeading
+	case ast.KindParagraph:
+		return KindParagraph
+	case ast.KindTextBlock:
+		return KindTextBlock
+	case ast.KindList:
+		return KindList
+	case ast.KindListItem:
+		return KindItem
+	case ast.KindCodeBlock, ast.KindFencedCodeBlock:
+		return KindCode
+	case ast.KindBlockquote:
+		return KindQuote
+	case ast.KindHTMLBlock:
+		return KindHTML
+	case ast.KindThematicBreak:
+		return KindBreak
+	}
+	switch strings.ToLower(n.Kind().String()) {
+	case "table":
+		return KindTable
+	case "tableheader", "tablerow":
+		return KindRow
+	case "tablecell":
+		return KindCell
+	}
+	return Kind(strings.ToLower(n.Kind().String()))
+}
+
+// nodeRange unions every byte offset reachable from n, including inline
+// descendants, which is how container blocks such as list items get a range.
+func nodeRange(n ast.Node) (lo, hi int, ok bool) {
+	add := func(a, b int) {
+		if a < 0 || b < a {
+			return
+		}
+		if !ok || a < lo {
+			lo = a
+		}
+		if !ok || b > hi {
+			hi = b
+		}
+		ok = true
+	}
+	if n.Type() == ast.TypeBlock {
+		if ls := n.Lines(); ls != nil && ls.Len() > 0 {
+			add(ls.At(0).Start, ls.At(ls.Len()-1).Stop-1)
+		}
+	}
+	switch t := n.(type) {
+	case *ast.Text:
+		add(t.Segment.Start, t.Segment.Stop-1)
+	case *ast.RawHTML:
+		if t.Segments != nil && t.Segments.Len() > 0 {
+			add(t.Segments.At(0).Start, t.Segments.At(t.Segments.Len()-1).Stop-1)
+		}
+	case *ast.HTMLBlock:
+		add(t.ClosureLine.Start, t.ClosureLine.Stop-1)
+	case *ast.FencedCodeBlock:
+		if t.Info != nil {
+			add(t.Info.Segment.Start, t.Info.Segment.Stop-1)
+		}
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if clo, chi, cok := nodeRange(c); cok {
+			add(clo, chi)
+		}
+	}
+	return lo, hi, ok
+}
+
+// widen pulls a range back over syntax goldmark left outside the node's
+// content: code fences and setext underlines.
+func widen(b *Block, src *Source) {
+	switch b.Kind {
+	case KindCode:
+		if _, fenced := b.Node.(*ast.FencedCodeBlock); !fenced {
+			return
+		}
+		if b.Start > 0 && isFence(src.Line(b.Start-1)) {
+			b.Start--
+		}
+		if b.End+1 < src.NumLines() && isFence(src.Line(b.End+1)) {
+			b.End++
+		}
+	case KindHeading:
+		if strings.HasPrefix(strings.TrimSpace(src.Line(b.Start)), "#") {
+			return
+		}
+		if b.End+1 < src.NumLines() && isSetextRule(src.Line(b.End+1)) {
+			b.End++
+		}
+	}
+}
+
+func isFence(line string) bool {
+	t := strings.TrimSpace(line)
+	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
+}
+
+func isSetextRule(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	c := t[0]
+	if c != '=' && c != '-' {
+		return false
+	}
+	return strings.Trim(t, string(c)) == ""
+}
+
+// nodeText renders a node's plain text for matching. Link and image
+// destinations are included so URLs are searchable.
+func nodeText(n ast.Node, src []byte) string {
+	var sb strings.Builder
+	var walk func(ast.Node)
+	walk = func(n ast.Node) {
+		switch t := n.(type) {
+		case *ast.Text:
+			sb.Write(t.Segment.Value(src))
+			if t.SoftLineBreak() || t.HardLineBreak() {
+				sb.WriteByte('\n')
+			}
+			return
+		case *ast.String:
+			sb.Write(t.Value)
+			return
+		case *ast.AutoLink:
+			sb.Write(t.URL(src))
+			return
+		}
+		if n.Type() == ast.TypeBlock && n.IsRaw() {
+			if ls := n.Lines(); ls != nil {
+				for i := range ls.Len() {
+					seg := ls.At(i)
+					sb.Write(seg.Value(src))
+				}
+			}
+			return
+		}
+		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+			walk(c)
+			if c.Type() == ast.TypeBlock && c.NextSibling() != nil {
+				sb.WriteByte('\n')
+			}
+		}
+		switch t := n.(type) {
+		case *ast.Link:
+			sb.WriteByte(' ')
+			sb.Write(t.Destination)
+		case *ast.Image:
+			sb.WriteByte(' ')
+			sb.Write(t.Destination)
+		}
+	}
+	walk(n)
+	return sb.String()
+}
+
+// frontmatterEnd returns the line holding the closing delimiter of a YAML/TOML
+// front matter block, if the file opens with one.
+func frontmatterEnd(src *Source) (int, bool) {
+	if src.NumLines() < 2 {
+		return 0, false
+	}
+	open := strings.TrimRight(src.Line(0), " \t")
+	if open != "---" && open != "+++" {
+		return 0, false
+	}
+	closer := open
+	for i := 1; i < src.NumLines(); i++ {
+		t := strings.TrimRight(src.Line(i), " \t")
+		if t == closer || (closer == "---" && t == "...") {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func maskLines(data []byte, src *Source, from, to int) []byte {
+	out := make([]byte, len(data))
+	copy(out, data)
+	for i := from; i <= to && i < src.NumLines(); i++ {
+		start := src.lineStart[i]
+		end := len(data)
+		if i+1 < src.NumLines() {
+			end = src.lineStart[i+1]
+		}
+		for j := start; j < end; j++ {
+			if out[j] != '\n' && out[j] != '\r' {
+				out[j] = ' '
+			}
+		}
+	}
+	return out
+}
+
+// Breadcrumb returns the heading trail enclosing the given line.
+func (d *Doc) Breadcrumb(line int) []string {
+	var stack []*Block
+	for _, h := range d.Headings {
+		if h.Start > line {
+			break
+		}
+		for len(stack) > 0 && stack[len(stack)-1].Level >= h.Level {
+			stack = stack[:len(stack)-1]
+		}
+		stack = append(stack, h)
+	}
+	out := make([]string, 0, len(stack))
+	for _, h := range stack {
+		out = append(out, strings.TrimSpace(strings.ReplaceAll(h.Text, "\n", " ")))
+	}
+	return out
+}
+
+// Section returns the line range of the heading section enclosing line: the
+// nearest preceding heading through the line before the next heading of the
+// same or higher rank.
+func (d *Doc) Section(line int) (int, int, bool) {
+	idx := -1
+	for i, h := range d.Headings {
+		if h.Start <= line {
+			idx = i
+		} else {
+			break
+		}
+	}
+	if idx < 0 {
+		return 0, 0, false
+	}
+	start := d.Headings[idx].Start
+	end := d.Src.NumLines() - 1
+	for _, h := range d.Headings[idx+1:] {
+		if h.Level <= d.Headings[idx].Level {
+			end = h.Start - 1
+			break
+		}
+	}
+	return start, end, true
+}
