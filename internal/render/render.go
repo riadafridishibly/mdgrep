@@ -54,7 +54,11 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	p.wroteAny = true
 
 	fmt.Fprintln(p.W, p.paint(magenta, src.Path))
-	width := len(strconv.Itoa(results[len(results)-1].End + 1))
+	last := 0
+	for _, r := range results {
+		last = max(last, r.End+1)
+	}
+	width := len(strconv.Itoa(last))
 	for i, r := range results {
 		if i > 0 {
 			fmt.Fprintln(p.W, p.paint(dim, "  --"))

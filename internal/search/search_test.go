@@ -188,6 +188,44 @@ func TestMaxCaps(t *testing.T) {
 	}
 }
 
+func TestRankOrdersByScore(t *testing.T) {
+	res := find(t, "install", Options{Rank: true})
+	if len(res) < 2 {
+		t.Fatalf("got %d results, want at least 2 to order", len(res))
+	}
+	for i := 1; i < len(res); i++ {
+		if res[i].Score > res[i-1].Score {
+			t.Fatalf("result %d scores %v, above its predecessor %v", i, res[i].Score, res[i-1].Score)
+		}
+	}
+	plain := find(t, "install", Options{})
+	if len(plain) != len(res) {
+		t.Fatalf("ranking changed the result count: %d, want %d", len(res), len(plain))
+	}
+	best := plain[0]
+	for _, r := range plain {
+		if r.Score > best.Score {
+			best = r
+		}
+	}
+	if res[0].Start != best.Start {
+		t.Fatalf("first result starts at line %d, want the best-scoring one at %d", res[0].Start, best.Start)
+	}
+}
+
+// Ranking happens before the cap, so -m keeps a file's best results rather
+// than the ones it happens to hold first.
+func TestRankedMaxKeepsTheBest(t *testing.T) {
+	all := find(t, "install", Options{Rank: true})
+	capped := find(t, "install", Options{Rank: true, Max: 1})
+	if len(capped) != 1 {
+		t.Fatalf("got %d results, want 1", len(capped))
+	}
+	if capped[0].Score != all[0].Score {
+		t.Fatalf("cap kept score %v, want the best %v", capped[0].Score, all[0].Score)
+	}
+}
+
 // Code spans are the one place where the source syntax is part of what people
 // search for, so a pattern typed with backticks has to reach them.
 const spans = "# API\n" + // 0

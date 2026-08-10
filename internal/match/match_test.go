@@ -43,6 +43,26 @@ func TestExactSubstringScoresHigherThanScattered(t *testing.T) {
 	}
 }
 
+// A short token matches cleanly in almost any prose, so it must not lift a
+// block that only spells the long token by accident.
+func TestShortTokensCarryLessWeight(t *testing.T) {
+	m := mustNew(t, Fuzzy, "print an implementer", true, 0)
+	real, ok := m.Score("fine print an implementer must guess")
+	if !ok {
+		t.Fatal("the literal phrase should match")
+	}
+	noise, ok := m.Score("The same string helpers as planner Lua (one shared implementation — see `relay.*` above)")
+	if !ok {
+		t.Fatal("scattered tokens still match, just weakly")
+	}
+	if noise >= 0.7 {
+		t.Fatalf("scattered score %v should fall under a 0.7 threshold", noise)
+	}
+	if real <= noise {
+		t.Fatalf("literal score %v should beat scattered %v", real, noise)
+	}
+}
+
 func TestThresholdIsHonoured(t *testing.T) {
 	strict := mustNew(t, Fuzzy, "canry", true, 0.95)
 	if _, ok := strict.Score("canary rollout"); ok {

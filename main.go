@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 
@@ -36,8 +37,9 @@ Matching
   -e, --regexp PATTERN  use PATTERN as the pattern; repeat for alternatives
   -F, --fixed-strings   match PATTERN literally
       --fuzzy           fuzzy match: every whitespace-separated token of
-                        PATTERN must appear, loosely and in order
-      --min-score N     fuzzy score threshold, 0..1 (default 0.55)
+                        PATTERN must appear, loosely and in order. Results
+                        come back best first rather than in file order
+      --min-score N     fuzzy score threshold, 0..1 (default 0.7)
   -w, --word-regexp     match only whole words
   -v, --invert-match    select the nodes that do not match
   -i, --ignore-case     force case-insensitive
@@ -137,7 +139,7 @@ func run() int {
 	bind(func(n string) { fs.Var(&c.patterns, n, "") }, "e", "regexp")
 	bind(func(n string) { fs.BoolVar(&fixed, n, false, "") }, "F", "fixed-strings")
 	fs.BoolVar(&fuzzy, "fuzzy", false, "")
-	fs.Float64Var(&c.minScore, "min-score", 0.55, "")
+	fs.Float64Var(&c.minScore, "min-score", 0.7, "")
 	bind(func(n string) { fs.BoolVar(&c.word, n, false, "") }, "w", "word-regexp")
 	bind(func(n string) { fs.BoolVar(&c.invert, n, false, "") }, "v", "invert-match")
 	bind(func(n string) { fs.BoolVar(&c.forceFold, n, false, "") }, "i", "ignore-case")
@@ -209,6 +211,10 @@ func run() int {
 		return 2
 	case fuzzy:
 		mode = match.Fuzzy
+		// A fuzzy pattern is a question about which node fits best, so the
+		// answer is ordered by score. An exact search is a filter, and keeps
+		// grep's order.
+		c.opt.Rank = true
 	case fixed:
 		mode = match.Substring
 	}
@@ -291,6 +297,13 @@ func run() int {
 	close(jobs)
 	wg.Wait()
 
+	if c.opt.Rank {
+		// Each file already holds its results best first, so a file is worth
+		// as much as its best one.
+		sort.SliceStable(results, func(i, j int) bool {
+			return bestScore(results[i].res) > bestScore(results[j].res)
+		})
+	}
 	for _, r := range results {
 		if r.src != nil {
 			emit(r.src, r.res)
@@ -300,6 +313,13 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+func bestScore(res []search.Result) float64 {
+	if len(res) == 0 {
+		return 0
+	}
+	return res[0].Score
 }
 
 // buildMatcher folds the case flags and every -e pattern into one matcher.

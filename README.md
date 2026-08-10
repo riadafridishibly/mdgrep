@@ -49,7 +49,7 @@ when it is a pipe, otherwise it searches the current directory.
 | `-e`, `--regexp PATTERN` | use PATTERN as the pattern; repeat for alternatives |
 | `-F`, `--fixed-strings` | match PATTERN literally |
 | `--fuzzy` | fuzzy match |
-| `--min-score N` | fuzzy threshold, 0..1 (default 0.55) |
+| `--min-score N` | fuzzy threshold, 0..1 (default 0.7) |
 | `-w`, `--word-regexp` | match only whole words |
 | `-v`, `--invert-match` | select the nodes that do not match |
 | `-i`, `--ignore-case` | force case-insensitive |
@@ -77,8 +77,15 @@ resumes at a camelCase hump, a delimiter or a piece of punctuation counts in
 full, so `pmd` finds `parseMarkDown` and `dk` finds `deploy_key`, while a jump
 across whitespace counts for little — whitespace is what separates one token
 from the next, so a token that has to cross a word is not what you asked for.
-The node's score is the token average. Raise `--min-score` to demand tighter
-matches, lower it to cast a wider net.
+The node's score is the token average, weighted by token length: a two-letter
+token sits on a word boundary in almost any prose, so it should not carry a
+node the way `implementer` does. Raise `--min-score` to demand tighter matches,
+lower it to cast a wider net.
+
+A fuzzy pattern asks which node fits best, so its results come back **best
+first** — ranked within a file, and files ranked by their best hit — rather
+than in grep's file order. `-m` therefore keeps the best results per file, not
+the first ones. Regexp and `-F` searches keep grep's order.
 
 ```bash
 mdgrep --fuzzy "brew instal" notes.md   # misspelled, still matches

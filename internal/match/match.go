@@ -281,15 +281,21 @@ func (m *fuzzyMatcher) Score(text string) (float64, bool) {
 	if len(t.runes) == 0 {
 		return 0, false
 	}
-	total := 0.0
+	// Tokens are weighted by length, because a short one says little about
+	// whether the block is what was asked for: "an" sits on a word boundary in
+	// almost any prose and scores perfectly there, and averaging that in flat
+	// would let it carry blocks that only spell "implementer" by accident.
+	total, weight := 0.0, 0.0
 	for _, tok := range m.tokens {
 		s, _, ok := t.best(tok, m.fold)
 		if !ok {
 			return 0, false
 		}
-		total += s
+		w := float64(len(tok))
+		total += s * w
+		weight += w
 	}
-	avg := total / float64(len(m.tokens))
+	avg := total / weight
 	return avg, avg >= m.min
 }
 

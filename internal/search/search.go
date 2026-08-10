@@ -38,6 +38,7 @@ type Options struct {
 	Lines   int                // raw lines padded on both sides
 	Expand  int                // ancestor levels to climb from the hit
 	Section bool               // widen to the enclosing heading section
+	Rank    bool               // order by score rather than by position
 	Max     int                // cap on results per file, 0 for unlimited
 }
 
@@ -94,6 +95,11 @@ func File(doc *mdoc.Doc, m match.Matcher, opt Options) []Result {
 	}
 
 	out = mergeOverlapping(out)
+	if opt.Rank {
+		// Rank before the cap, so -m keeps the best results rather than the
+		// first ones the file happens to hold.
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	}
 	if opt.Max > 0 && len(out) > opt.Max {
 		out = out[:opt.Max]
 	}
