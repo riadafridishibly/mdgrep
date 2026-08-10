@@ -1,9 +1,9 @@
-// Package match provides the loose matchers mdgrep searches with: a
-// token-wise fuzzy matcher, plain substring, and regexp.
+// Package match provides the matchers mdgrep searches with: regexp, plain
+// substring, and a loose token-wise fuzzy matcher.
 package match
 
 import (
-	"fmt"
+	"errors"
 	"regexp"
 	"strings"
 	"unicode"
@@ -24,36 +24,42 @@ type Matcher interface {
 type Mode int
 
 const (
-	Fuzzy Mode = iota
+	Regexp Mode = iota // the default, as it is in grep
 	Substring
-	Regexp
+	Fuzzy
 )
 
-// New builds a matcher. When ignoreCase is false the match is case sensitive.
-// minScore applies to Fuzzy only.
-func New(mode Mode, pattern string, ignoreCase bool, minScore float64) (Matcher, error) {
-	switch mode {
+// Options configures a matcher.
+type Options struct {
+	Mode       Mode
+	IgnoreCase bool
+	MinScore   float64 // Fuzzy only
+	Word       bool    // match only on word boundaries
+}
+
+// New builds a matcher. An empty pattern matches everything, as it does in
+// grep.
+func New(pattern string, opt Options) (Matcher, error) {
+	switch opt.Mode {
 	case Regexp:
-		expr := pattern
-		if ignoreCase {
-			expr = "(?i)" + expr
-		}
-		re, err := regexp.Compile(expr)
-		if err != nil {
-			return nil, err
-		}
-		return &reMatcher{re: re}, nil
+		return newRegexp(pattern, opt)
 	case Substring:
-		if pattern == "" {
-			return nil, fmt.Errorf("empty pattern")
+		if opt.Word {
+			return newRegexp(regexp.QuoteMeta(pattern), opt)
 		}
-		return &substrMatcher{pat: pattern, fold: ignoreCase}, nil
+		if pattern == "" {
+			return All(), nil
+		}
+		return &substrMatcher{pat: pattern, fold: opt.IgnoreCase}, nil
 	default:
+		if opt.Word {
+			return nil, errors.New("word matching has no meaning for a fuzzy search")
+		}
 		toks := strings.Fields(pattern)
 		if len(toks) == 0 {
-			return nil, fmt.Errorf("empty pattern")
+			return All(), nil
 		}
-		m := &fuzzyMatcher{min: minScore, fold: ignoreCase}
+		m := &fuzzyMatcher{min: opt.MinScore, fold: opt.IgnoreCase}
 		for _, t := range toks {
 			m.tokens = append(m.tokens, []rune(t))
 		}
@@ -61,8 +67,75 @@ func New(mode Mode, pattern string, ignoreCase bool, minScore float64) (Matcher,
 	}
 }
 
-// All matches every block and highlights nothing. It backs searches whose
-// selection is expressed entirely by filters instead of by a pattern.
+func newRegexp(pattern string, opt Options) (Matcher, error) {
+	// Compile what the user typed first, so a syntax error names their own
+	// expression rather than the rewrite below.
+	if _, err := regexp.Compile(pattern); err != nil {
+		return nil, err
+	}
+	expr := pattern
+	if opt.Word {
+		expr = `\b(?:` + expr + `)\b`
+	}
+	// Blocks are matched as whole multi-line strings, so "^" and "$" are asked
+	// to anchor to lines instead, which is what they mean in grep.
+	flags := "(?m)"
+	if opt.IgnoreCase {
+		flags = "(?im)"
+	}
+	re, err := regexp.Compile(flags + expr)
+	if err != nil {
+		return nil, err
+	}
+	return &reMatcher{re: re}, nil
+}
+
+// Any matches whatever any of its matchers matches, the way repeated -e
+// patterns are alternatives to each other in grep.
+func Any(ms []Matcher) Matcher {
+	if len(ms) == 1 {
+		return ms[0]
+	}
+	return anyMatcher(ms)
+}
+
+type anyMatcher []Matcher
+
+func (a anyMatcher) Score(text string) (float64, bool) {
+	best, any := 0.0, false
+	for _, m := range a {
+		if s, ok := m.Score(text); ok && (!any || s > best) {
+			best, any = s, true
+		}
+	}
+	return best, any
+}
+
+func (a anyMatcher) Spans(line string) []Span {
+	var out []Span
+	for _, m := range a {
+		out = append(out, m.Spans(line)...)
+	}
+	return Merge(out)
+}
+
+// Not selects what m rejects. There is nothing to highlight in a block that
+// matched by not containing something.
+func Not(m Matcher) Matcher { return notMatcher{m} }
+
+type notMatcher struct{ inner Matcher }
+
+func (n notMatcher) Score(text string) (float64, bool) {
+	if _, ok := n.inner.Score(text); ok {
+		return 0, false
+	}
+	return 1, true
+}
+
+func (notMatcher) Spans(string) []Span { return nil }
+
+// All matches every block and highlights nothing. It backs the empty pattern,
+// leaving the filters to say what a search selects.
 func All() Matcher { return allMatcher{} }
 
 type allMatcher struct{}
@@ -159,7 +232,51 @@ type fuzzyMatcher struct {
 	fold   bool
 }
 
+// couldContain reports whether text might hold the token, without building the
+// rune tables scoring needs. A match requires the token's characters in order,
+// so one IndexByte walk settles it, and in a search most blocks get no further
+// than this.
+func (m *fuzzyMatcher) couldContain(text string, tok []rune) bool {
+	at := 0
+	for _, r := range tok {
+		// Non-ASCII needs the full unicode fold, and so do "i" and "k": they are
+		// the only ASCII letters a non-ASCII rune ("İ", "K") folds onto. Leave
+		// those to Score rather than rule the block out here.
+		if r > unicode.MaxASCII || (m.fold && (r|0x20 == 'i' || r|0x20 == 'k')) {
+			return true
+		}
+		i := strings.IndexByte(text[at:], byte(r))
+		if m.fold {
+			if alt, ok := swapCase(byte(r)); ok {
+				if j := strings.IndexByte(text[at:], alt); j >= 0 && (i < 0 || j < i) {
+					i = j
+				}
+			}
+		}
+		if i < 0 {
+			return false
+		}
+		at += i + 1
+	}
+	return true
+}
+
+func swapCase(b byte) (byte, bool) {
+	switch {
+	case b >= 'a' && b <= 'z':
+		return b - 'a' + 'A', true
+	case b >= 'A' && b <= 'Z':
+		return b - 'A' + 'a', true
+	}
+	return 0, false
+}
+
 func (m *fuzzyMatcher) Score(text string) (float64, bool) {
+	for _, tok := range m.tokens {
+		if !m.couldContain(text, tok) {
+			return 0, false
+		}
+	}
 	t := newTarget(text, m.fold)
 	if len(t.runes) == 0 {
 		return 0, false
@@ -219,11 +336,61 @@ func Merge(spans []Span) []Span {
 	return out
 }
 
+// charClass groups runes the way a reader groups them, so a match can be told
+// apart by whether it starts a word, follows punctuation or lands mid-word.
+type charClass uint8
+
+const (
+	classWhite charClass = iota
+	classDelim
+	classNonWord
+	classLower
+	classUpper
+	classDigit
+)
+
+func classOf(r rune) charClass {
+	switch {
+	case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+		return classWhite
+	case strings.ContainsRune("/,:;|_-.", r):
+		return classDelim
+	case unicode.IsDigit(r):
+		return classDigit
+	case unicode.IsUpper(r):
+		return classUpper
+	case unicode.IsLetter(r):
+		return classLower
+	default:
+		return classNonWord
+	}
+}
+
+// boundary scores how strongly a character reads as the start of something: a
+// fresh word, then a path or snake_case delimiter, then other punctuation, then
+// a camelCase or letter-to-digit hump. Mid-word scores nothing.
+func boundary(prev, cur charClass) float64 {
+	switch {
+	case prev == classWhite:
+		return 1
+	case prev == classDelim:
+		return 0.9
+	case prev == classNonWord:
+		return 0.8
+	case prev == classLower && cur != classLower:
+		return 0.9
+	case prev == classDigit && cur != classDigit:
+		return 0.9
+	}
+	return 0
+}
+
 type target struct {
 	runes  []rune
 	cmp    []rune // case-folded when folding
 	offs   []int  // byte offset of each rune
 	widths []int
+	class  []charClass
 }
 
 func newTarget(s string, fold bool) *target {
@@ -232,12 +399,34 @@ func newTarget(s string, fold bool) *target {
 		t.runes = append(t.runes, r)
 		t.offs = append(t.offs, i)
 		t.widths = append(t.widths, len(string(r)))
+		t.class = append(t.class, classOf(r))
 		if fold {
 			r = unicode.ToLower(r)
 		}
 		t.cmp = append(t.cmp, r)
 	}
 	return t
+}
+
+// startBonus scores position i as the place a match opens. The head of the
+// text is the strongest boundary there is.
+func (t *target) startBonus(i int) float64 {
+	if i == 0 {
+		return 1
+	}
+	return boundary(t.class[i-1], t.class[i])
+}
+
+// jumpBonus scores position i as the place a match resumes after a gap.
+// Structure inside a word counts in full, so "pmd" finds "parseMarkDown" and
+// "dk" finds "deploy_key". Crossing whitespace counts for little: a pattern is
+// already split on whitespace into tokens, so a token that has to jump a word
+// is not what the reader asked for.
+func (t *target) jumpBonus(i int) float64 {
+	if t.class[i-1] == classWhite {
+		return 0.3
+	}
+	return boundary(t.class[i-1], t.class[i])
 }
 
 // best finds the tightest subsequence match of tok and scores it. The score
@@ -281,21 +470,22 @@ func (t *target) best(tok []rune, fold bool) (float64, []int, bool) {
 
 	span := bestPos[len(bestPos)-1] - bestPos[0] + 1
 	density := float64(len(pat)) / float64(span)
-	consec := 1.0
-	if len(pat) > 1 {
-		runs := 0
+	// Every character after the first earns its keep either by continuing a run
+	// or by starting a new word, so an initialism like "pmd" over
+	// "parseMarkDown" scores as well as a contiguous match does.
+	quality := 1.0
+	if len(bestPos) > 1 {
+		sum := 0.0
 		for i := 1; i < len(bestPos); i++ {
 			if bestPos[i] == bestPos[i-1]+1 {
-				runs++
+				sum++
+				continue
 			}
+			sum += t.jumpBonus(bestPos[i])
 		}
-		consec = float64(runs) / float64(len(pat)-1)
+		quality = sum / float64(len(bestPos)-1)
 	}
-	boundary := 0.0
-	if t.isBoundary(bestPos[0]) {
-		boundary = 1.0
-	}
-	return 0.5*density + 0.3*consec + 0.2*boundary, bestPos, true
+	return 0.45*density + 0.35*quality + 0.2*t.startBonus(bestPos[0]), bestPos, true
 }
 
 func (t *target) forward(pat []rune, start int) (int, bool) {
@@ -321,15 +511,4 @@ func (t *target) backward(pat []rune, end int) []int {
 		}
 	}
 	return pos
-}
-
-func (t *target) isBoundary(i int) bool {
-	if i == 0 {
-		return true
-	}
-	prev, cur := t.runes[i-1], t.runes[i]
-	if !unicode.IsLetter(prev) && !unicode.IsDigit(prev) {
-		return true
-	}
-	return unicode.IsLower(prev) && unicode.IsUpper(cur)
 }

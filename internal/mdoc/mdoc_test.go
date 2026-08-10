@@ -55,8 +55,8 @@ func TestFencedCodeIncludesFences(t *testing.T) {
 	if c.Start != 6 || c.End != 8 {
 		t.Fatalf("code range = %d..%d, want 6..8", c.Start, c.End)
 	}
-	if !strings.Contains(c.Text, "fmt.Println") {
-		t.Fatalf("code text = %q", c.Text)
+	if raw := d.Src.Slice(c.Start, c.End); !strings.Contains(raw, "```go\nfmt.Println()\n```") {
+		t.Fatalf("code source = %q", raw)
 	}
 }
 
@@ -106,8 +106,8 @@ func TestTaskItemsCarryCheckboxState(t *testing.T) {
 				i, items[i].Task, items[i].Checked, w.task, w.checked)
 		}
 	}
-	if got := items[0].Text; got != "write docs" {
-		t.Fatalf("task text = %q, want the text without the checkbox", got)
+	if got := d.Src.Slice(items[0].Start, items[0].End); got != "- [ ] write docs" {
+		t.Fatalf("task source = %q, want the checkbox included", got)
 	}
 }
 
@@ -129,8 +129,8 @@ func TestFrontmatterIsOneBlock(t *testing.T) {
 	if fm.Start != 0 || fm.End != 3 {
 		t.Fatalf("frontmatter range = %d..%d, want 0..3", fm.Start, fm.End)
 	}
-	if !strings.Contains(fm.Text, "tags: [a, b]") {
-		t.Fatalf("frontmatter text = %q", fm.Text)
+	if raw := d.Src.Slice(fm.Start, fm.End); !strings.Contains(raw, "tags: [a, b]") {
+		t.Fatalf("frontmatter source = %q", raw)
 	}
 	// The masked region must not leak into the parsed tree as a heading.
 	for _, b := range d.Blocks {
@@ -144,39 +144,30 @@ func TestFrontmatterIsOneBlock(t *testing.T) {
 	}
 }
 
-func TestLinkDestinationIsSearchable(t *testing.T) {
-	d := Parse("t.md", []byte("See [the runbook](https://example.com/runbook).\n"))
-	p := firstOfKind(t, d, KindParagraph)
-	if !strings.Contains(p.Text, "example.com/runbook") {
-		t.Fatalf("paragraph text = %q", p.Text)
-	}
-}
-
-func TestCodeSpanKeepsItsBackticks(t *testing.T) {
+// A block is searched as the markdown that produced it, so link destinations,
+// emphasis, code fences and list markers are all part of the searchable text.
+func TestBlockSourceIsWhatWasWritten(t *testing.T) {
 	cases := []struct{ src, want string }{
+		{"See [the runbook](https://example.com/runbook).\n", "See [the runbook](https://example.com/runbook)."},
 		{"Run `brew install foo` now.\n", "Run `brew install foo` now."},
-		{"Edit `~/.foo/config`\n", "Edit `~/.foo/config`"},
-		{"`start` of line\n", "`start` of line"},
-		{"A `` a ` b `` span.\n", "A `` a ` b `` span."},
-		{"Pad `` foo `` here.\n", "Pad `` foo `` here."},
+		{"A **bold** claim.\n", "A **bold** claim."},
 		{"Wrapped `multi\nline` span.\n", "Wrapped `multi\nline` span."},
-		{"Bare `` tick.\n", "Bare `` tick."},
 	}
 	for _, c := range cases {
 		d := Parse("t.md", []byte(c.src))
-		if got := firstOfKind(t, d, KindParagraph).Text; got != c.want {
-			t.Fatalf("text of %q = %q, want %q", c.src, got, c.want)
+		p := firstOfKind(t, d, KindParagraph)
+		if got := d.Src.Slice(p.Start, p.End); got != c.want {
+			t.Fatalf("source of %q = %q, want %q", c.src, got, c.want)
 		}
 	}
 }
 
-func TestCodeSpanInHeadingAndItem(t *testing.T) {
+// Breadcrumbs are the one place rendered text is still needed: the trail is
+// printed without the "#" markers, but keeps a code span written as written.
+func TestHeadingTextDrivesBreadcrumb(t *testing.T) {
 	d := Parse("t.md", []byte("# The `foo` tool\n\n- run `foo doctor`\n"))
 	if got := firstOfKind(t, d, KindHeading).Text; got != "The `foo` tool" {
 		t.Fatalf("heading text = %q", got)
-	}
-	if got := firstOfKind(t, d, KindItem).Text; got != "run `foo doctor`" {
-		t.Fatalf("item text = %q", got)
 	}
 	if got := d.Breadcrumb(2); len(got) != 1 || got[0] != "The `foo` tool" {
 		t.Fatalf("breadcrumb = %v", got)

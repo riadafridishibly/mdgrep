@@ -111,13 +111,20 @@ type hit struct {
 func candidates(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
 	matched := map[*mdoc.Block]float64{}
 	for _, b := range doc.Blocks {
-		if !b.Located || b.Text == "" {
+		if !b.Located {
 			continue
 		}
 		if opt.Kinds != nil && !opt.Kinds[b.Kind] {
 			continue
 		}
-		if s, ok := m.Score(b.Text); ok {
+		// Blocks are matched against the markdown as written, so anchors,
+		// list markers, table pipes and emphasis are all searchable, and a
+		// highlight found in a printed line is the same hit that was scored.
+		raw := doc.Src.Slice(b.Start, b.End)
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if s, ok := m.Score(raw); ok {
 			matched[b] = s
 		}
 	}

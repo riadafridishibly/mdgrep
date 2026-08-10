@@ -1,25 +1,30 @@
 package mdoc
 
-import "bytes"
+import "strings"
 
-// Source holds a markdown file's bytes together with a line index so byte
-// offsets reported by goldmark can be translated into line numbers.
+// Source holds a markdown file's text together with a line index so byte
+// offsets reported by goldmark can be translated into line numbers. The text
+// is kept as a string so every line and range handed out is a slice of it
+// rather than a fresh allocation.
 type Source struct {
 	Path string
-	Data []byte
 
+	text      string
 	lineStart []int // byte offset where each line begins
 }
 
 func NewSource(path string, data []byte) *Source {
-	s := &Source{Path: path, Data: data, lineStart: []int{0}}
-	for i, b := range data {
-		if b == '\n' && i+1 <= len(data) {
-			s.lineStart = append(s.lineStart, i+1)
+	s := &Source{Path: path, text: string(data), lineStart: []int{0}}
+	for off := 0; ; {
+		i := strings.IndexByte(s.text[off:], '\n')
+		if i < 0 {
+			break
 		}
+		off += i + 1
+		s.lineStart = append(s.lineStart, off)
 	}
 	// A trailing newline creates a phantom empty last line; drop it.
-	if n := len(s.lineStart); n > 1 && s.lineStart[n-1] == len(data) {
+	if n := len(s.lineStart); n > 1 && s.lineStart[n-1] == len(s.text) {
 		s.lineStart = s.lineStart[:n-1]
 	}
 	return s
@@ -46,12 +51,31 @@ func (s *Source) Line(i int) string {
 	if i < 0 || i >= len(s.lineStart) {
 		return ""
 	}
-	start := s.lineStart[i]
-	end := len(s.Data)
+	end := len(s.text)
 	if i+1 < len(s.lineStart) {
 		end = s.lineStart[i+1]
 	}
-	return string(bytes.TrimRight(s.Data[start:end], "\r\n"))
+	return strings.TrimRight(s.text[s.lineStart[i]:end], "\r\n")
+}
+
+// Slice returns the raw source of an inclusive line range, newlines included,
+// clamped to the file. This is what patterns are matched against, so a search
+// sees the markdown exactly as it is written.
+func (s *Source) Slice(start, end int) string {
+	if start < 0 {
+		start = 0
+	}
+	if end >= s.NumLines() {
+		end = s.NumLines() - 1
+	}
+	if start > end {
+		return ""
+	}
+	stop := len(s.text)
+	if end+1 < len(s.lineStart) {
+		stop = s.lineStart[end+1]
+	}
+	return strings.TrimRight(s.text[s.lineStart[start]:stop], "\r\n")
 }
 
 // Lines returns the inclusive line range, clamped to the file.

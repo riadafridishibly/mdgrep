@@ -21,73 +21,102 @@ import (
 	"mdgrep/internal/search"
 )
 
-const usage = `mdgrep — loose, node-aware grep for markdown
+const version = "0.1.0"
 
-usage: mdgrep [options] PATTERN [path ...]
+const usage = `mdgrep — node-aware grep for markdown
 
-PATTERN may be omitted when a filter (-k, --task, --checked, --unchecked)
-already says what to select: "mdgrep --todo" lists every open checkbox below
-the current directory. To scope that to a path, pass an empty pattern:
-"mdgrep '' docs --todo".
+usage: mdgrep [OPTIONS] PATTERN [PATH...]
+
+PATTERN is a regular expression by default. A hit prints the markdown node it
+landed in — the whole bullet, row or paragraph — rather than the single line.
+An empty pattern matches everything, so "mdgrep '' docs --todo" lists every
+open checkbox under docs/.
 
 Matching
-  -f, --fuzzy           fuzzy match, every whitespace token must appear (default)
-  -F, --fixed           plain substring match
-  -e, --regex           regular expression match
+  -e, --regexp PATTERN  use PATTERN as the pattern; repeat for alternatives
+  -F, --fixed-strings   match PATTERN literally
+      --fuzzy           fuzzy match: every whitespace-separated token of
+                        PATTERN must appear, loosely and in order
+      --min-score N     fuzzy score threshold, 0..1 (default 0.55)
+  -w, --word-regexp     match only whole words
+  -v, --invert-match    select the nodes that do not match
   -i, --ignore-case     force case-insensitive
-  -S, --case-sensitive  force case-sensitive (default is smart case)
-  -s, --min-score N     fuzzy score threshold, 0..1 (default 0.55)
+  -s, --case-sensitive  force case-sensitive
+  -S, --smart-case      case-insensitive until PATTERN has an upper-case
+                        letter (the default)
+
+Filters
   -k, --kind LIST       only these node kinds: heading,item,paragraph,code,
                         quote,table,row,html,frontmatter,list
-  -t, --task            only task list items ("- [ ]" and "- [x]")
+      --task            only task list items ("- [ ]" and "- [x]")
       --unchecked       only unticked task items (alias --todo)
       --checked         only ticked task items (alias --done)
 
 Selection
-  -x, --expand N        climb N ancestor levels from the matched node
+      --expand N        climb N ancestor levels from the matched node
       --section         widen to the enclosing heading section
   -B, --before N        include N sibling blocks before
   -A, --after N         include N sibling blocks after
   -C, --context N       shorthand for -B N -A N
-  -L, --lines N         pad the result with N raw lines on each side
+      --lines N         pad the result with N raw lines on each side
 
 Output
-  -n, --no-line-numbers
+  -n, --line-number     number the printed lines (the default)
+  -N, --no-line-number
       --no-breadcrumb   hide the heading trail above each result
       --color WHEN      auto, always or never (default auto)
       --json            one JSON object per result
   -c, --count           print only the number of results per file
-  -l, --files           print only the names of files with results
-  -m, --max N           stop after N results per file
+  -l, --files-with-matches
+                        print only the names of files with results
+  -m, --max-count N     stop after N results per file
+  -q, --quiet           print nothing; the exit status carries the answer
       --ext LIST        file extensions to search (default md,markdown,mdown,mkd,mdx)
       --hidden          descend into hidden directories
       --no-ignore       do not skip node_modules, vendor and friends
+  -h, --help
+  -V, --version
 
+-B, -A and -C count sibling nodes, not lines; use --lines for raw lines.
 Exit status is 0 when something matched, 1 when nothing did, 2 on error.
 `
 
 type config struct {
-	mode       match.Mode
-	ignoreCase bool
-	forceCase  bool
-	forceFold  bool
-	minScore   float64
-	kinds      string
-	task       bool
-	checked    bool
-	unchecked  bool
-	opt        search.Options
-	context    int
-	noNums     bool
-	noCrumb    bool
-	color      string
-	jsonOut    bool
-	count      bool
-	filesOnly  bool
-	exts       string
-	hidden     bool
-	noIgnore   bool
-	help       bool
+	patterns  patternList
+	forceCase bool
+	forceFold bool
+	word      bool
+	invert    bool
+	minScore  float64
+	kinds     string
+	task      bool
+	checked   bool
+	unchecked bool
+	opt       search.Options
+	context   int
+	noNums    bool
+	noCrumb   bool
+	color     string
+	jsonOut   bool
+	count     bool
+	filesOnly bool
+	quiet     bool
+	exts      string
+	hidden    bool
+	noIgnore  bool
+	help      bool
+	showVer   bool
+}
+
+// patternList collects repeated -e flags, which are alternatives to one
+// another the way they are in grep.
+type patternList []string
+
+func (p *patternList) String() string { return strings.Join(*p, "|") }
+
+func (p *patternList) Set(v string) error {
+	*p = append(*p, v)
+	return nil
 }
 
 func main() {
@@ -96,7 +125,7 @@ func main() {
 
 func run() int {
 	var c config
-	var fuzzy, fixed, regex bool
+	var fuzzy, fixed, smart bool
 
 	fs := flag.NewFlagSet("mdgrep", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -105,37 +134,52 @@ func run() int {
 			set(n)
 		}
 	}
-	bind(func(n string) { fs.BoolVar(&fuzzy, n, false, "") }, "f", "fuzzy")
-	bind(func(n string) { fs.BoolVar(&fixed, n, false, "") }, "F", "fixed")
-	bind(func(n string) { fs.BoolVar(&regex, n, false, "") }, "e", "regex")
+	bind(func(n string) { fs.Var(&c.patterns, n, "") }, "e", "regexp")
+	bind(func(n string) { fs.BoolVar(&fixed, n, false, "") }, "F", "fixed-strings")
+	fs.BoolVar(&fuzzy, "fuzzy", false, "")
+	fs.Float64Var(&c.minScore, "min-score", 0.55, "")
+	bind(func(n string) { fs.BoolVar(&c.word, n, false, "") }, "w", "word-regexp")
+	bind(func(n string) { fs.BoolVar(&c.invert, n, false, "") }, "v", "invert-match")
 	bind(func(n string) { fs.BoolVar(&c.forceFold, n, false, "") }, "i", "ignore-case")
-	bind(func(n string) { fs.BoolVar(&c.forceCase, n, false, "") }, "S", "case-sensitive")
-	bind(func(n string) { fs.Float64Var(&c.minScore, n, 0.55, "") }, "s", "min-score")
+	bind(func(n string) { fs.BoolVar(&c.forceCase, n, false, "") }, "s", "case-sensitive")
+	bind(func(n string) { fs.BoolVar(&smart, n, false, "") }, "S", "smart-case")
 	bind(func(n string) { fs.StringVar(&c.kinds, n, "", "") }, "k", "kind")
-	bind(func(n string) { fs.BoolVar(&c.task, n, false, "") }, "t", "task")
+	fs.BoolVar(&c.task, "task", false, "")
 	bind(func(n string) { fs.BoolVar(&c.checked, n, false, "") }, "checked", "done")
 	bind(func(n string) { fs.BoolVar(&c.unchecked, n, false, "") }, "unchecked", "todo")
-	bind(func(n string) { fs.IntVar(&c.opt.Expand, n, 0, "") }, "x", "expand")
+	fs.IntVar(&c.opt.Expand, "expand", 0, "")
 	fs.BoolVar(&c.opt.Section, "section", false, "")
 	bind(func(n string) { fs.IntVar(&c.opt.Before, n, 0, "") }, "B", "before")
 	bind(func(n string) { fs.IntVar(&c.opt.After, n, 0, "") }, "A", "after")
 	bind(func(n string) { fs.IntVar(&c.context, n, 0, "") }, "C", "context")
-	bind(func(n string) { fs.IntVar(&c.opt.Lines, n, 0, "") }, "L", "lines")
-	bind(func(n string) { fs.IntVar(&c.opt.Max, n, 0, "") }, "m", "max")
-	bind(func(n string) { fs.BoolVar(&c.noNums, n, false, "") }, "n", "no-line-numbers")
+	fs.IntVar(&c.opt.Lines, "lines", 0, "")
+	bind(func(n string) { fs.IntVar(&c.opt.Max, n, 0, "") }, "m", "max-count")
+	bind(func(n string) { fs.BoolVar(&c.noNums, n, false, "") }, "N", "no-line-number")
+	// Numbering is already on; -n exists so a grep habit does not error out.
+	bind(func(n string) { fs.Bool(n, false, "") }, "n", "line-number")
 	fs.BoolVar(&c.noCrumb, "no-breadcrumb", false, "")
 	fs.StringVar(&c.color, "color", "auto", "")
 	fs.BoolVar(&c.jsonOut, "json", false, "")
 	bind(func(n string) { fs.BoolVar(&c.count, n, false, "") }, "c", "count")
-	bind(func(n string) { fs.BoolVar(&c.filesOnly, n, false, "") }, "l", "files")
+	bind(func(n string) { fs.BoolVar(&c.filesOnly, n, false, "") }, "l", "files-with-matches")
+	bind(func(n string) { fs.BoolVar(&c.quiet, n, false, "") }, "q", "quiet")
 	fs.StringVar(&c.exts, "ext", "md,markdown,mdown,mkd,mdx", "")
 	fs.BoolVar(&c.hidden, "hidden", false, "")
 	fs.BoolVar(&c.noIgnore, "no-ignore", false, "")
 	bind(func(n string) { fs.BoolVar(&c.help, n, false, "") }, "h", "help")
+	bind(func(n string) { fs.BoolVar(&c.showVer, n, false, "") }, "V", "version")
 
 	if err := fs.Parse(permute(fs, os.Args[1:])); err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n\n%s", err, usage)
 		return 2
+	}
+	if c.help {
+		fmt.Fprint(os.Stdout, usage)
+		return 0
+	}
+	if c.showVer {
+		fmt.Fprintf(os.Stdout, "mdgrep %s\n", version)
+		return 0
 	}
 	kinds, err := parseKinds(c.kinds)
 	if err != nil {
@@ -144,49 +188,37 @@ func run() int {
 	}
 	c.opt.Kinds = kinds
 	c.opt.Task = taskFilter(c)
-	// A filter can stand in for the pattern, so "mdgrep --todo" lists every open
-	// checkbox. Paths still have to follow a pattern: the first positional is
-	// always PATTERN, so use an empty one to scope a filter to a directory.
-	filtered := len(kinds) > 0 || c.opt.Task != search.TaskIgnore
 
-	if c.help || (fs.NArg() == 0 && !filtered) {
-		fmt.Fprint(os.Stdout, usage)
-		if fs.NArg() == 0 && !c.help {
+	// The first positional is PATTERN unless -e already supplied one, in which
+	// case every positional is a path. Filters never stand in for a pattern:
+	// an empty one matches everything, so "mdgrep '' docs --todo" scopes a
+	// filter to a directory the way grep would.
+	paths := fs.Args()
+	if len(c.patterns) == 0 {
+		if fs.NArg() == 0 {
+			fmt.Fprintf(os.Stderr, "mdgrep: missing PATTERN\n\n%s", usage)
 			return 2
 		}
-		return 0
+		c.patterns, paths = patternList{fs.Arg(0)}, paths[1:]
 	}
 
+	mode := match.Regexp
 	switch {
-	case regex:
-		c.mode = match.Regexp
+	case fuzzy && fixed:
+		fmt.Fprintln(os.Stderr, "mdgrep: --fuzzy and --fixed-strings are mutually exclusive")
+		return 2
+	case fuzzy:
+		mode = match.Fuzzy
 	case fixed:
-		c.mode = match.Substring
-	default:
-		c.mode = match.Fuzzy
-	}
-	pattern, paths := "", fs.Args()
-	if fs.NArg() > 0 {
-		pattern, paths = fs.Arg(0), fs.Args()[1:]
-	}
-
-	c.ignoreCase = match.SmartCase(pattern)
-	if c.forceFold {
-		c.ignoreCase = true
-	}
-	if c.forceCase {
-		c.ignoreCase = false
+		mode = match.Substring
 	}
 	if c.context > 0 {
 		c.opt.Before, c.opt.After = c.context, c.context
 	}
-	matcher := match.All()
-	if pattern != "" || !filtered {
-		matcher, err = match.New(c.mode, pattern, c.ignoreCase, c.minScore)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
-			return 2
-		}
+	matcher, err := buildMatcher(c, mode, smart)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+		return 2
 	}
 
 	files, useStdin, err := collectFiles(paths, splitSet(c.exts), c.hidden, c.noIgnore)
@@ -212,6 +244,7 @@ func run() int {
 		}
 		found = true
 		switch {
+		case c.quiet:
 		case c.filesOnly:
 			fmt.Fprintln(out, src.Path)
 		case c.count:
@@ -267,6 +300,37 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// buildMatcher folds the case flags and every -e pattern into one matcher.
+// Smart case reads all the patterns together: a single upper-case letter
+// anywhere in them makes the whole search case sensitive.
+func buildMatcher(c config, mode match.Mode, smart bool) (match.Matcher, error) {
+	opt := match.Options{Mode: mode, MinScore: c.minScore, Word: c.word}
+	switch {
+	case smart:
+		opt.IgnoreCase = match.SmartCase(strings.Join(c.patterns, " "))
+	case c.forceFold:
+		opt.IgnoreCase = true
+	case c.forceCase:
+		opt.IgnoreCase = false
+	default:
+		opt.IgnoreCase = match.SmartCase(strings.Join(c.patterns, " "))
+	}
+
+	ms := make([]match.Matcher, 0, len(c.patterns))
+	for _, p := range c.patterns {
+		m, err := match.New(p, opt)
+		if err != nil {
+			return nil, err
+		}
+		ms = append(ms, m)
+	}
+	m := match.Any(ms)
+	if c.invert {
+		m = match.Not(m)
+	}
+	return m, nil
 }
 
 // permute moves flags ahead of positional arguments so the pattern may be

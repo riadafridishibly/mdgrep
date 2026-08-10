@@ -4,7 +4,7 @@ import "testing"
 
 func mustNew(t *testing.T, mode Mode, pat string, fold bool, min float64) Matcher {
 	t.Helper()
-	m, err := New(mode, pat, fold, min)
+	m, err := New(pat, Options{Mode: mode, IgnoreCase: fold, MinScore: min})
 	if err != nil {
 		t.Fatalf("New(%q): %v", pat, err)
 	}
@@ -130,7 +130,7 @@ func TestRegexpMode(t *testing.T) {
 	if _, ok := m.Score("canary rollout"); ok {
 		t.Fatal("regexp should not match")
 	}
-	if _, err := New(Regexp, "(", true, 0); err == nil {
+	if _, err := New("(", Options{Mode: Regexp}); err == nil {
 		t.Fatal("invalid regexp should error")
 	}
 }
@@ -151,5 +151,112 @@ func TestMergeSpans(t *testing.T) {
 	got := Merge([]Span{{5, 8}, {0, 3}, {3, 6}})
 	if len(got) != 1 || got[0] != (Span{0, 8}) {
 		t.Fatalf("merged = %v, want [{0 8}]", got)
+	}
+}
+
+func TestFoldedMatchesSurviveThePrefilter(t *testing.T) {
+	cases := []struct{ pat, text string }{
+		{"abc", "ABC"},
+		{"ABC", "abc"},
+		// "İ" and "K" are the only non-ASCII runes that fold onto an ASCII
+		// letter, so the byte-wise prefilter has to let them through.
+		{"istanbul", "İstanbul"},
+		{"kelvin", "Kelvin"},
+		{"café", "CAFÉ"},
+	}
+	for _, c := range cases {
+		m := mustNew(t, Fuzzy, c.pat, true, 0.55)
+		if _, ok := m.Score(c.text); !ok {
+			t.Fatalf("%q should match %q when folding", c.pat, c.text)
+		}
+	}
+}
+
+func TestBoundaryJumpsBeatMidWordScatter(t *testing.T) {
+	m := mustNew(t, Fuzzy, "pmd", true, 0.55)
+	camel, ok := m.Score("func parseMarkDown(src []byte)")
+	if !ok {
+		t.Fatal("an initialism of a camelCase name should match")
+	}
+	if _, ok := m.Score("a paragraph about seamed metal"); ok {
+		t.Fatal("mid-word scatter should not match")
+	}
+	if _, ok := m.Score("promote the merge and deploy"); ok {
+		t.Fatal("one letter picked per word should not match")
+	}
+	snake, ok := mustNew(t, Fuzzy, "dk", true, 0.55).Score("the deploy_key rotation")
+	if !ok {
+		t.Fatal("an initialism across a delimiter should match")
+	}
+	if camel < 0.55 || snake < 0.55 {
+		t.Fatalf("scores %v and %v should clear the threshold", camel, snake)
+	}
+}
+
+func TestEmptyPatternMatchesEverything(t *testing.T) {
+	for _, mode := range []Mode{Fuzzy, Substring, Regexp} {
+		m := mustNew(t, mode, "", true, 0.55)
+		if _, ok := m.Score("anything at all"); !ok {
+			t.Fatalf("mode %d: empty pattern should match", mode)
+		}
+	}
+}
+
+func TestRegexpAnchorsToLines(t *testing.T) {
+	block := "- one\n- two\n- three"
+	m := mustNew(t, Regexp, "^- two$", false, 0)
+	if _, ok := m.Score(block); !ok {
+		t.Fatal("^ and $ should anchor to lines inside a block")
+	}
+	if _, ok := mustNew(t, Regexp, "^- four$", false, 0).Score(block); ok {
+		t.Fatal("no line matches")
+	}
+}
+
+func TestWordMatching(t *testing.T) {
+	for _, mode := range []Mode{Regexp, Substring} {
+		m, err := New("ops", Options{Mode: mode, Word: true})
+		if err != nil {
+			t.Fatalf("mode %d: %v", mode, err)
+		}
+		if _, ok := m.Score("owned by ops today"); !ok {
+			t.Fatalf("mode %d should match the whole word", mode)
+		}
+		if _, ok := m.Score("devops pipeline"); ok {
+			t.Fatalf("mode %d should not match inside a word", mode)
+		}
+	}
+	if _, err := New("ops", Options{Mode: Fuzzy, Word: true}); err == nil {
+		t.Fatal("word matching has no meaning for fuzzy")
+	}
+}
+
+func TestAnyIsAlternation(t *testing.T) {
+	a := mustNew(t, Substring, "canary", false, 0)
+	b := mustNew(t, Substring, "rollback", false, 0)
+	m := Any([]Matcher{a, b})
+	for _, text := range []string{"the canary", "a rollback"} {
+		if _, ok := m.Score(text); !ok {
+			t.Fatalf("%q should match one of the alternatives", text)
+		}
+	}
+	if _, ok := m.Score("neither of them"); ok {
+		t.Fatal("unrelated text should not match")
+	}
+	if spans := m.Spans("canary and rollback"); len(spans) != 2 {
+		t.Fatalf("spans = %v, want both alternatives highlighted", spans)
+	}
+}
+
+func TestNotInverts(t *testing.T) {
+	m := Not(mustNew(t, Substring, "canary", false, 0))
+	if _, ok := m.Score("a rollback"); !ok {
+		t.Fatal("text without the pattern should be selected")
+	}
+	if _, ok := m.Score("the canary"); ok {
+		t.Fatal("text with the pattern should be rejected")
+	}
+	if spans := m.Spans("a rollback"); spans != nil {
+		t.Fatalf("spans = %v, want none", spans)
 	}
 }

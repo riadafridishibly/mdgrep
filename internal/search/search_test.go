@@ -23,7 +23,7 @@ const doc = "# Guide\n" + // 0
 
 func find(t *testing.T, pattern string, opt Options) []Result {
 	t.Helper()
-	m, err := match.New(match.Fuzzy, pattern, true, 0.55)
+	m, err := match.New(pattern, match.Options{Mode: match.Fuzzy, IgnoreCase: true, MinScore: 0.55})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestLinePadding(t *testing.T) {
 }
 
 func TestKindFilter(t *testing.T) {
-	m, err := match.New(match.Fuzzy, "install", true, 0.55)
+	m, err := match.New("install", match.Options{Mode: match.Fuzzy, IgnoreCase: true, MinScore: 0.55})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ const tasks = "# Sprint\n" + // 0
 
 func findTasks(t *testing.T, pattern string, opt Options) []Result {
 	t.Helper()
-	m, err := match.New(match.Fuzzy, pattern, true, 0.55)
+	m, err := match.New(pattern, match.Options{Mode: match.Fuzzy, IgnoreCase: true, MinScore: 0.55})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestBacktickPattern(t *testing.T) {
 		{match.Regexp, "run `brew.*foo`$", 2},
 	}
 	for _, c := range cases {
-		m, err := match.New(c.mode, c.pattern, true, 0.55)
+		m, err := match.New(c.pattern, match.Options{Mode: c.mode, IgnoreCase: true, MinScore: 0.55})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -221,7 +221,7 @@ func TestBacktickPattern(t *testing.T) {
 }
 
 func TestBacktickPatternMissesPlainText(t *testing.T) {
-	m, err := match.New(match.Substring, "`credentials`", true, 0.55)
+	m, err := match.New("`credentials`", match.Options{Mode: match.Substring, IgnoreCase: true, MinScore: 0.55})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,5 +233,36 @@ func TestBacktickPatternMissesPlainText(t *testing.T) {
 func TestNoMatch(t *testing.T) {
 	if res := find(t, "quantum entanglement", Options{}); res != nil {
 		t.Fatalf("got %+v, want nil", res)
+	}
+}
+
+// Nodes are matched against the markdown as written, so structure a reader can
+// see — heading markers, list markers, table pipes, emphasis — is searchable,
+// and "^" anchors to a line inside the block rather than to the block.
+func TestRawSourceIsSearchable(t *testing.T) {
+	src := "# Title\n" + // 0
+		"\n" + // 1
+		"- [ ] rotate the **deploy** key\n" + // 2
+		"\n" + // 3
+		"| canary | 10% | ops |\n" // 4
+	cases := []struct {
+		mode    match.Mode
+		pattern string
+		start   int
+	}{
+		{match.Regexp, `^# `, 0},
+		{match.Regexp, `^- \[ \] `, 2},
+		{match.Substring, "**deploy**", 2},
+		{match.Regexp, `^\|.*\bops\b`, 4},
+	}
+	for _, c := range cases {
+		m, err := match.New(c.pattern, match.Options{Mode: c.mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := File(mdoc.Parse("t.md", []byte(src)), m, Options{})
+		if len(res) != 1 || res[0].HitStart != c.start {
+			t.Fatalf("pattern %q: res = %+v, want one hit at line %d", c.pattern, res, c.start)
+		}
 	}
 }

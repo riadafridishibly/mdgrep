@@ -43,7 +43,7 @@ type Block struct {
 	End      int      // inclusive, zero-based line
 	Level    int      // heading level, else 0
 	Depth    int      // nesting depth below the document root
-	Text     string   // plain text of the whole subtree, used for matching
+	Text     string   // headings only: plain text, used for breadcrumbs
 	Parent   *Block
 	Children []*Block
 	Located  bool // false when goldmark exposed no offsets for this node
@@ -82,7 +82,6 @@ func Parse(path string, data []byte) *Doc {
 			Start:   0,
 			End:     end,
 			Depth:   1,
-			Text:    strings.Join(src.Lines(1, end-1), "\n"),
 			Parent:  d.Root,
 			Located: true,
 		}
@@ -113,11 +112,13 @@ func (d *Doc) build(n ast.Node, parent *Block, data []byte) {
 			Kind:   kindOf(c),
 			Node:   c,
 			Depth:  parent.Depth + 1,
-			Text:   nodeText(c, data),
 			Parent: parent,
 		}
 		if h, ok := c.(*ast.Heading); ok {
 			b.Level = h.Level
+			// Searching reads the raw source, so rendered text is only needed
+			// where a breadcrumb has to be printed without its "#" markers.
+			b.Text = nodeText(c, data)
 		}
 		if b.Kind == KindItem {
 			b.Task, b.Checked = taskState(c)
