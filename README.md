@@ -205,11 +205,12 @@ the search until it selects the node you mean, then say what to do with it.
 | --- | --- |
 | `--check` / `--uncheck` / `--toggle` | set the state of the selected task item |
 | `--replace TEXT` | replace the selected region with TEXT |
-| `--replace-from FILE` | the same, with TEXT read from a file (`-` is stdin) |
 | `--set-text TEXT` | change what the node says, keeping its markup |
 | `--delete` | remove the selected region |
 | `--append TEXT` / `--prepend TEXT` | insert TEXT after or before it |
+| `--replace-from FILE` and friends | the same, with TEXT read from a file (`-` is stdin) |
 | `--multi` | edit every match |
+| `--expect N` | edit only if exactly N nodes matched |
 | `--dry-run` | show the edit, write nothing |
 
 ```bash
@@ -217,6 +218,16 @@ mdgrep "ship the docs" --check                  # - [ ] ship the docs -> - [x]
 mdgrep --anchor "#setup" --set-text "Install"   # ## Setup -> ## Install
 mdgrep "^## Changelog" --section-body --replace-from new.md
 mdgrep "obsolete note" --delete
+```
+
+Each of the four edits that take text has a `-from` spelling — `--replace-from`,
+`--set-text-from`, `--append-from`, `--prepend-from` — which reads it from a
+file, or from stdin as `-`. A multi-line body then needs no shell quoting at
+all, which is worth having in a shell without here-documents:
+
+```bash
+printf -- '- [ ] verify checksum\n- [ ] sign the tarball\n' |
+  mdgrep "^## Release" --section-body --append-from -
 ```
 
 **More than one match is an error.** mdgrep prints what it would have hit and
@@ -230,7 +241,23 @@ mdgrep: 2 matches; narrow the search or pass --multi
   notes.md:7: - [ ] ship the tests
 ```
 
-`--multi` lifts that rule and edits every match.
+`--multi` lifts that rule and edits every match. `--expect N` replaces it with a
+count: the edit goes ahead only if the search found exactly N nodes, and any
+other number — including none — is refused with the same list. It is the way to
+say what you believe before a pattern that turned out to be broader than you
+thought writes to every file it reached.
+
+```
+$ mdgrep "ship" --check notes.md --expect 3
+mdgrep: --expect 3, but 2 matched
+  notes.md:5: - [ ] ship the docs
+  notes.md:7: - [ ] ship the tests
+```
+
+With `--json`, a refusal is one object on stderr rather than English —
+`error` (`ambiguous` or `expect`), `message`, `total`, `expected` and the same
+capped `matches` list of `path`, `line` and `text` — so a caller that asked for
+JSON parses the refusal with the reader it already has.
 
 `--check`, `--uncheck`, `--toggle` and `--set-text` act on **the matched node**;
 `--replace`, `--delete`, `--append` and `--prepend` act on **the region**, which
@@ -285,7 +312,8 @@ mdgrep "rollback" docs --json | jq -r '.path + ":" + (.start|tostring)'
 ```
 
 Exit status follows grep: `0` if something matched, `1` if nothing did, `2` on
-error.
+error. An error prints the one line that says what went wrong and points at
+`--help` rather than reprinting the whole of it.
 
 ## Notes on parsing
 

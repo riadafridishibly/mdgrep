@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -24,6 +26,11 @@ import (
 )
 
 const version = "0.1.0"
+
+// hint stands in for the whole of usage on the error paths. A mistyped flag is
+// most of a screen of help the caller did not ask for, and it buries the one
+// line that says what went wrong.
+const hint = "try 'mdgrep --help'"
 
 const usage = `mdgrep — node-aware grep for markdown
 
@@ -73,14 +80,17 @@ Selection
 Editing
       --check           tick the selected task item (--uncheck, --toggle)
       --replace TEXT    replace the selected region with TEXT
-      --replace-from FILE
-                        the same, with TEXT read from a file ("-" is stdin)
       --set-text TEXT   change what the matched node says, keeping the markup
                         that makes it a heading, an item or a fenced block
       --delete          remove the selected region
       --append TEXT     insert TEXT after the selected region
       --prepend TEXT    insert TEXT before it
+      --replace-from FILE, --set-text-from FILE, --append-from FILE,
+      --prepend-from FILE
+                        the same four edits with TEXT read from a file ("-"
+                        is stdin), so a multi-line body needs no quoting
       --multi           edit every match; without it, more than one is an error
+      --expect N        edit only if exactly N nodes matched, else fail
       --dry-run         show the edit, write nothing
 
 An edit rewrites what the same flags would have printed, so the search comes
@@ -88,6 +98,8 @@ first: narrow it until one node is selected, then say what to do with it.
 --check and --set-text act on the matched node itself; --replace, --delete,
 --append and --prepend act on the region --section and --expand widen it to.
 The change is printed unless -q, and every file is written in one atomic go.
+A refused edit lists what it would have hit on stderr, as one JSON object when
+--json is set, so the next attempt can be narrower.
 
 Output
   -n, --line-number     number the printed lines (the default)
@@ -144,9 +156,13 @@ type config struct {
 	replace   optString
 	replFrom  optString
 	setText   optString
+	setFrom   optString
 	appendTo  optString
+	appFrom   optString
 	prependTo optString
+	preFrom   optString
 	multi     bool
+	expect    optInt
 	dryRun    bool
 }
 
@@ -161,6 +177,24 @@ func (o *optString) String() string { return o.val }
 
 func (o *optString) Set(v string) error {
 	o.val, o.set = v, true
+	return nil
+}
+
+// optInt is optString's counterpart for a count, so "--expect 0" is a claim
+// the run can reject rather than the same thing as leaving --expect out.
+type optInt struct {
+	val int
+	set bool
+}
+
+func (o *optInt) String() string { return strconv.Itoa(o.val) }
+
+func (o *optInt) Set(v string) error {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("not a number: %q", v)
+	}
+	o.val, o.set = n, true
 	return nil
 }
 
@@ -215,9 +249,13 @@ func run() int {
 	fs.Var(&c.replace, "replace", "")
 	fs.Var(&c.replFrom, "replace-from", "")
 	fs.Var(&c.setText, "set-text", "")
+	fs.Var(&c.setFrom, "set-text-from", "")
 	fs.Var(&c.appendTo, "append", "")
+	fs.Var(&c.appFrom, "append-from", "")
 	fs.Var(&c.prependTo, "prepend", "")
+	fs.Var(&c.preFrom, "prepend-from", "")
 	fs.BoolVar(&c.multi, "multi", false, "")
+	fs.Var(&c.expect, "expect", "")
 	fs.BoolVar(&c.dryRun, "dry-run", false, "")
 	bind(func(n string) { fs.IntVar(&c.opt.Before, n, 0, "") }, "B", "before")
 	bind(func(n string) { fs.IntVar(&c.opt.After, n, 0, "") }, "A", "after")
@@ -240,7 +278,7 @@ func run() int {
 	bind(func(n string) { fs.BoolVar(&c.showVer, n, false, "") }, "V", "version")
 
 	if err := fs.Parse(permute(fs, os.Args[1:])); err != nil {
-		fmt.Fprintf(os.Stderr, "mdgrep: %v\n\n%s", err, usage)
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, hint)
 		return 2
 	}
 	if c.help {
@@ -275,7 +313,7 @@ func run() int {
 	paths := fs.Args()
 	if len(c.patterns) == 0 {
 		if fs.NArg() == 0 {
-			fmt.Fprintf(os.Stderr, "mdgrep: missing PATTERN\n\n%s", usage)
+			fmt.Fprintf(os.Stderr, "mdgrep: missing PATTERN\n%s\n", hint)
 			return 2
 		}
 		c.patterns, paths = patternList{fs.Arg(0)}, paths[1:]
@@ -428,29 +466,26 @@ func buildEdit(c *config) (edit.Options, error) {
 	if c.del {
 		add(edit.OpDelete, "")
 	}
-	if c.replace.set {
-		add(edit.OpReplace, c.replace.val)
-	}
-	if c.replFrom.set {
-		text, err := readText(c.replFrom.val)
-		if err != nil {
-			return edit.Options{}, err
+	// Every edit that takes text takes it either inline or from a file, and
+	// the pair is one flag with two spellings rather than two edits.
+	for _, t := range textOps(c) {
+		switch {
+		case t.inline.set && t.from.set:
+			return edit.Options{}, fmt.Errorf("--%s and --%s-from both give the text for one edit", t.name, t.name)
+		case t.inline.set:
+			add(t.op, t.inline.val)
+		case t.from.set:
+			text, err := readText(t.from.val)
+			if err != nil {
+				return edit.Options{}, err
+			}
+			add(t.op, text)
 		}
-		add(edit.OpReplace, text)
-	}
-	if c.setText.set {
-		add(edit.OpSetText, c.setText.val)
-	}
-	if c.appendTo.set {
-		add(edit.OpAppend, c.appendTo.val)
-	}
-	if c.prependTo.set {
-		add(edit.OpPrepend, c.prependTo.val)
 	}
 
 	if len(ops) == 0 {
-		if c.multi || c.dryRun {
-			return edit.Options{}, fmt.Errorf("--multi and --dry-run only mean something with an edit")
+		if c.multi || c.dryRun || c.expect.set {
+			return edit.Options{}, fmt.Errorf("--multi, --expect and --dry-run only mean something with an edit")
 		}
 		return edit.Options{}, nil
 	}
@@ -466,6 +501,8 @@ func buildEdit(c *config) (edit.Options, error) {
 		return e, fmt.Errorf("-A, -B, -C and --lines pad what is printed; they do not select what an edit rewrites")
 	case c.opt.Max > 0:
 		return e, fmt.Errorf("-m caps results; an edit wants every match it selects, or --multi")
+	case c.expect.set && c.expect.val < 1:
+		return e, fmt.Errorf("--expect states how many nodes the search should find, so it wants a count above zero")
 	case e.Op.Node() && (c.opt.Section || c.opt.Body):
 		return e, fmt.Errorf("--%s edits the matched node, so --section has nothing to widen; use --replace", e.Op)
 	}
@@ -478,6 +515,23 @@ func buildEdit(c *config) (edit.Options, error) {
 		}
 	}
 	return e, nil
+}
+
+// textOp pairs an edit that takes text with the two flags that can carry it.
+type textOp struct {
+	op     edit.Op
+	name   string
+	inline *optString
+	from   *optString
+}
+
+func textOps(c *config) []textOp {
+	return []textOp{
+		{edit.OpReplace, "replace", &c.replace, &c.replFrom},
+		{edit.OpSetText, "set-text", &c.setText, &c.setFrom},
+		{edit.OpAppend, "append", &c.appendTo, &c.appFrom},
+		{edit.OpPrepend, "prepend", &c.prependTo, &c.preFrom},
+	}
 }
 
 func readText(path string) (string, error) {
@@ -496,12 +550,13 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []fileResult, e edit
 	for _, r := range results {
 		total += len(r.res)
 	}
-	switch {
-	case total == 0:
-		return 1
-	case total > 1 && !c.multi:
-		reportAmbiguous(results, total)
-		return 2
+	if why, code := countGate(total, c.expect, c.multi); code != 0 {
+		// Nothing matching is the search's own answer, and stays as quiet
+		// here as it is everywhere else.
+		if why.kind != "nomatch" {
+			reportRefused(os.Stderr, results, total, why, c.jsonOut)
+		}
+		return code
 	}
 
 	planned := make([][]edit.Change, len(results))
@@ -545,23 +600,110 @@ func changed(changes []edit.Change) bool {
 	return false
 }
 
-// reportAmbiguous shows what an edit would have hit, so the next attempt can
+// countGate decides whether an edit may go ahead on the number of nodes the
+// search found. --expect states the count outright; without it a lone match is
+// the only unambiguous instruction, and --multi waives that.
+func countGate(total int, expect optInt, multi bool) (reason, int) {
+	switch {
+	case expect.set && total != expect.val:
+		return reason{
+			kind:     "expect",
+			text:     fmt.Sprintf("--expect %d, but %d matched", expect.val, total),
+			expected: expect.val,
+		}, 2
+	case expect.set:
+		return reason{}, 0
+	case total == 0:
+		return reason{kind: "nomatch"}, 1
+	case total > 1 && !multi:
+		return reason{
+			kind: "ambiguous",
+			text: fmt.Sprintf("%d matches; narrow the search or pass --multi", total),
+		}, 2
+	}
+	return reason{}, 0
+}
+
+// reason is why an edit was refused: a kind an --json reader can branch on, a
+// sentence for everyone else, and the count --expect asked for when that is
+// what went wrong.
+type reason struct {
+	kind     string
+	text     string
+	expected int
+}
+
+// shownMatches caps how many hits a refusal lists. The list is there to make
+// the next attempt narrower, and the whole point of a refusal is that there
+// were too many to act on.
+const shownMatches = 10
+
+// reportRefused shows what the edit would have hit, so the next attempt can
 // narrow the search rather than guess at it.
-func reportAmbiguous(results []fileResult, total int) {
-	fmt.Fprintf(os.Stderr, "mdgrep: %d matches; narrow the search or pass --multi\n", total)
-	const shown = 10
+func reportRefused(w io.Writer, results []fileResult, total int, why reason, asJSON bool) {
+	if asJSON {
+		reportRefusedJSON(w, results, total, why)
+		return
+	}
+	fmt.Fprintf(w, "mdgrep: %s\n", why.text)
 	n := 0
 	for _, r := range results {
 		for _, res := range r.res {
-			if n == shown {
-				fmt.Fprintf(os.Stderr, "  … and %d more\n", total-shown)
+			if n == shownMatches {
+				fmt.Fprintf(w, "  … and %d more\n", total-shownMatches)
 				return
 			}
-			fmt.Fprintf(os.Stderr, "  %s:%d: %s\n", r.src.Path, res.Start+1,
+			fmt.Fprintf(w, "  %s:%d: %s\n", r.src.Path, res.Start+1,
 				strings.TrimSpace(r.src.Line(res.Start)))
 			n++
 		}
 	}
+}
+
+// validUTF8 stands in for what a JSON encoder would do to a line of bytes that
+// is not text, but does it here, so the object says the same thing the encoder
+// would have written and a reader comparing it against the file knows why.
+func validUTF8(s string) string { return strings.ToValidUTF8(s, "\uFFFD") }
+
+type jsonMatch struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Text string `json:"text"`
+}
+
+type jsonRefusal struct {
+	Error    string      `json:"error"`
+	Message  string      `json:"message"`
+	Total    int         `json:"total"`
+	Expected int         `json:"expected,omitempty"`
+	Matches  []jsonMatch `json:"matches"`
+}
+
+// reportRefusedJSON says the same thing as one object, so a caller that asked
+// for --json parses the refusal with the reader it already has rather than
+// reading English back out of stderr.
+func reportRefusedJSON(w io.Writer, results []fileResult, total int, why reason) {
+	out := jsonRefusal{
+		Error:    why.kind,
+		Message:  why.text,
+		Total:    total,
+		Expected: why.expected,
+		Matches:  []jsonMatch{},
+	}
+	for _, r := range results {
+		for _, res := range r.res {
+			if len(out.Matches) == shownMatches {
+				json.NewEncoder(w).Encode(out)
+				return
+			}
+			out.Matches = append(out.Matches, jsonMatch{
+				Path: r.src.Path,
+				Line: res.Start + 1,
+				Text: validUTF8(strings.TrimSpace(r.src.Line(res.Start))),
+			})
+		}
+	}
+	json.NewEncoder(w).Encode(out)
 }
 
 func bestScore(res []search.Result) float64 {
