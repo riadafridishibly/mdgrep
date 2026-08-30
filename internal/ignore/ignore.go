@@ -93,7 +93,7 @@ func seed(root string) []layer {
 		return nil
 	}
 	var out []layer
-	if l, ok := compose(worktree, excludeFile(worktree)); ok {
+	if l, ok := newLayer(worktree, excludeFile(worktree)); ok {
 		out = append(out, l)
 	}
 	var dirs []string
@@ -104,7 +104,7 @@ func seed(root string) []layer {
 		}
 	}
 	for i := len(dirs) - 1; i >= 0; i-- {
-		if l, ok := read(dirs[i]); ok {
+		if l, ok := newLayer(dirs[i], sourcesIn(dirs[i])...); ok {
 			out = append(out, l)
 		}
 	}
@@ -221,17 +221,18 @@ func (f Frame) Enter(dir string, entries []fs.DirEntry) Frame {
 	layers := f.layers
 	if repo {
 		layers = nil
-		if l, ok := compose(abs, excludeFile(abs)); ok {
+		if l, ok := newLayer(abs, excludeFile(abs)); ok {
 			layers = append(layers, l)
 		}
 	}
-	var rules ruleSet
+	var files []string
 	for i, ok := range present {
 		if ok {
-			rules.addFile(filepath.Join(abs, sources[i]))
+			files = append(files, filepath.Join(abs, sources[i]))
 		}
 	}
-	if len(rules.rules) == 0 {
+	l, ok := newLayer(abs, files...)
+	if !ok {
 		if !repo {
 			return f
 		}
@@ -239,7 +240,7 @@ func (f Frame) Enter(dir string, entries []fs.DirEntry) Frame {
 	}
 	// Clipped, so the append copies instead of writing into an array a
 	// sibling frame is still reading.
-	return Frame{m: f.m, dir: abs, layers: append(slices.Clip(layers), layer{dir: abs, rules: rules})}
+	return Frame{m: f.m, dir: abs, layers: append(slices.Clip(layers), l)}
 }
 
 // Excluded reports whether the rules leave out the entry of this Frame's
@@ -302,12 +303,17 @@ func relTo(dir, path string) string {
 	return filepath.ToSlash(path[len(prefix):])
 }
 
-// read builds the layer for one directory out of the ignore files it holds. It
-// is for the directories above the walk, where there is no listing in hand.
-func read(dir string) (layer, bool) {
+// newLayer reads these files, lowest precedence first, into the layer that
+// governs dir. A file that is missing or says nothing contributes nothing, and
+// a layer nobody wrote a rule for is not a layer. The files usually sit in dir
+// but need not: the repository exclude list is read relative to the work tree
+// from inside the git directory.
+func newLayer(dir string, files ...string) (layer, bool) {
 	var rules ruleSet
-	for _, name := range sources {
-		rules.addFile(filepath.Join(dir, name))
+	for _, file := range files {
+		if file != "" {
+			rules.addFile(file)
+		}
 	}
 	if len(rules.rules) == 0 {
 		return layer{}, false
@@ -315,18 +321,14 @@ func read(dir string) (layer, bool) {
 	return layer{dir: dir, rules: rules}, true
 }
 
-// compose builds a layer from one named file whose patterns are read relative
-// to dir, which is how the repository exclude list works.
-func compose(dir, file string) (layer, bool) {
-	var rules ruleSet
-	if file == "" {
-		return layer{}, false
+// sourcesIn names the ignore files a directory could hold. It is for the
+// directories above the walk, where there is no listing in hand to look in.
+func sourcesIn(dir string) []string {
+	files := make([]string, len(sources))
+	for i, name := range sources {
+		files[i] = filepath.Join(dir, name)
 	}
-	rules.addFile(file)
-	if len(rules.rules) == 0 {
-		return layer{}, false
-	}
-	return layer{dir: dir, rules: rules}, true
+	return files
 }
 
 // ruleSet is a directory's rules in the order they were written, since the
