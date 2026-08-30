@@ -13,19 +13,38 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
-	"mdgrep/internal/edit"
-	"mdgrep/internal/match"
-	"mdgrep/internal/mdoc"
-	"mdgrep/internal/render"
-	"mdgrep/internal/search"
+	"github.com/riadafridishibly/mdgrep/internal/edit"
+	"github.com/riadafridishibly/mdgrep/internal/match"
+	"github.com/riadafridishibly/mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/render"
+	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
+// version names a build the module system cannot place: go build from a clone
+// with no tag over it. An installed binary knows better, and buildVersion asks
+// it first.
 const version = "0.1.0"
+
+// buildVersion is what -V reports. A binary from "go install <path>@v0.2.0"
+// carries the tag it was built from, so it should say so rather than repeat
+// whatever the source tree last hardcoded.
+func buildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	return moduleVersion(info, ok)
+}
+
+func moduleVersion(info *debug.BuildInfo, ok bool) string {
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return version
+	}
+	return strings.TrimPrefix(info.Main.Version, "v")
+}
 
 // hint stands in for the whole of usage on the error paths. A mistyped flag is
 // most of a screen of help the caller did not ask for, and it buries the one
@@ -286,7 +305,7 @@ func run() int {
 		return 0
 	}
 	if c.showVer {
-		fmt.Fprintf(os.Stdout, "mdgrep %s\n", version)
+		fmt.Fprintf(os.Stdout, "mdgrep %s\n", buildVersion())
 		return 0
 	}
 	kinds, err := parseKinds(c.kinds)

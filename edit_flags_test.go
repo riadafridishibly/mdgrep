@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"mdgrep/internal/edit"
+	"github.com/riadafridishibly/mdgrep/internal/edit"
 )
 
 // writeFile drops text into the test's own directory and hands back the path,

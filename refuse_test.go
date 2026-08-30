@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"mdgrep/internal/match"
-	"mdgrep/internal/mdoc"
-	"mdgrep/internal/search"
+	"github.com/riadafridishibly/mdgrep/internal/match"
+	"github.com/riadafridishibly/mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
 func expecting(n int) optInt { return optInt{val: n, set: true} }

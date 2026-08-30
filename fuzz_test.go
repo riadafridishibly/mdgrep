@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"mdgrep/internal/edit"
-	"mdgrep/internal/match"
-	"mdgrep/internal/mdoc"
-	"mdgrep/internal/search"
+	"github.com/riadafridishibly/mdgrep/internal/edit"
+	"github.com/riadafridishibly/mdgrep/internal/match"
+	"github.com/riadafridishibly/mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
 // editFlags is every flag buildEdit reads as an instruction to change a file,
