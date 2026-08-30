@@ -50,6 +50,8 @@ when it is a pipe, otherwise it searches the current directory.
 | `-F`, `--fixed-strings` | match PATTERN literally |
 | `--fuzzy` | fuzzy match |
 | `--min-score N` | fuzzy threshold, 0..1 (default 0.7) |
+| `--anchor` | PATTERN is a heading link anchor |
+| `--anchor-style LIST` | anchor conventions to try (default all) |
 | `-w`, `--word-regexp` | match only whole words |
 | `-v`, `--invert-match` | select the nodes that do not match |
 | `-i`, `--ignore-case` | force case-insensitive |
@@ -90,6 +92,47 @@ the first ones. Regexp and `-F` searches keep grep's order.
 ```bash
 mdgrep --fuzzy "brew instal" notes.md   # misspelled, still matches
 ```
+
+### Heading anchors
+
+A markdown link points at a heading by its slug — `[see](#the-foo-bar)` means
+`## The Foo Bar`. `--anchor` searches that way round: give it the anchor and it
+finds the heading.
+
+```bash
+mdgrep --anchor "#the-foo-bar" docs
+mdgrep --anchor "#the-foo-bar" docs --section   # print the whole section
+```
+
+The pattern may be written as the anchor (`the-foo-bar`), with its `#`, as the
+heading line copied verbatim (`## The Foo Bar`), or as a whole link with the
+file in front of it — `docs/setup.md#install`, or a pasted
+`https://github.com/o/r/blob/main/docs/setup.md#install`. When the link names a
+file, only files whose path ends that way are searched. Percent escapes are
+decoded, so `#caf%C3%A9-notes` finds `## Café Notes`.
+
+Generators disagree about slugs, so mdgrep computes the anchor under each
+convention it knows and matches if any of them agrees:
+
+| Style | `## Deploy & Rollback!` | `## 1. Getting Started` | `## Café Notes` |
+| --- | --- | --- | --- |
+| `github` (github-slugger) | `deploy--rollback` | `1-getting-started` | `café-notes` |
+| `gitlab` | `deploy-rollback` | `1-getting-started` | `café-notes` |
+| `python` (Python-Markdown, MkDocs) | `deploy-rollback` | `1-getting-started` | `cafe-notes` |
+| `kramdown` (Jekyll) | `deploy--rollback` | `getting-started` | `caf-notes` |
+| `pandoc` | `deploy-rollback` | `getting-started` | `café-notes` |
+| `loose` | `deploy-rollback` | `1-getting-started` | `cafe-notes` |
+
+`--anchor-style` narrows that list — `--anchor-style github` when you know
+where the link came from and want exactly what GitHub would resolve. `loose`
+keeps only letters and digits and is the catch-all for a generator mdgrep has
+never heard of.
+
+Repeated headings are numbered the way a generator numbers them, so the second
+`## Notes` in a file is `#notes-1` (`#notes_1` under `python`) and the anchor
+tells the two apart. Case flags do not apply — an anchor is lower case by
+construction — and `--anchor` cannot be combined with `-F`, `--fuzzy`, `-w` or
+`-v`, since it names its heading outright rather than matching text.
 
 ### Filters
 
@@ -200,9 +243,9 @@ error.
 
 ```
 main.go              CLI: flags, file walking, worker pool
-internal/mdoc        goldmark AST → line-addressable block tree, sections, breadcrumbs
+internal/mdoc        goldmark AST → line-addressable block tree, sections, breadcrumbs, anchors
 internal/match       regexp / literal / fuzzy matchers and highlight spans
-internal/search      block selection, tightening, promotion, expansion, merging
+internal/search      block selection, anchor lookup, tightening, promotion, expansion, merging
 internal/render      terminal and JSON output
 ```
 

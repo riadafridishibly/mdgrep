@@ -40,6 +40,12 @@ Matching
                         PATTERN must appear, loosely and in order. Results
                         come back best first rather than in file order
       --min-score N     fuzzy score threshold, 0..1 (default 0.7)
+      --anchor          PATTERN is a heading link anchor: "#the-foo-bar",
+                        "the-foo-bar" or "docs/x.md#the-foo-bar" all find the
+                        heading "## The Foo Bar"
+      --anchor-style LIST
+                        anchor conventions to try (default all): github,
+                        gitlab,python,kramdown,pandoc,loose
   -w, --word-regexp     match only whole words
   -v, --invert-match    select the nodes that do not match
   -i, --ignore-case     force case-insensitive
@@ -91,6 +97,7 @@ type config struct {
 	invert    bool
 	minScore  float64
 	kinds     string
+	anchorSty string
 	task      bool
 	checked   bool
 	unchecked bool
@@ -127,7 +134,7 @@ func main() {
 
 func run() int {
 	var c config
-	var fuzzy, fixed, smart bool
+	var fuzzy, fixed, anchor, smart bool
 
 	fs := flag.NewFlagSet("mdgrep", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -139,6 +146,8 @@ func run() int {
 	bind(func(n string) { fs.Var(&c.patterns, n, "") }, "e", "regexp")
 	bind(func(n string) { fs.BoolVar(&fixed, n, false, "") }, "F", "fixed-strings")
 	fs.BoolVar(&fuzzy, "fuzzy", false, "")
+	fs.BoolVar(&anchor, "anchor", false, "")
+	fs.StringVar(&c.anchorSty, "anchor-style", "", "")
 	fs.Float64Var(&c.minScore, "min-score", 0.7, "")
 	bind(func(n string) { fs.BoolVar(&c.word, n, false, "") }, "w", "word-regexp")
 	bind(func(n string) { fs.BoolVar(&c.invert, n, false, "") }, "v", "invert-match")
@@ -209,6 +218,9 @@ func run() int {
 	case fuzzy && fixed:
 		fmt.Fprintln(os.Stderr, "mdgrep: --fuzzy and --fixed-strings are mutually exclusive")
 		return 2
+	case anchor && (fuzzy || fixed || c.word || c.invert):
+		fmt.Fprintln(os.Stderr, "mdgrep: --anchor selects a heading by name and takes no other matching flag")
+		return 2
 	case fuzzy:
 		mode = match.Fuzzy
 		// A fuzzy pattern is a question about which node fits best, so the
@@ -221,8 +233,15 @@ func run() int {
 	if c.context > 0 {
 		c.opt.Before, c.opt.After = c.context, c.context
 	}
-	matcher, err := buildMatcher(c, mode, smart)
-	if err != nil {
+	// An anchor search says which heading it wants, so there is nothing left
+	// for a matcher to score or to highlight.
+	matcher := match.All()
+	if anchor {
+		if c.opt.Anchor, err = buildAnchor(c); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+			return 2
+		}
+	} else if matcher, err = buildMatcher(c, mode, smart); err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
 	}
@@ -320,6 +339,52 @@ func bestScore(res []search.Result) float64 {
 		return 0
 	}
 	return res[0].Score
+}
+
+// buildAnchor turns every pattern into a heading anchor to look for, under
+// each convention the user left enabled.
+func buildAnchor(c config) (*search.Anchor, error) {
+	styles, err := parseAnchorStyles(c.anchorSty)
+	if err != nil {
+		return nil, err
+	}
+	return search.NewAnchor(c.patterns, styles)
+}
+
+var anchorStyleAliases = map[string]mdoc.AnchorStyle{
+	"github": mdoc.AnchorGitHub, "gh": mdoc.AnchorGitHub,
+	"gitlab": mdoc.AnchorGitLab, "gl": mdoc.AnchorGitLab,
+	"python": mdoc.AnchorPython, "mkdocs": mdoc.AnchorPython, "pymd": mdoc.AnchorPython,
+	"kramdown": mdoc.AnchorKramdown, "jekyll": mdoc.AnchorKramdown,
+	"pandoc": mdoc.AnchorPandoc,
+	"loose":  mdoc.AnchorLoose, "any": mdoc.AnchorLoose,
+}
+
+func parseAnchorStyles(spec string) ([]mdoc.AnchorStyle, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" || strings.EqualFold(spec, "all") {
+		return mdoc.AllAnchorStyles, nil
+	}
+	var out []mdoc.AnchorStyle
+	seen := map[mdoc.AnchorStyle]bool{}
+	for raw := range strings.SplitSeq(spec, ",") {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" {
+			continue
+		}
+		s, ok := anchorStyleAliases[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown anchor style %q", raw)
+		}
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return mdoc.AllAnchorStyles, nil
+	}
+	return out, nil
 }
 
 // buildMatcher folds the case flags and every -e pattern into one matcher.

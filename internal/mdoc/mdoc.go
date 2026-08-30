@@ -66,13 +66,15 @@ type Doc struct {
 	Root     *Block
 	Blocks   []*Block // document order, root excluded
 	Headings []*Block // document order
+
+	data []byte // the original file, for text rendered on demand
 }
 
 var parser = goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser()
 
 func Parse(path string, data []byte) *Doc {
 	src := NewSource(path, data)
-	d := &Doc{Src: src}
+	d := &Doc{Src: src, data: data}
 	d.Root = &Block{Kind: KindDocument, Start: 0, End: src.NumLines() - 1, Located: true}
 
 	scan := data
@@ -266,7 +268,14 @@ func isSetextRule(line string) bool {
 
 // nodeText renders a node's plain text for matching. Link and image
 // destinations are included so URLs are searchable.
-func nodeText(n ast.Node, src []byte) string {
+func nodeText(n ast.Node, src []byte) string { return renderText(n, src, true) }
+
+// anchorText renders a heading the way an anchor generator sees it: what a
+// reader would read, with the destination of a link left out because only the
+// visible text is slugged.
+func anchorText(n ast.Node, src []byte) string { return renderText(n, src, false) }
+
+func renderText(n ast.Node, src []byte, dests bool) string {
 	var sb strings.Builder
 	var walk func(ast.Node)
 	walk = func(n ast.Node) {
@@ -301,6 +310,9 @@ func nodeText(n ast.Node, src []byte) string {
 			if c.Type() == ast.TypeBlock && c.NextSibling() != nil {
 				sb.WriteByte('\n')
 			}
+		}
+		if !dests {
+			return
 		}
 		switch t := n.(type) {
 		case *ast.Link:

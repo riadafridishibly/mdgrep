@@ -38,6 +38,7 @@ type Options struct {
 	Lines   int                // raw lines padded on both sides
 	Expand  int                // ancestor levels to climb from the hit
 	Section bool               // widen to the enclosing heading section
+	Anchor  *Anchor            // when set, headings are selected by link anchor
 	Rank    bool               // order by score rather than by position
 	Max     int                // cap on results per file, 0 for unlimited
 }
@@ -111,10 +112,35 @@ type hit struct {
 	score float64
 }
 
-// candidates scores every eligible block, then keeps only the tightest ones:
+// candidates picks the blocks a search selects. An anchor names its heading
+// outright, so it stands in for the matcher rather than narrowing it.
+func candidates(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
+	if opt.Anchor != nil {
+		return anchorHits(doc, opt.Anchor, opt)
+	}
+	return matchHits(doc, m, opt)
+}
+
+// anchorHits selects the headings a link points at. Only a heading is given an
+// anchor, so nothing else is considered, and every hit is equally exact.
+func anchorHits(doc *mdoc.Doc, a *Anchor, opt Options) []hit {
+	if (opt.Kinds != nil && !opt.Kinds[mdoc.KindHeading]) || !a.wantsFile(doc.Src.Path) {
+		return nil
+	}
+	anchors := doc.HeadingAnchors(a.styles)
+	var out []hit
+	for i, h := range doc.Headings {
+		if h.Located && a.matches(doc.Src.Path, anchors[i]) {
+			out = append(out, hit{h, 1})
+		}
+	}
+	return out
+}
+
+// matchHits scores every eligible block, then keeps only the tightest ones:
 // a block whose own descendant also matched is dropped, so a hit inside a
 // nested bullet reports that bullet and not the whole list.
-func candidates(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
+func matchHits(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
 	matched := map[*mdoc.Block]float64{}
 	for _, b := range doc.Blocks {
 		if !b.Located {
