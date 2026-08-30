@@ -290,3 +290,16 @@ func TestUncleanSearchRootReadsItsOwnRules(t *testing.T) {
 	t.Chdir(root)
 	check(t, survivors(t, ".", "./docs"), []string{"docs/keep.md"})
 }
+
+// A linked worktree gets a git directory of its own, but the repository keeps
+// info/ in the one they all share, which the commondir file beside it names.
+func TestExcludeFileIsFoundThroughCommondir(t *testing.T) {
+	root := tree(t, map[string]string{
+		"main/.git/info/exclude":               "drop.md\n",
+		"main/.git/worktrees/linked/commondir": "../..\n",
+		"linked/.git":                          "gitdir: ../main/.git/worktrees/linked\n",
+		"linked/keep.md":                       "",
+		"linked/drop.md":                       "",
+	})
+	check(t, survivors(t, root, filepath.Join(root, "linked")), []string{"linked/keep.md"})
+}
