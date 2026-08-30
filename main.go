@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/riadafridishibly/mdgrep/internal/edit"
+	"github.com/riadafridishibly/mdgrep/internal/ignore"
 	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 	"github.com/riadafridishibly/mdgrep/internal/render"
@@ -133,7 +133,9 @@ Output
   -q, --quiet           print nothing; the exit status carries the answer
       --ext LIST        file extensions to search (default md,markdown,mdown,mkd,mdx)
       --hidden          descend into hidden directories
-      --no-ignore       do not skip node_modules, vendor and friends
+      --no-ignore       search what the ignore files (.gitignore, .ignore,
+                        .git/info/exclude) and the skip list (node_modules,
+                        vendor and friends) leave out
   -h, --help
   -V, --version
 
@@ -952,34 +954,62 @@ func collectFiles(paths []string, exts map[string]bool, hidden, noIgnore bool) (
 			}
 			continue
 		}
-		err = filepath.WalkDir(p, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			name := d.Name()
-			if d.IsDir() {
-				if path == p {
-					return nil
-				}
-				if (!noIgnore && skipDirs[name]) || (!hidden && strings.HasPrefix(name, ".")) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !hidden && strings.HasPrefix(name, ".") {
-				return nil
-			}
-			if exts[strings.ToLower(filepath.Ext(name))] && !seen[path] {
-				seen[path] = true
-				files = append(files, path)
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, false, err
+		c := collector{exts: exts, hidden: hidden, noIgnore: noIgnore, seen: seen, files: files}
+		if !noIgnore {
+			c.ignore = ignore.New(p)
 		}
+		// The root was asked for by name, so it is searched whatever the rules
+		// above it say; everything below it is not.
+		c.walk(p)
+		files = c.files
 	}
 	return files, useStdin, nil
+}
+
+// collector walks a directory tree and keeps the files worth searching. It
+// reads each directory itself rather than going through filepath.WalkDir,
+// because the listing is also how the ignore rules find their own files.
+type collector struct {
+	exts     map[string]bool
+	hidden   bool
+	noIgnore bool
+	ignore   *ignore.Matcher
+	seen     map[string]bool
+	files    []string
+}
+
+func (c *collector) walk(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	c.ignore.Enter(dir, entries)
+	for _, e := range entries {
+		name := e.Name()
+		path := filepath.Join(dir, name)
+		if e.IsDir() {
+			if (!c.noIgnore && skipDirs[name]) || (!c.hidden && strings.HasPrefix(name, ".")) {
+				continue
+			}
+			if !c.ignore.Excluded(path, true) {
+				c.walk(path)
+			}
+			continue
+		}
+		if !c.hidden && strings.HasPrefix(name, ".") {
+			continue
+		}
+		// Extension first: it settles most files for the price of a suffix,
+		// and leaves the rules to run over the few it does not.
+		if !c.exts[strings.ToLower(filepath.Ext(name))] || c.seen[path] {
+			continue
+		}
+		if c.ignore.Excluded(path, false) {
+			continue
+		}
+		c.seen[path] = true
+		c.files = append(c.files, path)
+	}
 }
 
 func useColor(when string) bool {
