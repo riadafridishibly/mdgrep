@@ -124,6 +124,10 @@ func workTree(dir string) string {
 // excludeFile locates the repository's own list of patterns, the one kept out
 // of version control. The .git entry is a directory in a clone and a file
 // pointing elsewhere in a worktree or a submodule.
+//
+// A submodule's git directory holds the whole repository, but a linked
+// worktree's holds only what is particular to that worktree; the exclude list
+// is shared, and lives in the directory the commondir file beside it names.
 func excludeFile(worktree string) string {
 	dot := filepath.Join(worktree, ".git")
 	info, err := os.Stat(dot)
@@ -144,7 +148,24 @@ func excludeFile(worktree string) string {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(worktree, dir)
 	}
-	return filepath.Join(dir, "info", "exclude")
+	return filepath.Join(commonDir(dir), "info", "exclude")
+}
+
+// commonDir returns the git directory that gitdir shares with the rest of its
+// repository, which is gitdir itself unless a commondir file says otherwise.
+func commonDir(gitdir string) string {
+	data, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		return gitdir
+	}
+	common := strings.TrimSpace(string(data))
+	if common == "" {
+		return gitdir
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gitdir, common)
+	}
+	return common
 }
 
 // Enter notes the ignore files of a directory the walk is about to descend
