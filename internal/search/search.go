@@ -177,20 +177,20 @@ func matchHits(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
 		}
 	}
 
+	// A block is dropped when a descendant of it also matched. Asking that of
+	// each block directly would compare every match against every other; walk
+	// up from each match instead and mark what it hangs under, which stops as
+	// soon as it reaches an ancestor an earlier match already marked.
+	outer := make(map[*mdoc.Block]bool, len(matched))
+	for b := range matched {
+		for p := b.Parent; p != nil && !outer[p]; p = p.Parent {
+			outer[p] = true
+		}
+	}
+
 	var out []hit
 	for _, b := range doc.Blocks {
-		s, ok := matched[b]
-		if !ok {
-			continue
-		}
-		nested := false
-		for other := range matched {
-			if other != b && b.Contains(other) {
-				nested = true
-				break
-			}
-		}
-		if !nested {
+		if s, ok := matched[b]; ok && !outer[b] {
 			out = append(out, hit{b, s})
 		}
 	}
