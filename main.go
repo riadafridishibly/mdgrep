@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/riadafridishibly/mdgrep/internal/edit"
 	"github.com/riadafridishibly/mdgrep/internal/ignore"
@@ -125,7 +126,14 @@ Output
   -N, --no-line-number
       --no-breadcrumb   hide the heading trail above each result
       --color WHEN      auto, always or never (default auto)
-      --json            one JSON object per result
+      --format WHEN     plain (default), compact or json. compact prints the
+                        path once per file and then one tab-separated record
+                        per result — "start[-end] kind text", with newlines
+                        escaped so a record is always one line — which costs a
+                        fraction of the same results as json. Neither machine
+                        format is coloured, and compact leaves out the
+                        breadcrumb and the score; ask for json if you want them
+      --json            one JSON object per result (same as --format json)
   -c, --count           print only the number of results per file
   -l, --files-with-matches
                         print only the names of files with results
@@ -136,7 +144,10 @@ Output
       --no-ignore       search everything, including what the ignore files
                         (.gitignore, .ignore, .git/info/exclude) and the skip
                         list (node_modules, vendor and friends) leave out
-  -h, --help
+  -h, --help [TOPIC]    the whole manual, or one part of it: matching,
+                        filters, selection, editing, output. A flag name works
+                        too, so "mdgrep --help anchor" prints the part that
+                        documents --anchor
   -V, --version
 
 -B, -A and -C count sibling nodes, not lines; use --lines for raw lines.
@@ -161,6 +172,7 @@ type config struct {
 	noCrumb   bool
 	color     string
 	jsonOut   bool
+	format    string
 	count     bool
 	filesOnly bool
 	quiet     bool
@@ -289,6 +301,7 @@ func run() int {
 	fs.BoolVar(&c.noCrumb, "no-breadcrumb", false, "")
 	fs.StringVar(&c.color, "color", "auto", "")
 	fs.BoolVar(&c.jsonOut, "json", false, "")
+	fs.StringVar(&c.format, "format", "", "")
 	bind(func(n string) { fs.BoolVar(&c.count, n, false, "") }, "c", "count")
 	bind(func(n string) { fs.BoolVar(&c.filesOnly, n, false, "") }, "l", "files-with-matches")
 	bind(func(n string) { fs.BoolVar(&c.quiet, n, false, "") }, "q", "quiet")
@@ -303,12 +316,22 @@ func run() int {
 		return 2
 	}
 	if c.help {
-		fmt.Fprint(os.Stdout, usage)
+		text, err := help(fs.Arg(0))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+			return 2
+		}
+		fmt.Fprint(os.Stdout, text)
 		return 0
 	}
 	if c.showVer {
 		fmt.Fprintf(os.Stdout, "mdgrep %s\n", buildVersion())
 		return 0
+	}
+	format, err := parseFormat(c.format, c.jsonOut)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, hint)
+		return 2
 	}
 	kinds, err := parseKinds(c.kinds)
 	if err != nil {
@@ -390,7 +413,7 @@ func run() int {
 		Color:       useColor(c.color),
 		LineNumbers: !c.noNums,
 		Breadcrumb:  !c.noCrumb,
-		JSON:        c.jsonOut,
+		Format:      format,
 	}
 
 	found := false
@@ -575,7 +598,7 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []fileResult, e edit
 		// Nothing matching is the search's own answer, and stays as quiet
 		// here as it is everywhere else.
 		if why.kind != "nomatch" {
-			reportRefused(os.Stderr, results, total, why, c.jsonOut)
+			reportRefused(os.Stderr, results, total, why, p.Format == render.JSON)
 		}
 		return code
 	}
@@ -885,6 +908,144 @@ func taskFilter(c config) search.TaskFilter {
 		return search.TaskAny
 	}
 	return search.TaskIgnore
+}
+
+// parseFormat folds --format and --json into one answer. --json predates
+// --format and stays as its own spelling of the same thing, so the pair is
+// only an error when the two disagree.
+func parseFormat(spec string, jsonFlag bool) (render.Format, error) {
+	if spec == "" {
+		if jsonFlag {
+			return render.JSON, nil
+		}
+		return render.Plain, nil
+	}
+	f, ok := formats[strings.ToLower(strings.TrimSpace(spec))]
+	if !ok {
+		return 0, fmt.Errorf("unknown format %q: plain, compact or json", spec)
+	}
+	if jsonFlag && f != render.JSON {
+		return 0, fmt.Errorf("--json and --format %s ask for different output", spec)
+	}
+	return f, nil
+}
+
+var formats = map[string]render.Format{
+	"plain": render.Plain, "compact": render.Compact, "json": render.JSON,
+}
+
+// help answers --help, either in full or one titled part of it. Splitting the
+// manual rather than keeping a second copy of it means a topic cannot drift
+// from what the full text says.
+func help(topic string) (string, error) {
+	if topic == "" {
+		return usage, nil
+	}
+	secs := helpSections()
+	sec, err := pickSection(secs, topic)
+	if err != nil {
+		return "", err
+	}
+	return usageLine() + "\n\n" + sec.body, nil
+}
+
+// usageLine is the one line of the manual that says how to invoke the command.
+// A topic repeats it so a narrowed help still stands on its own.
+func usageLine() string {
+	for line := range strings.SplitSeq(usage, "\n") {
+		if strings.HasPrefix(line, "usage:") {
+			return line
+		}
+	}
+	return ""
+}
+
+type helpSection struct {
+	title string
+	body  string
+}
+
+// helpSections splits the manual at its titles. A title is a bare word alone on
+// a line; everything above the first one introduces the command rather than any
+// one part of it, so it is not a topic.
+func helpSections() []helpSection {
+	var out []helpSection
+	for _, line := range strings.SplitAfter(usage, "\n") {
+		if title := strings.TrimRight(line, "\n"); isHelpTitle(title) {
+			out = append(out, helpSection{title: title, body: line})
+			continue
+		}
+		if len(out) > 0 {
+			out[len(out)-1].body += line
+		}
+	}
+	return out
+}
+
+func isHelpTitle(line string) bool {
+	if line == "" || !unicode.IsUpper(rune(line[0])) {
+		return false
+	}
+	for _, r := range line {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// pickSection reads a topic the way a caller is likely to type one: the title
+// itself, a prefix of it ("edit" for Editing), or failing that the name of a
+// flag, so "--help anchor" finds the part that documents --anchor.
+func pickSection(secs []helpSection, topic string) (helpSection, error) {
+	want := strings.ToLower(strings.TrimLeft(topic, "-"))
+	var hits []helpSection
+	for _, s := range secs {
+		if strings.HasPrefix(strings.ToLower(s.title), want) {
+			hits = append(hits, s)
+		}
+	}
+	if len(hits) == 0 {
+		for _, s := range secs {
+			if definesFlag(s.body, want) {
+				hits = append(hits, s)
+			}
+		}
+	}
+	switch len(hits) {
+	case 1:
+		return hits[0], nil
+	case 0:
+		return helpSection{}, fmt.Errorf("no help topic %q; try %s", topic, helpTopics(secs))
+	}
+	return helpSection{}, fmt.Errorf("%q matches %s", topic, helpTopics(hits))
+}
+
+// definesFlag reports whether a section documents --name, as opposed to merely
+// mentioning it in passing: a definition stands in the flag column, and the
+// prose that describes one flag is free to name others.
+func definesFlag(body, name string) bool {
+	for line := range strings.SplitSeq(body, "\n") {
+		if !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		head, _, _ := strings.Cut(strings.TrimSpace(line), "  ")
+		for _, spelling := range strings.Split(head, ",") {
+			flag, _, _ := strings.Cut(strings.TrimSpace(spelling), " ")
+			if flag == "--"+name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func helpTopics(secs []helpSection) string {
+	names := make([]string, len(secs))
+	for i, s := range secs {
+		names[i] = strings.ToLower(s.title)
+	}
+	return strings.Join(names, ", ")
 }
 
 func parseKinds(spec string) (map[mdoc.Kind]bool, error) {

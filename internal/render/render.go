@@ -23,18 +23,31 @@ const (
 	cyanFaint = "\x1b[36m"
 )
 
+// Format is how results are written. Plain is for a person reading a
+// terminal; Compact and JSON are for a program, and neither is coloured.
+type Format int
+
+const (
+	Plain Format = iota
+	// Compact prints the path once per file and then one tab-separated
+	// record per result, which costs a fraction of the same results as JSON
+	// while staying line-oriented.
+	Compact
+	JSON
+)
+
 type Printer struct {
 	W           *bufio.Writer
 	Color       bool
 	LineNumbers bool
 	Breadcrumb  bool
-	JSON        bool
+	Format      Format
 
 	wroteAny bool
 }
 
 func (p *Printer) paint(code, s string) string {
-	if !p.Color || s == "" {
+	if !p.Color || p.Format != Plain || s == "" {
 		return s
 	}
 	return code + s + reset
@@ -45,8 +58,12 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	if len(results) == 0 {
 		return
 	}
-	if p.JSON {
+	switch p.Format {
+	case JSON:
 		p.printJSON(src, results)
+		return
+	case Compact:
+		p.printCompact(src, results)
 		return
 	}
 	if p.wroteAny {
@@ -106,6 +123,36 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 	sb.WriteString(line[prev:])
 	return sb.String()
 }
+
+// printCompact writes the path once and then one record per result:
+//
+//	start[-end] <TAB> kind <TAB> text
+//
+// The text is escaped so a record is always one line, which is the whole point
+// of the format — a reader splits on newline and then on tab, and a path is
+// the line that has no tab in it.
+func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
+	p.wroteAny = true
+	fmt.Fprintln(p.W, src.Path)
+	for _, r := range results {
+		fmt.Fprintf(p.W, "%s\t%s\t%s\n",
+			lineSpan(r.Start, r.End), r.Kind,
+			escape(strings.Join(src.Lines(r.Start, r.End), "\n")))
+	}
+}
+
+// lineSpan numbers a result the way the rest of the output does, 1-based and
+// inclusive, and says a single line once rather than as a span of itself.
+func lineSpan(start, end int) string {
+	if start == end {
+		return strconv.Itoa(start + 1)
+	}
+	return strconv.Itoa(start+1) + "-" + strconv.Itoa(end+1)
+}
+
+var escaper = strings.NewReplacer("\\", "\\\\", "\n", "\\n", "\r", "\\r", "\t", "\\t")
+
+func escape(s string) string { return escaper.Replace(s) }
 
 type jsonResult struct {
 	Path       string   `json:"path"`
