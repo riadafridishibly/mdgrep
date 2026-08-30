@@ -2,11 +2,8 @@
 
 Node-aware grep for markdown.
 
-`grep` hands you one line. Markdown is not made of lines — it is made of
-bullets, headings, code fences, quotes and tables. `mdgrep` parses the file
-with [goldmark](https://github.com/yuin/goldmark), matches each node against
-the markdown that produced it, and prints the **whole node** the hit belongs
-to. How much more than that node you get is up to you.
+`grep` gives you a line. Markdown is made of bullets, headings, code fences,
+quotes and tables — so `mdgrep` gives you the whole node the hit landed in.
 
 ```
 $ mdgrep "brew install" notes.md
@@ -15,18 +12,15 @@ notes.md
   13 │   - On macOS run `brew install foo`
 ```
 
-On a terminal the matched characters are highlighted, and the heading trail
-above the hit is printed so you know where in the document you landed.
+Matched characters are highlighted, and the heading trail says where you are.
 
 ## Install
 
 ```bash
-go build -o mdgrep .
-# or
-go install .
+go install .    # or: go build -o mdgrep .
 ```
 
-Go 1.24+, one dependency (goldmark).
+Go 1.24+, one dependency ([goldmark](https://github.com/yuin/goldmark)).
 
 ## Usage
 
@@ -34,13 +28,12 @@ Go 1.24+, one dependency (goldmark).
 mdgrep [OPTIONS] PATTERN [PATH...]
 ```
 
-Flags follow grep and ripgrep wherever the two agree. `PATTERN` is a regular
-expression by default and is required; an empty pattern matches everything, so
-`mdgrep "" docs --todo` lists every open checkbox under `docs/`.
+`PATTERN` is a regexp by default and is required — an empty one matches
+everything, so `mdgrep "" docs --todo` lists every open checkbox under `docs/`.
 
-Paths may be files or directories; directories are walked for `.md`,
-`.markdown`, `.mdown`, `.mkd` and `.mdx`. With no path, `mdgrep` reads stdin
-when it is a pipe, otherwise it searches the current directory.
+Paths may be files or directories. Directories are walked for `.md`,
+`.markdown`, `.mdown`, `.mkd`, `.mdx`. With no path, mdgrep reads stdin when it
+is a pipe, otherwise it searches the current directory.
 
 ### Matching
 
@@ -58,8 +51,8 @@ when it is a pipe, otherwise it searches the current directory.
 | `-s`, `--case-sensitive` | force case-sensitive |
 | `-S`, `--smart-case` | case-insensitive until the pattern has an upper-case letter (default) |
 
-Nodes are matched against **the markdown as written**, not against rendered
-text. `^` and `$` anchor to lines, so structure is searchable directly:
+Nodes match against the markdown **as written**, so structure is searchable and
+`^`/`$` anchor to lines:
 
 ```bash
 mdgrep '^## '            # every second-level heading
@@ -67,27 +60,11 @@ mdgrep '^\| .*canary'    # table rows mentioning the canary
 mdgrep -F '**bold**'     # the emphasis markers themselves
 ```
 
-Case is smart by default: the search folds case unless the pattern itself
-contains an upper-case letter.
+### Fuzzy
 
-### Fuzzy matching
-
-`--fuzzy` splits the pattern on whitespace and requires **every** token to
-appear as an in-order subsequence of the node's source. Each token is scored on
-how densely its characters are packed and on where the gaps land: a jump that
-resumes at a camelCase hump, a delimiter or a piece of punctuation counts in
-full, so `pmd` finds `parseMarkDown` and `dk` finds `deploy_key`, while a jump
-across whitespace counts for little — whitespace is what separates one token
-from the next, so a token that has to cross a word is not what you asked for.
-The node's score is the token average, weighted by token length: a two-letter
-token sits on a word boundary in almost any prose, so it should not carry a
-node the way `implementer` does. Raise `--min-score` to demand tighter matches,
-lower it to cast a wider net.
-
-A fuzzy pattern asks which node fits best, so its results come back **best
-first** — ranked within a file, and files ranked by their best hit — rather
-than in grep's file order. `-m` therefore keeps the best results per file, not
-the first ones. Regexp and `-F` searches keep grep's order.
+`--fuzzy` wants every whitespace-separated token to appear in order, loosely:
+`pmd` finds `parseMarkDown`, `dk` finds `deploy_key`. Results come back best
+first rather than in file order, so `-m` keeps the best hits, not the first.
 
 ```bash
 mdgrep --fuzzy "brew instal" notes.md   # misspelled, still matches
@@ -95,82 +72,58 @@ mdgrep --fuzzy "brew instal" notes.md   # misspelled, still matches
 
 ### Heading anchors
 
-A markdown link points at a heading by its slug — `[see](#the-foo-bar)` means
-`## The Foo Bar`. `--anchor` searches that way round: give it the anchor and it
-finds the heading.
+`[see](#the-foo-bar)` points at `## The Foo Bar`. `--anchor` searches that way
+round — give it the link, get the heading.
 
 ```bash
 mdgrep --anchor "#the-foo-bar" docs
 mdgrep --anchor "#the-foo-bar" docs --section   # print the whole section
 ```
 
-The pattern may be written as the anchor (`the-foo-bar`), with its `#`, as the
-heading line copied verbatim (`## The Foo Bar`), or as a whole link with the
-file in front of it — `docs/setup.md#install`, or a pasted
-`https://github.com/o/r/blob/main/docs/setup.md#install`. When the link names a
-file, only files whose path ends that way are searched. Percent escapes are
-decoded, so `#caf%C3%A9-notes` finds `## Café Notes`.
+Write it as `the-foo-bar`, `#the-foo-bar`, `## The Foo Bar`, or a whole link
+like `docs/setup.md#install` — when the link names a file, only that file is
+searched. Percent escapes are decoded.
 
-Generators disagree about slugs, so mdgrep computes the anchor under each
-convention it knows and matches if any of them agrees:
+Generators disagree about slugs, so mdgrep tries every convention it knows and
+matches if any agrees. `--anchor-style` narrows the list:
 
 | Style | `## Deploy & Rollback!` | `## 1. Getting Started` | `## Café Notes` |
 | --- | --- | --- | --- |
-| `github` (github-slugger) | `deploy--rollback` | `1-getting-started` | `café-notes` |
+| `github` | `deploy--rollback` | `1-getting-started` | `café-notes` |
 | `gitlab` | `deploy-rollback` | `1-getting-started` | `café-notes` |
-| `python` (Python-Markdown, MkDocs) | `deploy-rollback` | `1-getting-started` | `cafe-notes` |
+| `python` (MkDocs) | `deploy-rollback` | `1-getting-started` | `cafe-notes` |
 | `kramdown` (Jekyll) | `deploy--rollback` | `getting-started` | `caf-notes` |
 | `pandoc` | `deploy-rollback` | `getting-started` | `café-notes` |
 | `loose` | `deploy-rollback` | `1-getting-started` | `cafe-notes` |
 
-`--anchor-style` narrows that list — `--anchor-style github` when you know
-where the link came from and want exactly what GitHub would resolve. `loose`
-keeps only letters and digits and is the catch-all for a generator mdgrep has
-never heard of.
-
-Repeated headings are numbered the way a generator numbers them, so the second
-`## Notes` in a file is `#notes-1` (`#notes_1` under `python`) and the anchor
-tells the two apart. Case flags do not apply — an anchor is lower case by
-construction — and `--anchor` cannot be combined with `-F`, `--fuzzy`, `-w` or
-`-v`, since it names its heading outright rather than matching text.
+Repeats are numbered, so the second `## Notes` is `#notes-1`. `--anchor` names
+its heading outright, so it takes no case flag and no `-F`, `--fuzzy`, `-w`
+or `-v`.
 
 ### Filters
 
 | Flag | Meaning |
 | --- | --- |
-| `-k`, `--kind LIST` | restrict to node kinds |
+| `-k`, `--kind LIST` | `heading`, `item` (or `bullet`, `li`), `list`, `paragraph`, `code`, `quote`, `table`, `row`, `cell`, `html`, `frontmatter` |
 | `--task` | only task list items |
 | `--unchecked`, `--todo` | only unticked task items |
 | `--checked`, `--done` | only ticked task items |
 
-`--kind` takes a comma list of `heading`, `item` (aliases `bullet`, `li`),
-`list`, `paragraph`, `code`, `quote`, `table`, `row`, `cell`, `html`,
-`frontmatter`.
+A filter never stands in for the pattern — pass an empty one to select by
+filter alone:
 
 ```bash
-mdgrep "rollback" docs -k heading      # only headings
-mdgrep "TODO" notes -k item            # only bullets
-```
-
-A filter never stands in for the pattern. Pass an empty one to select purely by
-filter:
-
-```bash
+mdgrep "rollback" docs -k heading          # only headings
 mdgrep "deploy key" notes.md --unchecked   # open work mentioning the deploy key
-mdgrep "changelog" notes.md --checked      # already done
-mdgrep "" --todo                           # every open box below the cwd
 mdgrep "" docs --todo                      # every open box under docs/
 ```
 
-A hit in a plain sub-bullet reports the checkbox item it hangs under, so
-searching the vault line below `- [ ] Rotate the deploy key` prints the whole
-task. Non-task hits — headings, paragraphs, plain bullets — are dropped.
+A hit in a plain sub-bullet reports the checkbox item it hangs under.
 
 ### Selection — how much to print
 
-By default you get exactly the matched node. A hit inside a bullet's text is
-lifted to the whole bullet, including its nested children. A hit in a fenced
-code block prints the fences too.
+You get the matched node: a hit in a bullet's text lifts to the whole bullet
+and its children, a hit in a fenced block prints the fences.
 
 | Flag | Meaning |
 | --- | --- |
@@ -182,24 +135,21 @@ code block prints the fences too.
 | `-C`, `--context N` | shorthand for `-B N -A N` |
 | `--lines N` | pad with N raw lines on each side |
 
-`-B`/`-A`/`-C` count **blocks**, not lines: `-C 1` around a paragraph gives you
-the block before and the block after it, whatever their length. Use `--lines`
-when you want raw lines.
+`-B`/`-A`/`-C` count **blocks**, not lines; use `--lines` for raw lines.
 
 ```bash
 mdgrep "brew install" notes.md              # just the nested bullet
 mdgrep "brew install" notes.md --expand 1   # its parent bullet, with siblings
-mdgrep "brew install" notes.md --section    # the whole "## Prerequisites" section
+mdgrep "brew install" notes.md --section    # the whole section
 mdgrep "canary" notes.md -C2                # two blocks either side
 ```
 
-Only the matched node is highlighted; expansion lines are printed plain, so it
-stays obvious what actually matched.
+Only the matched node is highlighted, so it stays obvious what hit.
 
 ### Editing
 
-The same flags that decide what gets printed decide what gets rewritten. Narrow
-the search until it selects the node you mean, then say what to do with it.
+The flags that decide what gets printed decide what gets rewritten. Narrow the
+search until it selects the node you mean, then say what to do with it.
 
 | Flag | Meaning |
 | --- | --- |
@@ -220,19 +170,15 @@ mdgrep "^## Changelog" --section-body --replace-from new.md
 mdgrep "obsolete note" --delete
 ```
 
-Each of the four edits that take text has a `-from` spelling — `--replace-from`,
-`--set-text-from`, `--append-from`, `--prepend-from` — which reads it from a
-file, or from stdin as `-`. A multi-line body then needs no shell quoting at
-all, which is worth having in a shell without here-documents:
+`--check`, `--uncheck`, `--toggle` and `--set-text` act on **the matched
+node**; `--replace`, `--delete`, `--append` and `--prepend` act on **the
+region** that `--section`, `--section-body` and `--expand` widen. `--set-text`
+keeps the markup that makes a node what it is — heading level, list marker,
+checkbox, fences — where `--replace` keeps nothing. Inserted text is indented
+to match what it lands beside, and blank lines are added only where they will
+not loosen a list or break a table.
 
-```bash
-printf -- '- [ ] verify checksum\n- [ ] sign the tarball\n' |
-  mdgrep "^## Release" --section-body --append-from -
-```
-
-**More than one match is an error.** mdgrep prints what it would have hit and
-writes nothing, so a search that was vaguer than you thought cannot quietly
-rewrite the wrong bullet:
+**More than one match is an error.** Nothing is written, and you get the list:
 
 ```
 $ mdgrep "ship" --check notes.md
@@ -241,46 +187,27 @@ mdgrep: 2 matches; narrow the search or pass --multi
   notes.md:7: - [ ] ship the tests
 ```
 
-`--multi` lifts that rule and edits every match. `--expect N` replaces it with a
-count: the edit goes ahead only if the search found exactly N nodes, and any
-other number — including none — is refused with the same list. It is the way to
-say what you believe before a pattern that turned out to be broader than you
-thought writes to every file it reached.
+`--multi` edits them all. `--expect N` is the safer version — say how many you
+believe there are, and any other number is refused:
 
 ```
 $ mdgrep "ship" --check notes.md --expect 3
 mdgrep: --expect 3, but 2 matched
-  notes.md:5: - [ ] ship the docs
-  notes.md:7: - [ ] ship the tests
 ```
 
-With `--json`, a refusal is one object on stderr rather than English —
-`error` (`ambiguous` or `expect`), `message`, `total`, `expected` and the same
-capped `matches` list of `path`, `line` and `text` — so a caller that asked for
-JSON parses the refusal with the reader it already has.
+Each of the four text edits also has a `-from` spelling (`--replace-from`,
+`--set-text-from`, `--append-from`, `--prepend-from`) reading from a file, or
+stdin as `-`, so a multi-line body needs no shell quoting:
 
-`--check`, `--uncheck`, `--toggle` and `--set-text` act on **the matched node**;
-`--replace`, `--delete`, `--append` and `--prepend` act on **the region**, which
-is what `--section`, `--section-body` and `--expand` widen. The flags that only
-pad the printed output — `-A`, `-B`, `-C`, `--lines` — are refused with an edit,
-as are `-c`, `-l` and `-m`.
+```bash
+printf -- '- [ ] verify checksum\n- [ ] sign the tarball\n' |
+  mdgrep "^## Release" --section-body --append-from -
+```
 
-`--set-text` keeps the markdown that makes a node what it is: a heading keeps
-its level and any trailing `{#id}`, a setext underline is resized to the new
-text, a list item keeps its marker and its checkbox, a fenced block keeps its
-fences. `--replace` keeps nothing — it is the whole region, verbatim.
-
-Inserted text is indented to match the node it lands beside, so a bullet
-appended to a nested item becomes its sibling, and a blank line is added on
-whichever side needs one to keep two blocks apart — never inside a list or a
-table, where a blank line would loosen the list or break the table.
-
-The change is printed as the lines that went and the lines that came, unless
-`-q`; `--json` reports `path`, `op`, `start`, `end`, `old`, `new` and `applied`.
-A checkbox that already reads the way you asked is reported as unchanged and
-the file is left untouched. Each file is written through a temporary file in
-the same directory and renamed over the original, so an interrupted run cannot
-leave a half-written document behind.
+Files are written atomically, through a temporary file renamed over the
+original. A checkbox that already reads the way you asked is reported unchanged
+and left alone. `-A`, `-B`, `-C`, `--lines`, `-c`, `-l` and `-m` are refused
+with an edit.
 
 ### Output
 
@@ -300,51 +227,44 @@ leave a half-written document behind.
 | `--no-ignore` | do not skip `node_modules`, `vendor`, and friends |
 | `-h`, `--help` / `-V`, `--version` | |
 
-Colour is disabled automatically when stdout is not a terminal, when `NO_COLOR`
-is set, or when `TERM=dumb`.
+Colour turns itself off when stdout is not a terminal, or under `NO_COLOR` or
+`TERM=dumb`.
 
-`--json` emits newline-delimited objects with `path`, `kind`, `score`, `start`,
-`end` (1-based, inclusive), `breadcrumb` and `text`. Task items also carry
-`checked`, which is absent on everything else:
+`--json` emits one object per line: `path`, `kind`, `score`, `start`, `end`
+(1-based, inclusive), `breadcrumb`, `text`, plus `checked` on task items. An
+edit reports `op`, `old`, `new` and `applied` instead. A refused edit is one
+object on stderr — `error` (`ambiguous` or `expect`), `message`, `total`,
+`expected` and the capped `matches` list — so a JSON caller parses the refusal
+with the reader it already has.
 
 ```bash
 mdgrep "rollback" docs --json | jq -r '.path + ":" + (.start|tostring)'
 ```
 
-Exit status follows grep: `0` if something matched, `1` if nothing did, `2` on
-error. An error prints the one line that says what went wrong and points at
-`--help` rather than reprinting the whole of it.
+Exit status follows grep: `0` matched, `1` did not, `2` error. An error prints
+the line that says what went wrong and points at `--help`.
 
-## Notes on parsing
-
-- GFM is enabled, so tables, task lists, strikethrough and autolinks parse. A
-  task list item keeps its checkbox state, and the `- [ ]` marker is part of the
-  text you can search.
-- YAML/TOML front matter is treated as a single searchable node rather than
-  being mangled into a thematic break and a setext heading.
-- Ranges are computed in lines and widened back over syntax goldmark reports
-  outside a node's content (code fences, setext underlines), so every result is
-  a verbatim slice of the original file — and so the text that was scored is the
-  same text that gets printed and highlighted.
-
-## Layout
+## Development
 
 ```
 main.go              CLI: flags, file walking, worker pool
-internal/mdoc        goldmark AST → line-addressable block tree, sections, breadcrumbs, anchors
+internal/mdoc        goldmark AST → line-addressable block tree, sections, anchors
 internal/match       regexp / literal / fuzzy matchers and highlight spans
-internal/search      block selection, anchor lookup, tightening, promotion, expansion, merging
+internal/search      block selection, anchor lookup, expansion, merging
 internal/edit        planning and applying rewrites, atomic writes
 internal/render      terminal and JSON output
 ```
+
+GFM is on, so tables, task lists, strikethrough and autolinks parse; front
+matter is one searchable node; every result is a verbatim slice of the file.
 
 ```bash
 go test ./...
 ```
 
 Every layer that converts between byte offsets, line numbers and rune indices
-also has a fuzz target, since that is where the three coordinate systems have
-to agree. They run their seed corpus as ordinary tests; to actually fuzz one:
+has a fuzz target, since that is where the three have to agree. Seeds run as
+ordinary tests; to actually fuzz one:
 
 ```bash
 go test ./internal/mdoc   -run xxx -fuzz FuzzParse         -fuzztime 60s
@@ -354,5 +274,4 @@ go test ./internal/search -run xxx -fuzz FuzzSearchOptions -fuzztime 60s
 go test .                 -run xxx -fuzz FuzzPermute       -fuzztime 60s
 ```
 
-An input that fails is written to the package's `testdata/fuzz`, where it stays
-as a regression case.
+Failing inputs land in the package's `testdata/fuzz` as regression cases.
