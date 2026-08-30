@@ -652,10 +652,12 @@ func buildMatcher(c config, mode match.Mode, smart bool) (match.Matcher, error) 
 // written before its options, the way people actually type grep invocations.
 func permute(fs *flag.FlagSet, args []string) []string {
 	var flags, pos []string
+	terminated := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--" {
 			pos = append(pos, args[i+1:]...)
+			terminated = true
 			break
 		}
 		if len(a) < 2 || a[0] != '-' {
@@ -680,6 +682,13 @@ func permute(fs *flag.FlagSet, args []string) []string {
 			continue
 		}
 		flags = append(flags, a)
+	}
+	// A "--" the caller wrote has to survive the move, or a path that opens
+	// with a dash arrives back in front of the flag parser and is read as a
+	// flag again. It is not added where the caller left it out, so a mistyped
+	// flag still reports itself rather than being taken for a file.
+	if terminated {
+		flags = append(flags, "--")
 	}
 	return append(flags, pos...)
 }

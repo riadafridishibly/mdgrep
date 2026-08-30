@@ -218,13 +218,21 @@ func pad(src *mdoc.Source, at int, body []string, kind mdoc.Kind) []string {
 	if len(body) == 0 || !needsBlankLine(kind) {
 		return body
 	}
-	if at > 0 && strings.TrimSpace(src.Line(at-1)) != "" {
+	if at > 0 && !blankLine(src.Line(at-1)) {
 		body = append([]string{""}, body...)
 	}
-	if at < src.NumLines() && strings.TrimSpace(src.Line(at)) != "" {
+	if at < src.NumLines() && !blankLine(src.Line(at)) {
 		body = append(body, "")
 	}
 	return body
+}
+
+// blankLine reports whether a line is the blank one markdown parts blocks with:
+// empty, or nothing but spaces and tabs. Vertical tabs and form feeds are
+// whitespace to strings.TrimSpace but content to the parser, and a line of them
+// belongs to the block around it.
+func blankLine(line string) bool {
+	return strings.Trim(line, " \t") == ""
 }
 
 func needsBlankLine(k mdoc.Kind) bool {
@@ -238,8 +246,8 @@ func needsBlankLine(k mdoc.Kind) bool {
 // swallowBlank extends a deletion over the blank line it would otherwise leave
 // stacked on the one already above the block.
 func swallowBlank(src *mdoc.Source, start, end int) int {
-	above := start == 0 || strings.TrimSpace(src.Line(start-1)) == ""
-	if above && end+1 < src.NumLines() && strings.TrimSpace(src.Line(end+1)) == "" {
+	above := start == 0 || blankLine(src.Line(start-1))
+	if above && end+1 < src.NumLines() && blankLine(src.Line(end+1)) {
 		return end + 1
 	}
 	return end
