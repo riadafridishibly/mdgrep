@@ -18,9 +18,12 @@ import (
 // sources are the ignore files a single directory can hold, lowest precedence
 // first. Git reads .gitignore; .ignore is the convention search tools added
 // for rules that should keep a file out of results without keeping it out of
-// the repository. Both start with a dot, which is what lets Enter find them in
-// a sorted listing without reading to the end of it.
+// the repository.
 var sources = [...]string{".gitignore", ".ignore"}
+
+// lastSource is the source name that sorts last, which is where Enter can stop
+// reading a sorted listing.
+var lastSource = slices.Max(sources[:])
 
 // Matcher answers whether the ignore files above a path leave it out. Patterns
 // are read relative to the file holding them and the nearest file has the last
@@ -156,12 +159,15 @@ func (f Frame) Enter(dir string, entries []fs.DirEntry) Frame {
 		return f
 	}
 
-	// os.ReadDir sorts, and "." sorts ahead of every character a name can
-	// otherwise start with, so the ignore files are at the front or nowhere.
+	// os.ReadDir sorts, so the scan stops at the first name sorting past the
+	// last ignore file rather than reading to the end of the listing. A dot is
+	// not the front of a listing: thirteen punctuation characters sort ahead
+	// of it, and a name spelled with one of them says nothing about what
+	// follows it.
 	var present [len(sources)]bool
 	found := false
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".") {
+		if e.Name() > lastSource {
 			break
 		}
 		if i := slices.Index(sources[:], e.Name()); i >= 0 {
