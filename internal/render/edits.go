@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"mdgrep/internal/edit"
-	"mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/edit"
+	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 )
 
 // PrintEdits writes one file's changes as the lines that went and the lines

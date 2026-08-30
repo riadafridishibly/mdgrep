@@ -17,10 +17,16 @@ Matched characters are highlighted, and the heading trail says where you are.
 ## Install
 
 ```bash
+go install github.com/riadafridishibly/mdgrep@latest
+```
+
+Or from a clone:
+
+```bash
 go install .    # or: go build -o mdgrep .
 ```
 
-Go 1.24+, one dependency ([goldmark](https://github.com/yuin/goldmark)).
+Go 1.26+, one dependency ([goldmark](https://github.com/yuin/goldmark)).
 
 ## Usage
 

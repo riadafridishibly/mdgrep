@@ -10,8 +10,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"mdgrep/internal/mdoc"
-	"mdgrep/internal/search"
+	"github.com/riadafridishibly/mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
 // Op is the rewrite to perform on each selected node.

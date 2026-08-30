@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"mdgrep/internal/match"
-	"mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/match"
+	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 )
 
 // TaskFilter restricts results to GFM task-list items by checkbox state.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -174,5 +175,40 @@ func TestRefusalJSONGoesToStderr(t *testing.T) {
 	}
 	if got.Error != "ambiguous" || got.Total != 2 {
 		t.Errorf("got %+v, want ambiguous over 2 matches", got)
+	}
+}
+
+// TestModuleVersion covers what -V reports. A binary the module system placed
+// carries the tag it was built from; anything else falls back to the constant,
+// which is all a build from a bare clone has.
+func TestModuleVersion(t *testing.T) {
+	tests := []struct {
+		name string
+		info *debug.BuildInfo
+		ok   bool
+		want string
+	}{
+		{"no build info at all", nil, false, version},
+		{"built from a clone", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true, version},
+		{"no version recorded", &debug.BuildInfo{Main: debug.Module{Version: ""}}, true, version},
+		{"installed at a tag", &debug.BuildInfo{Main: debug.Module{Version: "v0.2.0"}}, true, "0.2.0"},
+		{"installed at a commit", &debug.BuildInfo{Main: debug.Module{Version: "v0.1.1-0.20260830120000-1bada3ecafe0"}}, true, "0.1.1-0.20260830120000-1bada3ecafe0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := moduleVersion(tt.info, tt.ok); got != tt.want {
+				t.Errorf("moduleVersion = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVersionFlagPrints(t *testing.T) {
+	stdout, _, code := capture(t, "--version")
+	if code != 0 {
+		t.Errorf("exit = %d, want 0", code)
+	}
+	if want := "mdgrep " + buildVersion() + "\n"; stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }

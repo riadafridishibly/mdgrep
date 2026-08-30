@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"mdgrep/internal/match"
-	"mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/match"
+	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 )
 
 const doc = "# Guide\n" + // 0

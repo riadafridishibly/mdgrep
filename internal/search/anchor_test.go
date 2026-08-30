@@ -3,8 +3,8 @@ package search
 import (
 	"testing"
 
-	"mdgrep/internal/match"
-	"mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/match"
+	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 )
 
 const linked = "# Guide\n" + // 0

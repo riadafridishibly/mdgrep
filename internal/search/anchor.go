@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 )
 
 // Anchor selects headings by the link that points at them: "#the-foo-bar"

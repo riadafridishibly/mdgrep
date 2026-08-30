@@ -1,4 +1,4 @@
-module mdgrep
+module github.com/riadafridishibly/mdgrep
 
 go 1.26.5
 
