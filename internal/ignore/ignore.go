@@ -24,21 +24,34 @@ var sources = [...]string{".gitignore", ".ignore"}
 
 // Matcher answers whether the ignore files above a path leave it out. Patterns
 // are read relative to the file holding them and the nearest file has the last
-// word, so a Matcher keeps one layer per directory and asks them from the
+// word, so the rules are kept as one layer per directory and asked from the
 // inside out.
 //
-// It is built for one depth-first walk: Enter each directory on the way in and
-// ask Excluded about what is inside it. Layers the walk has left behind are
-// dropped as it moves on, so the stack is only ever as deep as the walk. A nil
-// *Matcher excludes nothing, which is what --no-ignore asks for.
-//
-// Excluded answers about the path it is given and not about the path's
-// parents, because the walk is expected to stop at a directory it is told to
-// skip. Nothing under an excluded directory is reachable in git either.
+// A Matcher holds only what every path under the root shares. The layers that
+// accumulate on the way down belong to a Frame, one per directory, so several
+// branches of a walk can descend at once without seeing each other's rules. A
+// nil *Matcher excludes nothing, which is what --no-ignore asks for.
 type Matcher struct {
 	root    string // the directory the walk was started from, as it was given
 	absRoot string // the same directory, absolute, so layers above it are reachable
-	layers  []layer
+	base    []layer
+}
+
+// Frame is a walk's position in the ignore rules: the layers governing one
+// directory, outermost first. Frames are values, and Enter returns a new one
+// rather than changing the old, so a parent's Frame stays valid while its
+// children descend with their own. The zero Frame excludes nothing.
+type Frame struct {
+	m      *Matcher
+	layers []layer
+}
+
+// Root returns the Frame for the directory the Matcher was built for.
+func (m *Matcher) Root() Frame {
+	if m == nil {
+		return Frame{}
+	}
+	return Frame{m: m, layers: m.base}
 }
 
 type layer struct {
@@ -57,7 +70,7 @@ func New(root string) *Matcher {
 		return m
 	}
 	m.absRoot = abs
-	m.layers = seed(abs)
+	m.base = seed(abs)
 	return m
 }
 
@@ -131,17 +144,17 @@ func excludeFile(worktree string) string {
 }
 
 // Enter notes the ignore files of a directory the walk is about to descend
-// into. Those patterns govern what is inside the directory rather than the
-// directory itself, so Enter belongs after Excluded has judged it.
+// into, and returns the Frame that governs everything inside it. Those
+// patterns govern the contents rather than the directory itself, so Enter
+// belongs after Excluded has judged it.
 //
 // entries is the directory listing the walk already holds. Nearly no directory
 // has an ignore file, and looking for one in a listing already in hand beats
 // asking the filesystem for a file that is not there.
-func (m *Matcher) Enter(dir string, entries []fs.DirEntry) {
-	if m == nil {
-		return
+func (f Frame) Enter(dir string, entries []fs.DirEntry) Frame {
+	if f.m == nil {
+		return f
 	}
-	m.trim(dir)
 
 	// os.ReadDir sorts, and "." sorts ahead of every character a name can
 	// otherwise start with, so the ignore files are at the front or nowhere.
@@ -156,60 +169,51 @@ func (m *Matcher) Enter(dir string, entries []fs.DirEntry) {
 		}
 	}
 	if !found {
-		return
+		return f
 	}
 
-	abs := m.abs(dir)
+	abs := f.m.abs(dir)
 	var rules ruleSet
 	for i, ok := range present {
 		if ok {
 			rules.addFile(filepath.Join(abs, sources[i]))
 		}
 	}
-	if len(rules.rules) > 0 {
-		m.layers = append(m.layers, layer{dir: abs, rules: rules})
+	if len(rules.rules) == 0 {
+		return f
 	}
+	// Clipped, so the append copies instead of writing into an array a
+	// sibling frame is still reading.
+	return Frame{m: f.m, layers: append(slices.Clip(f.layers), layer{dir: abs, rules: rules})}
 }
 
-// Excluded reports whether the rules leave path out.
+// Excluded reports whether the rules leave path out. path must be an entry of
+// the directory this Frame was entered for.
 //
 // The nearest file wins, so layers answer from the inside out and the first
 // one to speak settles it. Speaking is not the same as excluding: a file whose
 // last matching line is a "!" says "keep this", and it says it loudly enough
 // to stop the file above from excluding it.
-func (m *Matcher) Excluded(path string, isDir bool) bool {
-	if m == nil || len(m.layers) == 0 {
+//
+// It answers about the path it is given and not about the path's parents,
+// because the walk is expected to stop at a directory it is told to skip.
+// Nothing under an excluded directory is reachable in git either.
+func (f Frame) Excluded(path string, isDir bool) bool {
+	if f.m == nil || len(f.layers) == 0 {
 		return false
 	}
-	m.trim(path)
-	abs := m.abs(path)
-	for i := len(m.layers) - 1; i >= 0; i-- {
-		rel := relTo(m.layers[i].dir, abs)
+	abs := f.m.abs(path)
+	for i := len(f.layers) - 1; i >= 0; i-- {
+		rel := relTo(f.layers[i].dir, abs)
 		if rel == "" {
 			continue
 		}
 		p := newProbe(rel, isDir)
-		if excluded, spoke := m.layers[i].rules.verdict(&p); spoke {
+		if excluded, spoke := f.layers[i].rules.verdict(&p); spoke {
 			return excluded
 		}
 	}
 	return false
-}
-
-// trim drops the layers the walk has moved out of. A depth-first walk leaves a
-// directory for good the moment it reports a path outside it. A layer sitting
-// on the path itself stays: entering a directory must not throw away the rules
-// that were already seeded for it.
-func (m *Matcher) trim(path string) {
-	abs := m.abs(path)
-	for len(m.layers) > 0 && !covers(m.layers[len(m.layers)-1].dir, abs) {
-		m.layers = m.layers[:len(m.layers)-1]
-	}
-}
-
-// covers reports whether rules kept for dir still have a say over path.
-func covers(dir, path string) bool {
-	return dir == path || relTo(dir, path) != ""
 }
 
 // abs turns a path the walk reported back into an absolute one. The walk

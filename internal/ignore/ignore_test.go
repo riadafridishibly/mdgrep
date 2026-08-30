@@ -31,23 +31,23 @@ func survivors(t *testing.T, root, start string) []string {
 	t.Helper()
 	m := New(start)
 	var out []string
-	var walk func(dir string)
-	walk = func(dir string) {
+	var walk func(dir string, f Frame)
+	walk = func(dir string, f Frame) {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		m.Enter(dir, entries)
+		f = f.Enter(dir, entries)
 		for _, e := range entries {
 			name := e.Name()
 			path := filepath.Join(dir, name)
 			if e.IsDir() {
-				if !strings.HasPrefix(name, ".") && !m.Excluded(path, true) {
-					walk(path)
+				if !strings.HasPrefix(name, ".") && !f.Excluded(path, true) {
+					walk(path, f)
 				}
 				continue
 			}
-			if strings.HasPrefix(name, ".") || m.Excluded(path, false) {
+			if strings.HasPrefix(name, ".") || f.Excluded(path, false) {
 				continue
 			}
 			rel, err := filepath.Rel(root, path)
@@ -57,7 +57,7 @@ func survivors(t *testing.T, root, start string) []string {
 			out = append(out, filepath.ToSlash(rel))
 		}
 	}
-	walk(start)
+	walk(start, m.Root())
 	slices.Sort(out)
 	return out
 }
@@ -248,8 +248,8 @@ func TestPathsResolveUnderADotRoot(t *testing.T) {
 
 func TestNilMatcherExcludesNothing(t *testing.T) {
 	var m *Matcher
-	m.Enter("anywhere", nil)
-	if m.Excluded("anything.md", false) {
+	f := m.Root().Enter("anywhere", nil)
+	if f.Excluded("anything.md", false) {
 		t.Fatal("a nil Matcher excluded a path")
 	}
 }
