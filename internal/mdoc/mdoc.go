@@ -98,7 +98,10 @@ func Parse(path string, data []byte) *Doc {
 	root := parser.Parse(text.NewReader(scan))
 	d.build(root, d.Root, data)
 	for _, b := range d.Blocks {
-		if b.Kind == KindHeading {
+		// An empty heading ("#" on its own) reaches goldmark with no content
+		// and so with no offsets. It sits on no line a breadcrumb or a section
+		// could be measured from, so it is not one of the document's headings.
+		if b.Kind == KindHeading && b.Located {
 			d.Headings = append(d.Headings, b)
 		}
 	}

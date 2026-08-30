@@ -19,6 +19,7 @@ type Anchor struct {
 
 type anchorQuery struct {
 	path  string   // the file the link named, if it named one
+	frag  string   // the fragment exactly as it was written
 	slugs []string // the fragment slugged once per style, in styles order
 }
 
@@ -33,7 +34,7 @@ func NewAnchor(patterns []string, styles []mdoc.AnchorStyle) (*Anchor, error) {
 		if frag == "" {
 			return nil, fmt.Errorf("no heading anchor in %q", p)
 		}
-		q := anchorQuery{path: path, slugs: make([]string, len(styles))}
+		q := anchorQuery{path: path, frag: frag, slugs: make([]string, len(styles))}
 		for i, style := range styles {
 			q.slugs[i] = mdoc.Slug(style, frag)
 		}
@@ -62,6 +63,13 @@ func (a *Anchor) matches(path string, anchors []string) bool {
 		}
 		for i, want := range q.slugs {
 			if want != "" && want == anchors[i] {
+				return true
+			}
+			// The pattern may already be the anchor a generator produced. The
+			// suffix that tells two alike headings apart is appended after
+			// slugging, so on a style that collapses punctuation it does not
+			// always survive being slugged a second time.
+			if q.frag != "" && q.frag == anchors[i] {
 				return true
 			}
 		}
