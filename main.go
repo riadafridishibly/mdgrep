@@ -124,7 +124,17 @@ A refused edit lists what it would have hit on stderr, as one JSON object when
 Output
   -n, --line-number     number the printed lines (the default)
   -N, --no-line-number
-      --no-breadcrumb   hide the heading trail above each result
+      --no-breadcrumb   hide the heading trail above each result. The trail
+                        stops at the parent when the result is the heading it
+                        would otherwise end with, since that line follows it
+      --outline         one indented line per heading: what is in these files
+                        rather than where something appears. Takes paths and
+                        no PATTERN, and is the cheapest view of a tree
+      --separator STR   what to print between two results of a file (default
+                        "--"); pass "" to leave them out
+      --truncate N      print at most N lines of any one result, then a line
+                        saying how many were held back. json reports the
+                        count as "truncated" instead
       --color WHEN      auto, always or never (default auto)
       --format WHEN     plain (default), compact or json. compact prints the
                         path once per file and then one tab-separated record
@@ -170,6 +180,9 @@ type config struct {
 	context   int
 	noNums    bool
 	noCrumb   bool
+	separator optString
+	truncate  int
+	outline   bool
 	color     string
 	jsonOut   bool
 	format    string
@@ -299,6 +312,9 @@ func run() int {
 	// Numbering is already on; -n exists so a grep habit does not error out.
 	bind(func(n string) { fs.Bool(n, false, "") }, "n", "line-number")
 	fs.BoolVar(&c.noCrumb, "no-breadcrumb", false, "")
+	fs.BoolVar(&c.outline, "outline", false, "")
+	fs.Var(&c.separator, "separator", "")
+	fs.IntVar(&c.truncate, "truncate", 0, "")
 	fs.StringVar(&c.color, "color", "auto", "")
 	fs.BoolVar(&c.jsonOut, "json", false, "")
 	fs.StringVar(&c.format, "format", "", "")
@@ -328,10 +344,20 @@ func run() int {
 		fmt.Fprintf(os.Stdout, "mdgrep %s\n", buildVersion())
 		return 0
 	}
-	format, err := parseFormat(c.format, c.jsonOut)
+	format, err := parseFormat(c.format, c.jsonOut, c.outline)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, hint)
 		return 2
+	}
+	if c.truncate < 0 {
+		fmt.Fprintf(os.Stderr, "mdgrep: --truncate %d: a cap on printed lines cannot be negative\n", c.truncate)
+		return 2
+	}
+	// --outline is a question about structure, so it fills in the search a
+	// caller would otherwise spell out: every heading, matched by nothing in
+	// particular. Either half can still be overridden.
+	if c.outline && c.kinds == "" {
+		c.kinds = "heading"
 	}
 	kinds, err := parseKinds(c.kinds)
 	if err != nil {
@@ -356,11 +382,16 @@ func run() int {
 	// filter to a directory the way grep would.
 	paths := fs.Args()
 	if len(c.patterns) == 0 {
-		if fs.NArg() == 0 {
+		switch {
+		case c.outline:
+			// An outline names no pattern, so every positional is a path.
+			c.patterns = patternList{""}
+		case fs.NArg() == 0:
 			fmt.Fprintf(os.Stderr, "mdgrep: missing PATTERN\n%s\n", hint)
 			return 2
+		default:
+			c.patterns, paths = patternList{fs.Arg(0)}, paths[1:]
 		}
-		c.patterns, paths = patternList{fs.Arg(0)}, paths[1:]
 	}
 
 	mode := match.Regexp
@@ -414,6 +445,8 @@ func run() int {
 		LineNumbers: !c.noNums,
 		Breadcrumb:  !c.noCrumb,
 		Format:      format,
+		Separator:   separator(c.separator),
+		Truncate:    c.truncate,
 	}
 
 	found := false
@@ -545,6 +578,10 @@ func buildEdit(c *config) (edit.Options, error) {
 		return e, fmt.Errorf("-A, -B, -C and --lines pad what is printed; they do not select what an edit rewrites")
 	case c.opt.Max > 0:
 		return e, fmt.Errorf("-m caps results; an edit wants every match it selects, or --multi")
+	case c.truncate > 0:
+		return e, fmt.Errorf("--truncate caps what is printed; an edit reports the whole of what it wrote")
+	case c.outline:
+		return e, fmt.Errorf("--outline reports structure; it does not select what an edit rewrites")
 	case c.expect.set && c.expect.val < 1:
 		return e, fmt.Errorf("--expect states how many nodes the search should find, so it wants a count above zero")
 	case e.Op.Node() && (c.opt.Section || c.opt.Body):
@@ -913,9 +950,24 @@ func taskFilter(c config) search.TaskFilter {
 // parseFormat folds --format and --json into one answer. --json predates
 // --format and stays as its own spelling of the same thing, so the pair is
 // only an error when the two disagree.
-func parseFormat(spec string, jsonFlag bool) (render.Format, error) {
+// separator reads --separator, where leaving the flag out is the default rule
+// and passing an empty string is the deliberate choice to have none.
+func separator(o optString) string {
+	if !o.set {
+		return "--"
+	}
+	return o.val
+}
+
+func parseFormat(spec string, jsonFlag, outline bool) (render.Format, error) {
+	if outline && (spec != "" || jsonFlag) {
+		return 0, fmt.Errorf("--outline is its own format; drop --format or --json")
+	}
 	if spec == "" {
-		if jsonFlag {
+		switch {
+		case outline:
+			return render.Outline, nil
+		case jsonFlag:
 			return render.JSON, nil
 		}
 		return render.Plain, nil

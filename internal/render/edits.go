@@ -43,8 +43,8 @@ func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) 
 	// side is numbered against a running offset rather than the old file.
 	offset := 0
 	for i, c := range changes {
-		if i > 0 {
-			fmt.Fprintln(p.W, p.paint(dim, "  --"))
+		if i > 0 && p.Separator != "" {
+			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, p.Separator))
 		}
 		if p.Breadcrumb && len(c.Breadcrumb) > 0 {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(c.Breadcrumb)))

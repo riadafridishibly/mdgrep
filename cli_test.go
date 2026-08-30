@@ -372,3 +372,260 @@ func TestUnknownHelpTopicNamesTheRealOnes(t *testing.T) {
 		}
 	}
 }
+
+// long is a document with a fenced block big enough to be worth capping and
+// two headings to hang trails off.
+const long = "# Orchard\n\n## Winter Pruning\n\nCut the leader.\n\n```bash\none\ntwo\nthree\nfour\nfive\n```\n\n## Summer Pruning\n\n- [ ] thin the fruit\n"
+
+// The trail above a heading ends with that heading, and the heading is the
+// next line printed. Saying it twice is the single largest redundancy in a
+// heading search, so the trail stops at the parent instead.
+func TestHeadingTrailStopsAtTheParent(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "^## Winter", path)
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(stdout, "Orchard › Winter Pruning") {
+		t.Errorf("trail repeats the heading below it:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "  Orchard\n") {
+		t.Errorf("want the parent trail:\n%s", stdout)
+	}
+}
+
+// The trail is only redundant when the heading is printed. --section-body is
+// the case where it is not, and there the last element is the only place the
+// section's own name appears.
+func TestSectionBodyKeepsTheWholeTrail(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "^## Winter", path, "--section-body")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "Orchard › Winter Pruning") {
+		t.Errorf("want the full trail when the heading is not printed:\n%s", stdout)
+	}
+}
+
+// A hit that is not a heading has nothing on the next line to duplicate, so
+// nothing is dropped: this is the case where the trail carries the result's
+// only context.
+func TestOtherKindsKeepTheWholeTrail(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "thin the fruit", path)
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "Orchard › Summer Pruning") {
+		t.Errorf("want the full trail on a list item:\n%s", stdout)
+	}
+}
+
+func TestSeparatorIsWhatTheCallerSays(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		wants string
+		omits string
+	}{
+		{name: "default", wants: "  --\n"},
+		{name: "left out", args: []string{"--separator", ""}, omits: "  --\n"},
+		{name: "chosen", args: []string{"--separator", "~~"}, wants: "  ~~\n", omits: "  --\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := doc(t, long)
+			stdout, _, code := capture(t, append([]string{"^## ", path}, tt.args...)...)
+			if code != 0 {
+				t.Fatalf("exit = %d", code)
+			}
+			if tt.wants != "" && !strings.Contains(stdout, tt.wants) {
+				t.Errorf("want %q between results:\n%s", tt.wants, stdout)
+			}
+			if tt.omits != "" && strings.Contains(stdout, tt.omits) {
+				t.Errorf("did not want %q:\n%s", tt.omits, stdout)
+			}
+		})
+	}
+}
+
+// --truncate caps one node, which is the guard against a hit inside a large
+// fenced block printing the whole block.
+func TestTruncateCapsOneResult(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "one", path, "--truncate", "3")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(stdout, "five") {
+		t.Errorf("printed past the cap:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "… +4 lines") {
+		t.Errorf("want the count of what was held back:\n%s", stdout)
+	}
+}
+
+func TestTruncateSaysOneLineOnce(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "one", path, "--truncate", "6")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "… +1 line\n") {
+		t.Errorf("want a singular line count:\n%s", stdout)
+	}
+}
+
+func TestTruncateLeavesAShortResultAlone(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "thin the fruit", path, "--truncate", "5")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(stdout, "…") {
+		t.Errorf("capped a node that fits:\n%s", stdout)
+	}
+}
+
+// The machine formats have to stay machine-readable when they truncate:
+// compact keeps its one record per line, and json says how much it held back
+// rather than hiding it inside the text.
+func TestTruncateStaysParseable(t *testing.T) {
+	path := doc(t, long)
+
+	stdout, _, code := capture(t, "one", path, "--truncate", "3", "--format", "compact")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if lines := strings.Count(strings.TrimSpace(stdout), "\n"); lines != 1 {
+		t.Errorf("want a path line and one record, got %d newlines:\n%s", lines, stdout)
+	}
+	if !strings.Contains(stdout, `\n… +4 lines`) {
+		t.Errorf("want the elision escaped into the record:\n%s", stdout)
+	}
+
+	stdout, _, code = capture(t, "one", path, "--truncate", "3", "--json")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	var got struct {
+		Text      string `json:"text"`
+		Truncated int    `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("json: %v\n%s", err, stdout)
+	}
+	if got.Truncated != 4 {
+		t.Errorf("truncated = %d, want 4", got.Truncated)
+	}
+	if strings.Contains(got.Text, "…") {
+		t.Errorf("json text carries a display marker: %q", got.Text)
+	}
+	if n := strings.Count(got.Text, "\n") + 1; n != 3 {
+		t.Errorf("text has %d lines, want 3: %q", n, got.Text)
+	}
+}
+
+// An edit reports what it wrote, and a cap on that report would hide part of
+// the change from the caller who asked for it.
+func TestTruncateIsRefusedWithAnEdit(t *testing.T) {
+	path := doc(t, sample)
+	_, stderr, code := capture(t, "verify checksum", path, "--check", "--truncate", "2")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "--truncate") {
+		t.Errorf("want the refusal to name the flag: %s", stderr)
+	}
+}
+
+func TestNegativeTruncateIsRejected(t *testing.T) {
+	path := doc(t, sample)
+	_, stderr, code := capture(t, "Install", path, "--truncate", "-1")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "--truncate") {
+		t.Errorf("want the refusal to name the flag: %s", stderr)
+	}
+}
+
+// --outline is the one-flag spelling of the most common question asked of a
+// markdown tree, and it takes paths where a search takes a pattern.
+func TestOutlineNeedsNoPattern(t *testing.T) {
+	path := doc(t, long)
+	stdout, stderr, code := capture(t, "--outline", path)
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	want := "# Orchard\n"
+	if !strings.Contains(stdout, want) {
+		t.Errorf("want the top heading:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "  ## Winter Pruning\n") {
+		t.Errorf("want the child heading indented under it:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "thin the fruit") {
+		t.Errorf("outline printed something that is not a heading:\n%s", stdout)
+	}
+}
+
+// A path that would be read as PATTERN by a search has to stay a path here,
+// or an outline of two files would silently become an outline of one.
+func TestOutlineReadsEveryPositionalAsAPath(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.md", "b.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("# "+name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stdout, _, code := capture(t, "--outline", filepath.Join(dir, "a.md"), filepath.Join(dir, "b.md"))
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	for _, want := range []string{"# a.md", "# b.md"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("want %q in the outline:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestOutlineIsItsOwnFormat(t *testing.T) {
+	path := doc(t, long)
+	for _, args := range [][]string{{"--json"}, {"--format", "compact"}} {
+		_, stderr, code := capture(t, append([]string{"--outline", path}, args...)...)
+		if code != 2 {
+			t.Errorf("%v: exit = %d, want 2", args, code)
+		}
+		if !strings.Contains(stderr, "--outline") {
+			t.Errorf("%v: want the refusal to name the flag: %s", args, stderr)
+		}
+	}
+}
+
+func TestOutlineIsRefusedWithAnEdit(t *testing.T) {
+	path := doc(t, sample)
+	_, stderr, code := capture(t, "verify checksum", path, "--check", "--outline")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "--outline") {
+		t.Errorf("want the refusal to name the flag: %s", stderr)
+	}
+}
+
+// A pattern is still allowed, and narrows which headings the outline shows.
+func TestOutlineTakesAPatternThroughDashE(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "--outline", "-e", "Winter", path)
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "## Winter Pruning") {
+		t.Errorf("want the matching heading:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "Summer") {
+		t.Errorf("outline ignored the pattern:\n%s", stdout)
+	}
+}

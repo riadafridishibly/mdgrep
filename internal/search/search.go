@@ -53,6 +53,7 @@ type Options struct {
 type Result struct {
 	Path       string
 	Kind       mdoc.Kind
+	Level      int // heading level, else 0
 	Score      float64
 	Start, End int // inclusive, zero-based lines, after expansion
 	HitStart   int // first line of the matched block itself
@@ -97,6 +98,7 @@ func File(doc *mdoc.Doc, m match.Matcher, opt Options) []Result {
 		out = append(out, Result{
 			Path:       doc.Src.Path,
 			Kind:       sel.Kind,
+			Level:      sel.Level,
 			Score:      h.score,
 			Start:      start,
 			End:        end,

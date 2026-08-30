@@ -34,6 +34,10 @@ const (
 	// while staying line-oriented.
 	Compact
 	JSON
+	// Outline answers "what is in these files" rather than "where does this
+	// appear": one indented line per heading, which is the cheapest useful
+	// view of a tree.
+	Outline
 )
 
 type Printer struct {
@@ -42,12 +46,22 @@ type Printer struct {
 	LineNumbers bool
 	Breadcrumb  bool
 	Format      Format
+	// Separator goes between two results of the same file. It is there for a
+	// person scanning the output; an empty one leaves the results flush
+	// against each other.
+	Separator string
+	// Truncate caps how many lines of any one result are printed, so that a
+	// hit inside a 400-line fenced block does not print 400 lines. Zero means
+	// print all of them.
+	Truncate int
 
 	wroteAny bool
 }
 
+// paint colours a string for a person. Compact and JSON are read by programs,
+// so they are never coloured; Plain and Outline are read by people.
 func (p *Printer) paint(code, s string) string {
-	if !p.Color || p.Format != Plain || s == "" {
+	if !p.Color || s == "" || p.Format == Compact || p.Format == JSON {
 		return s
 	}
 	return code + s + reset
@@ -65,6 +79,9 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	case Compact:
 		p.printCompact(src, results)
 		return
+	case Outline:
+		p.printOutline(src, results)
+		return
 	}
 	if p.wroteAny {
 		fmt.Fprintln(p.W)
@@ -78,13 +95,14 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	}
 	width := len(strconv.Itoa(last))
 	for i, r := range results {
-		if i > 0 {
-			fmt.Fprintln(p.W, p.paint(dim, "  --"))
+		if i > 0 && p.Separator != "" {
+			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, p.Separator))
 		}
-		if p.Breadcrumb && len(r.Breadcrumb) > 0 {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
+		if crumb := p.crumb(r); p.Breadcrumb && len(crumb) > 0 {
+			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(crumb)))
 		}
-		for n := r.Start; n <= r.End; n++ {
+		end, cut := p.cap(r.Start, r.End)
+		for n := r.Start; n <= end; n++ {
 			line := src.Line(n)
 			body := line
 			if n >= r.HitStart && n <= r.HitEnd {
@@ -97,7 +115,40 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 				fmt.Fprintf(p.W, "  %s\n", body)
 			}
 		}
+		if cut > 0 {
+			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(cut)))
+		}
 	}
+}
+
+// crumb is the trail to print above a result. A heading result prints that
+// heading on the very next line and the trail ends with it, so the last
+// element would say the same thing twice; the trail stops at the parent
+// instead. A --section-body result keeps the whole trail, because there the
+// heading line itself is never printed.
+func (p *Printer) crumb(r search.Result) []string {
+	if r.Kind == mdoc.KindHeading && len(r.Breadcrumb) > 0 &&
+		r.Start <= r.HitStart && r.HitStart <= r.End {
+		return r.Breadcrumb[:len(r.Breadcrumb)-1]
+	}
+	return r.Breadcrumb
+}
+
+// cap applies Truncate to one result, returning the last line to print and how
+// many lines were left out.
+func (p *Printer) cap(start, end int) (last, cut int) {
+	if p.Truncate <= 0 || end-start+1 <= p.Truncate {
+		return end, 0
+	}
+	last = start + p.Truncate - 1
+	return last, end - last
+}
+
+func elision(cut int) string {
+	if cut == 1 {
+		return "… +1 line"
+	}
+	return fmt.Sprintf("… +%d lines", cut)
 }
 
 func (p *Printer) highlight(line string, m match.Matcher) string {
@@ -135,9 +186,41 @@ func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
 	p.wroteAny = true
 	fmt.Fprintln(p.W, src.Path)
 	for _, r := range results {
-		fmt.Fprintf(p.W, "%s\t%s\t%s\n",
-			lineSpan(r.Start, r.End), r.Kind,
-			escape(strings.Join(src.Lines(r.Start, r.End), "\n")))
+		end, cut := p.cap(r.Start, r.End)
+		text := strings.Join(src.Lines(r.Start, end), "\n")
+		if cut > 0 {
+			text += "\n" + elision(cut)
+		}
+		fmt.Fprintf(p.W, "%s\t%s\t%s\n", lineSpan(r.Start, r.End), r.Kind, escape(text))
+	}
+}
+
+// printOutline writes one line per result, indented by heading level, so the
+// shape of a document is readable at a glance. A result that is not a heading
+// sits at the outermost level rather than being dropped, since the caller
+// asked to see what matched.
+func (p *Printer) printOutline(src *mdoc.Source, results []search.Result) {
+	if p.wroteAny {
+		fmt.Fprintln(p.W)
+	}
+	p.wroteAny = true
+	fmt.Fprintln(p.W, p.paint(magenta, src.Path))
+
+	last := 0
+	for _, r := range results {
+		last = max(last, r.Start+1)
+	}
+	width := len(strconv.Itoa(last))
+	for _, r := range results {
+		indent := strings.Repeat("  ", max(r.Level-1, 0))
+		text := strings.TrimSpace(src.Line(r.Start))
+		if p.LineNumbers {
+			fmt.Fprintf(p.W, "  %s %s %s%s\n",
+				p.paint(green, fmt.Sprintf("%*d", width, r.Start+1)),
+				p.paint(dim, "│"), indent, text)
+		} else {
+			fmt.Fprintf(p.W, "  %s%s\n", indent, text)
+		}
 	}
 }
 
@@ -163,6 +246,10 @@ type jsonResult struct {
 	Checked    *bool    `json:"checked,omitempty"`
 	Breadcrumb []string `json:"breadcrumb,omitempty"`
 	Text       string   `json:"text"`
+	// Truncated counts the lines --truncate held back, so a reader can tell a
+	// short node from a capped one without measuring the text against start
+	// and end.
+	Truncated int `json:"truncated,omitempty"`
 }
 
 func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
@@ -174,6 +261,7 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 		if r.Task {
 			checked = &r.Checked
 		}
+		end, cut := p.cap(r.Start, r.End)
 		enc.Encode(jsonResult{
 			Path:       r.Path,
 			Kind:       string(r.Kind),
@@ -182,7 +270,8 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 			End:        r.End + 1,
 			Checked:    checked,
 			Breadcrumb: r.Breadcrumb,
-			Text:       strings.Join(src.Lines(r.Start, r.End), "\n"),
+			Text:       strings.Join(src.Lines(r.Start, end), "\n"),
+			Truncated:  cut,
 		})
 	}
 }

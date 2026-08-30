@@ -222,8 +222,12 @@ with an edit.
 | `-n`, `--line-number` | number the printed lines (the default) |
 | `-N`, `--no-line-number` | drop the line-number gutter |
 | `--no-breadcrumb` | hide the heading trail |
+| `--outline` | one indented line per heading, no PATTERN |
+| `--separator STR` | what goes between two results of a file (default `--`) |
+| `--truncate N` | print at most N lines of any one result |
 | `--color WHEN` | `auto` (default), `always`, `never` |
-| `--json` | one JSON object per result |
+| `--format WHEN` | `plain` (default), `compact` or `json` |
+| `--json` | one JSON object per result (same as `--format json`) |
 | `-c`, `--count` | number of results per file |
 | `-l`, `--files-with-matches` | names of matching files only |
 | `-m`, `--max-count N` | stop after N results per file |
@@ -231,14 +235,66 @@ with an edit.
 | `--ext LIST` | file extensions to search |
 | `--hidden` | descend into hidden directories |
 | `--no-ignore` | search everything, including what the ignore files (`.gitignore`, `.ignore`, `.git/info/exclude`) and the skip list (`node_modules`, `vendor`, and friends) leave out |
-| `-h`, `--help` / `-V`, `--version` | |
+| `-h`, `--help [TOPIC]` | the whole manual, or one part of it |
+| `-V`, `--version` | |
 
 Colour turns itself off when stdout is not a terminal, or under `NO_COLOR` or
 `TERM=dumb`.
 
+The trail above a heading stops at that heading's parent, since the heading
+itself is the next line printed. `--section-body` keeps the whole trail, because
+there the heading line never appears.
+
+`--outline` answers "what is in these files" rather than "where does this
+appear". It takes paths where a search takes a pattern:
+
+```
+$ mdgrep --outline docs/pruning.md
+docs/pruning.md
+   1 │ # Pruning
+   5 │   ## Winter Pruning
+  16 │   ## Summer Pruning
+  27 │   ## Central Leader
+```
+
+`--separator ''` drops the `--` between results, and `--truncate N` caps how
+much of one node is printed — a hit inside a 400-line fenced block otherwise
+prints all 400 lines:
+
+```
+$ mdgrep "orchard survey" docs --truncate 3
+docs/pruning.md
+  Pruning › Winter Pruning
+  12 │ ```bash
+  13 │ orchard survey --block 04
+  14 │ orchard survey --block 05
+  … +38 lines
+```
+
+### Machine-readable output
+
+`--format compact` prints the path once per file and then one tab-separated
+record per result — the line span, the kind, and the text with its newlines
+escaped, so a record is always one line and the path is the line with no tab
+in it:
+
+```
+$ mdgrep "" pruning.md --format compact
+pruning.md
+1	heading	# Pruning
+3	heading	## Winter Pruning
+5-6	paragraph	Cut back the leader\nbefore the sap rises.
+```
+
+An edit reports the span, the operation, `applied`/`dry`/`unchanged`, and the
+new text. Compact leaves out the breadcrumb and the score; it costs about a
+third of what `--json` costs on the same results, so it is the cheaper choice
+whenever those two are not what is wanted.
+
 `--json` emits one object per line: `path`, `kind`, `score`, `start`, `end`
-(1-based, inclusive), `breadcrumb`, `text`, plus `checked` on task items. An
-edit reports `op`, `old`, `new` and `applied` instead. A refused edit is one
+(1-based, inclusive), `breadcrumb`, `text`, plus `checked` on task items and
+`truncated` under `--truncate`. An edit reports `op`, `old`, `new` and
+`applied` instead. A refused edit is one
 object on stderr — `error` (`ambiguous` or `expect`), `message`, `total`,
 `expected` and the capped `matches` list — so a JSON caller parses the refusal
 with the reader it already has.
@@ -249,6 +305,13 @@ mdgrep "rollback" docs --json | jq -r '.path + ":" + (.start|tostring)'
 
 Exit status follows grep: `0` matched, `1` did not, `2` error. An error prints
 the line that says what went wrong and points at `--help`.
+
+`--help` takes a topic, so remembering one flag does not cost the whole manual:
+
+```bash
+mdgrep --help editing   # matching, filters, selection, editing, output
+mdgrep --help anchor    # or any flag name
+```
 
 ## Development
 
