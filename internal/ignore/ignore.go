@@ -46,11 +46,13 @@ type Matcher struct {
 }
 
 // Frame is a walk's position in the ignore rules: the layers governing one
-// directory, outermost first. Frames are values, and Enter returns a new one
-// rather than changing the old, so a parent's Frame stays valid while its
-// children descend with their own. The zero Frame excludes nothing.
+// directory, outermost first, and where that directory is. Frames are values,
+// and Enter returns a new one rather than changing the old, so a parent's
+// Frame stays valid while its children descend with their own. The zero Frame
+// excludes nothing.
 type Frame struct {
 	m      *Matcher
+	dir    string // absolute directory this Frame governs the contents of
 	layers []layer
 }
 
@@ -59,7 +61,7 @@ func (m *Matcher) Root() Frame {
 	if m == nil {
 		return Frame{}
 	}
-	return Frame{m: m, layers: m.base}
+	return Frame{m: m, dir: m.absRoot, layers: m.base}
 }
 
 type layer struct {
@@ -195,6 +197,9 @@ func (f Frame) Enter(dir string, entries []fs.DirEntry) Frame {
 	// not the front of a listing: thirteen punctuation characters sort ahead
 	// of it, and a name spelled with one of them says nothing about what
 	// follows it.
+	abs := f.m.abs(dir)
+	f.dir = abs
+
 	var present [len(sources)]bool
 	found, repo := false, false
 	for _, e := range entries {
@@ -213,7 +218,6 @@ func (f Frame) Enter(dir string, entries []fs.DirEntry) Frame {
 		return f
 	}
 
-	abs := f.m.abs(dir)
 	layers := f.layers
 	if repo {
 		layers = nil
@@ -231,29 +235,31 @@ func (f Frame) Enter(dir string, entries []fs.DirEntry) Frame {
 		if !repo {
 			return f
 		}
-		return Frame{m: f.m, layers: layers}
+		return Frame{m: f.m, dir: abs, layers: layers}
 	}
 	// Clipped, so the append copies instead of writing into an array a
 	// sibling frame is still reading.
-	return Frame{m: f.m, layers: append(slices.Clip(layers), layer{dir: abs, rules: rules})}
+	return Frame{m: f.m, dir: abs, layers: append(slices.Clip(layers), layer{dir: abs, rules: rules})}
 }
 
-// Excluded reports whether the rules leave path out. path must be an entry of
-// the directory this Frame was entered for.
+// Excluded reports whether the rules leave out the entry of this Frame's
+// directory named name. The Frame knows where that directory is, so the entry
+// is named rather than pathed and no path the walk built has to be taken apart
+// again.
 //
 // The nearest file wins, so layers answer from the inside out and the first
 // one to speak settles it. Speaking is not the same as excluding: a file whose
 // last matching line is a "!" says "keep this", and it says it loudly enough
 // to stop the file above from excluding it.
 //
-// It answers about the path it is given and not about the path's parents,
-// because the walk is expected to stop at a directory it is told to skip.
+// It answers about the entry it is given and not about the directories over
+// it, because the walk is expected to stop at a directory it is told to skip.
 // Nothing under an excluded directory is reachable in git either.
-func (f Frame) Excluded(path string, isDir bool) bool {
+func (f Frame) Excluded(name string, isDir bool) bool {
 	if f.m == nil || len(f.layers) == 0 {
 		return false
 	}
-	abs := f.m.abs(path)
+	abs := f.dir + string(filepath.Separator) + name
 	for i := len(f.layers) - 1; i >= 0; i-- {
 		rel := relTo(f.layers[i].dir, abs)
 		if rel == "" {

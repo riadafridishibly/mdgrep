@@ -1013,14 +1013,14 @@ func (c *collector) walk(dir string, f ignore.Frame, n *node) {
 	f = f.Enter(dir, entries)
 	for _, e := range entries {
 		name := e.Name()
-		path := filepath.Join(dir, name)
 		if e.IsDir() {
 			if (!c.noIgnore && skipDirs[name]) || (!c.hidden && strings.HasPrefix(name, ".")) {
 				continue
 			}
-			if f.Excluded(path, true) {
+			if f.Excluded(name, true) {
 				continue
 			}
+			path := filepath.Join(dir, name)
 			kid := &node{}
 			n.kids = append(n.kids, kid)
 			select {
@@ -1047,10 +1047,10 @@ func (c *collector) walk(dir string, f ignore.Frame, n *node) {
 		if !c.exts[strings.ToLower(filepath.Ext(name))] {
 			continue
 		}
-		if f.Excluded(path, false) {
+		if f.Excluded(name, false) {
 			continue
 		}
-		n.kids = append(n.kids, &node{file: path})
+		n.kids = append(n.kids, &node{file: filepath.Join(dir, name)})
 	}
 }
 
