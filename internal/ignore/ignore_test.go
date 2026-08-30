@@ -265,3 +265,16 @@ func TestRelativeRootMatchesAbsolute(t *testing.T) {
 	t.Chdir(root)
 	check(t, survivors(t, ".", "."), []string{"a.md"})
 }
+
+// os.ReadDir sorts, and thirteen punctuation characters sort ahead of ".", so
+// a sibling spelled with one of them must not stop the scan before it reaches
+// the ignore files.
+func TestIgnoreFilesAreFoundBehindPunctuation(t *testing.T) {
+	root := tree(t, map[string]string{
+		".gitignore":  "sub/\n",
+		"+page.md":    "",
+		"keep.md":     "",
+		"sub/drop.md": "",
+	})
+	check(t, survivors(t, root, root), []string{"+page.md", "keep.md"})
+}
