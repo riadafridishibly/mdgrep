@@ -29,7 +29,7 @@ import (
 // version names a build the module system cannot place: go build from a clone
 // with no tag over it. An installed binary knows better, and buildVersion asks
 // it first.
-const version = "0.1.0"
+const version = "0.2.0"
 
 // buildVersion is what -V reports. A binary from "go install <path>@v0.2.0"
 // carries the tag it was built from, so it should say so rather than repeat
