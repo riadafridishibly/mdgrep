@@ -230,7 +230,7 @@ with an edit.
 | `-q`, `--quiet` | print nothing; the exit status carries the answer |
 | `--ext LIST` | file extensions to search |
 | `--hidden` | descend into hidden directories |
-| `--no-ignore` | search what the ignore files (`.gitignore`, `.ignore`, `.git/info/exclude`) and the skip list (`node_modules`, `vendor`, and friends) leave out |
+| `--no-ignore` | search everything, including what the ignore files (`.gitignore`, `.ignore`, `.git/info/exclude`) and the skip list (`node_modules`, `vendor`, and friends) leave out |
 | `-h`, `--help` / `-V`, `--version` | |
 
 Colour turns itself off when stdout is not a terminal, or under `NO_COLOR` or

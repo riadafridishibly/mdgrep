@@ -133,9 +133,9 @@ Output
   -q, --quiet           print nothing; the exit status carries the answer
       --ext LIST        file extensions to search (default md,markdown,mdown,mkd,mdx)
       --hidden          descend into hidden directories
-      --no-ignore       search what the ignore files (.gitignore, .ignore,
-                        .git/info/exclude) and the skip list (node_modules,
-                        vendor and friends) leave out
+      --no-ignore       search everything, including what the ignore files
+                        (.gitignore, .ignore, .git/info/exclude) and the skip
+                        list (node_modules, vendor and friends) leave out
   -h, --help
   -V, --version
 
