@@ -313,3 +313,18 @@ internal/render      terminal and JSON output
 ```bash
 go test ./...
 ```
+
+Every layer that converts between byte offsets, line numbers and rune indices
+also has a fuzz target, since that is where the three coordinate systems have
+to agree. They run their seed corpus as ordinary tests; to actually fuzz one:
+
+```bash
+go test ./internal/mdoc   -run xxx -fuzz FuzzParse         -fuzztime 60s
+go test ./internal/match  -run xxx -fuzz FuzzMatch         -fuzztime 60s
+go test ./internal/edit   -run xxx -fuzz FuzzEditPipeline  -fuzztime 60s
+go test ./internal/search -run xxx -fuzz FuzzSearchOptions -fuzztime 60s
+go test .                 -run xxx -fuzz FuzzPermute       -fuzztime 60s
+```
+
+An input that fails is written to the package's `testdata/fuzz`, where it stays
+as a regression case.
