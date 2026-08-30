@@ -42,12 +42,12 @@ func survivors(t *testing.T, root, start string) []string {
 			name := e.Name()
 			path := filepath.Join(dir, name)
 			if e.IsDir() {
-				if !strings.HasPrefix(name, ".") && !f.Excluded(path, true) {
+				if !strings.HasPrefix(name, ".") && !f.Excluded(name, true) {
 					walk(path, f)
 				}
 				continue
 			}
-			if strings.HasPrefix(name, ".") || f.Excluded(path, false) {
+			if strings.HasPrefix(name, ".") || f.Excluded(name, false) {
 				continue
 			}
 			rel, err := filepath.Rel(root, path)
