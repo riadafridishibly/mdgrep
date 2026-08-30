@@ -938,6 +938,7 @@ func collectFiles(paths []string, exts map[string]bool, hidden, noIgnore bool) (
 
 	var files []string
 	seen := map[string]bool{}
+	c := collector{exts: exts, hidden: hidden, noIgnore: noIgnore, tokens: make(chan struct{}, walkers)}
 	for _, p := range paths {
 		if p == "-" {
 			useStdin = true
@@ -954,36 +955,62 @@ func collectFiles(paths []string, exts map[string]bool, hidden, noIgnore bool) (
 			}
 			continue
 		}
-		c := collector{exts: exts, hidden: hidden, noIgnore: noIgnore, seen: seen, files: files}
+		var m *ignore.Matcher
 		if !noIgnore {
-			c.ignore = ignore.New(p)
+			m = ignore.New(p)
 		}
 		// The root was asked for by name, so it is searched whatever the rules
 		// above it say; everything below it is not.
-		c.walk(p)
-		files = c.files
+		var root node
+		c.walk(p, m.Root(), &root)
+		c.wg.Wait()
+		files = root.flatten(seen, files)
 	}
 	return files, useStdin, nil
 }
 
+// walkers bounds how many directories are being read at once. Four is where
+// the measurements stop improving: on a 10,000-directory tree the wall clock
+// is the same anywhere from three walkers upward, but the kernel time doubles
+// on the way from four to eight. The walk waits on the filesystem rather than
+// on a core, and the filesystem stops going faster long before the cores run
+// out.
+var walkers = min(runtime.NumCPU(), 4)
+
 // collector walks a directory tree and keeps the files worth searching. It
 // reads each directory itself rather than going through filepath.WalkDir,
-// because the listing is also how the ignore rules find their own files.
+// because the listing is also how the ignore rules find their own files, and
+// because reading one directory is not work a single goroutine should be doing
+// alone.
 type collector struct {
 	exts     map[string]bool
 	hidden   bool
 	noIgnore bool
-	ignore   *ignore.Matcher
-	seen     map[string]bool
-	files    []string
+	tokens   chan struct{}
+	wg       sync.WaitGroup
 }
 
-func (c *collector) walk(dir string) {
+// node is one directory's share of the walk, in listing order: each child is
+// either a file worth searching or the node of a subdirectory that was
+// descended into. Keeping the shape of the tree is what lets the branches be
+// walked at once and still come back in the order one goroutine would have
+// found them in.
+type node struct {
+	file string
+	kids []*node
+}
+
+// walk fills n with what dir holds, descending in parallel where there is a
+// goroutine to spare and in place where there is not. Only the goroutine that
+// read a directory appends to that directory's node, and every node is
+// complete before the walk's WaitGroup falls to zero, so flatten reads a tree
+// nobody is still writing to.
+func (c *collector) walk(dir string, f ignore.Frame, n *node) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
-	c.ignore.Enter(dir, entries)
+	f = f.Enter(dir, entries)
 	for _, e := range entries {
 		name := e.Name()
 		path := filepath.Join(dir, name)
@@ -991,8 +1018,24 @@ func (c *collector) walk(dir string) {
 			if (!c.noIgnore && skipDirs[name]) || (!c.hidden && strings.HasPrefix(name, ".")) {
 				continue
 			}
-			if !c.ignore.Excluded(path, true) {
-				c.walk(path)
+			if f.Excluded(path, true) {
+				continue
+			}
+			kid := &node{}
+			n.kids = append(n.kids, kid)
+			select {
+			case c.tokens <- struct{}{}:
+				c.wg.Add(1)
+				go func() {
+					defer c.wg.Done()
+					defer func() { <-c.tokens }()
+					c.walk(path, f, kid)
+				}()
+			default:
+				// Every token is out. Walking the subdirectory here rather
+				// than waiting for one is what keeps the walk from stalling
+				// on itself.
+				c.walk(path, f, kid)
 			}
 			continue
 		}
@@ -1001,15 +1044,30 @@ func (c *collector) walk(dir string) {
 		}
 		// Extension first: it settles most files for the price of a suffix,
 		// and leaves the rules to run over the few it does not.
-		if !c.exts[strings.ToLower(filepath.Ext(name))] || c.seen[path] {
+		if !c.exts[strings.ToLower(filepath.Ext(name))] {
 			continue
 		}
-		if c.ignore.Excluded(path, false) {
+		if f.Excluded(path, false) {
 			continue
 		}
-		c.seen[path] = true
-		c.files = append(c.files, path)
+		n.kids = append(n.kids, &node{file: path})
 	}
+}
+
+// flatten appends the tree's files to out in walk order, dropping the ones a
+// path given earlier on the command line already brought in.
+func (n *node) flatten(seen map[string]bool, out []string) []string {
+	if n.file != "" {
+		if seen[n.file] {
+			return out
+		}
+		seen[n.file] = true
+		return append(out, n.file)
+	}
+	for _, kid := range n.kids {
+		out = kid.flatten(seen, out)
+	}
+	return out
 }
 
 func useColor(when string) bool {
