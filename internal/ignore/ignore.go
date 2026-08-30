@@ -35,7 +35,8 @@ var lastSource = slices.Max(sources[:])
 // branches of a walk can descend at once without seeing each other's rules. A
 // nil *Matcher excludes nothing, which is what --no-ignore asks for.
 type Matcher struct {
-	root    string // the directory the walk was started from, as it was given
+	given   string // the root as the caller wrote it, which is how the walk names it
+	root    string // the same directory cleaned, which is the prefix of every path under it
 	absRoot string // the same directory, absolute, so layers above it are reachable
 	base    []layer
 }
@@ -67,7 +68,7 @@ type layer struct {
 // between the work tree root and root. Git applies them only inside a work
 // tree, so a root with no repository over it starts empty.
 func New(root string) *Matcher {
-	m := &Matcher{root: filepath.Clean(root)}
+	m := &Matcher{given: root, root: filepath.Clean(root)}
 	abs, err := filepath.Abs(m.root)
 	if err != nil {
 		return m
@@ -225,10 +226,11 @@ func (f Frame) Excluded(path string, isDir bool) bool {
 // abs turns a path the walk reported back into an absolute one. The walk
 // builds every path from the root it was handed, so the root is a prefix of
 // all of them — except under a root of ".", which children are reported
-// without.
+// without. The root itself arrives spelled the way the caller wrote it, which
+// need not be the spelling filepath.Join gives its children.
 func (m *Matcher) abs(path string) string {
 	switch {
-	case path == m.root:
+	case path == m.root, path == m.given:
 		return m.absRoot
 	case m.root == ".":
 		return filepath.Join(m.absRoot, path)

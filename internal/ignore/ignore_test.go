@@ -278,3 +278,15 @@ func TestIgnoreFilesAreFoundBehindPunctuation(t *testing.T) {
 	})
 	check(t, survivors(t, root, root), []string{"+page.md", "keep.md"})
 }
+
+// A root written with a "./" in front of it names the same directory as one
+// without, and the walk reports the paths under it the same way either way.
+func TestUncleanSearchRootReadsItsOwnRules(t *testing.T) {
+	root := tree(t, map[string]string{
+		"docs/.gitignore": "drop.md\n",
+		"docs/keep.md":    "",
+		"docs/drop.md":    "",
+	})
+	t.Chdir(root)
+	check(t, survivors(t, ".", "./docs"), []string{"docs/keep.md"})
+}
