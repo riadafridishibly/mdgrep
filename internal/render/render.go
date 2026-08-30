@@ -16,6 +16,7 @@ import (
 const (
 	reset     = "\x1b[0m"
 	boldRed   = "\x1b[1;31m"
+	red       = "\x1b[31m"
 	green     = "\x1b[32m"
 	magenta   = "\x1b[35m"
 	dim       = "\x1b[2m"
@@ -64,8 +65,7 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 			fmt.Fprintln(p.W, p.paint(dim, "  --"))
 		}
 		if p.Breadcrumb && len(r.Breadcrumb) > 0 {
-			trail := strings.Join(r.Breadcrumb, " › ")
-			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, trail))
+			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
 		}
 		for n := r.Start; n <= r.End; n++ {
 			line := src.Line(n)

@@ -304,3 +304,46 @@ func TestRawSourceIsSearchable(t *testing.T) {
 		}
 	}
 }
+
+func TestSectionBodyLeavesTheHeadingOut(t *testing.T) {
+	res := find(t, "install", Options{Body: true})
+	if len(res) == 0 {
+		t.Fatal("no results")
+	}
+	if got := text(t, res[0]); strings.Contains(got, "## Install") {
+		t.Fatalf("body should not carry its heading:\n%s", got)
+	}
+	if res[0].Start != 4 || res[0].End != 7 {
+		t.Fatalf("range = %d..%d, want 4..7", res[0].Start, res[0].End)
+	}
+}
+
+func TestSectionBodyOfAHeadingWithNothingUnderItIsEmpty(t *testing.T) {
+	const bare = "# Guide\n\n## Empty\n\n## Later\n\ntail\n"
+	m, err := match.New("empty", match.Options{Mode: match.Substring, IgnoreCase: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := File(mdoc.Parse("t.md", []byte(bare)), m, Options{Body: true})
+	if len(res) != 1 {
+		t.Fatalf("got %d results, want 1", len(res))
+	}
+	if res[0].End >= res[0].Start {
+		t.Fatalf("range = %d..%d, want an empty one", res[0].Start, res[0].End)
+	}
+}
+
+func TestDistinctKeepsTouchingResultsApart(t *testing.T) {
+	const list = "- [ ] alpha one\n- [ ] alpha two\n"
+	m, err := match.New("alpha", match.Options{Mode: match.Substring, IgnoreCase: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mdoc.Parse("t.md", []byte(list))
+	if res := File(doc, m, Options{}); len(res) != 1 {
+		t.Fatalf("printing got %d results, want the two runs together as 1", len(res))
+	}
+	if res := File(doc, m, Options{Distinct: true}); len(res) != 2 {
+		t.Fatalf("got %d results, want 2", len(res))
+	}
+}

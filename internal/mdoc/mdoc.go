@@ -428,7 +428,32 @@ func (d *Doc) Breadcrumb(line int) []string {
 // nearest preceding heading through the line before the next heading of the
 // same or higher rank.
 func (d *Doc) Section(line int) (int, int, bool) {
-	idx := -1
+	idx, end, ok := sectionEnd(d, line)
+	if !ok {
+		return 0, 0, false
+	}
+	return d.Headings[idx].Start, end, true
+}
+
+// SectionBody returns the same range with the heading itself left out. end is
+// start-1 when the heading has no body, which is an insertion point rather
+// than a region.
+func (d *Doc) SectionBody(line int) (int, int, bool) {
+	idx, end, ok := sectionEnd(d, line)
+	if !ok {
+		return 0, 0, false
+	}
+	start := d.Headings[idx].End + 1
+	if end < start {
+		end = start - 1
+	}
+	return start, end, true
+}
+
+// sectionEnd finds the heading enclosing a line and the last line under it:
+// everything up to the next heading of the same or higher rank.
+func sectionEnd(d *Doc, line int) (idx, end int, ok bool) {
+	idx = -1
 	for i, h := range d.Headings {
 		if h.Start <= line {
 			idx = i
@@ -439,13 +464,12 @@ func (d *Doc) Section(line int) (int, int, bool) {
 	if idx < 0 {
 		return 0, 0, false
 	}
-	start := d.Headings[idx].Start
-	end := d.Src.NumLines() - 1
+	end = d.Src.NumLines() - 1
 	for _, h := range d.Headings[idx+1:] {
 		if h.Level <= d.Headings[idx].Level {
 			end = h.Start - 1
 			break
 		}
 	}
-	return start, end, true
+	return idx, end, true
 }

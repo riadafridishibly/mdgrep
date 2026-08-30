@@ -78,6 +78,29 @@ func (s *Source) Slice(start, end int) string {
 	return strings.TrimRight(s.text[s.lineStart[start]:stop], "\r\n")
 }
 
+// Text returns the file exactly as it was read.
+func (s *Source) Text() string { return s.text }
+
+// ByteRange returns the byte offsets spanning an inclusive line range, the
+// trailing newline of the last line included. An empty range (end < start) is
+// an insertion point, and returns the start of that line twice.
+func (s *Source) ByteRange(start, end int) (int, int) {
+	if start < 0 {
+		start = 0
+	}
+	lo := len(s.text)
+	if start < len(s.lineStart) {
+		lo = s.lineStart[start]
+	}
+	if end < start || end+1 >= len(s.lineStart) {
+		if end < start {
+			return lo, lo
+		}
+		return lo, len(s.text)
+	}
+	return lo, s.lineStart[end+1]
+}
+
 // Lines returns the inclusive line range, clamped to the file.
 func (s *Source) Lines(start, end int) []string {
 	if start < 0 {

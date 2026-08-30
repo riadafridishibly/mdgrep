@@ -38,9 +38,15 @@ type Options struct {
 	Lines   int                // raw lines padded on both sides
 	Expand  int                // ancestor levels to climb from the hit
 	Section bool               // widen to the enclosing heading section
+	Body    bool               // that section without its heading line
 	Anchor  *Anchor            // when set, headings are selected by link anchor
 	Rank    bool               // order by score rather than by position
 	Max     int                // cap on results per file, 0 for unlimited
+	// Distinct keeps results that merely touch apart. Printing runs two
+	// neighbouring hits together so the page reads as one passage; an edit
+	// wants them separate, because each is a node it could be asked to
+	// rewrite on its own.
+	Distinct bool
 }
 
 // Result is one region of a file to print.
@@ -71,13 +77,23 @@ func File(doc *mdoc.Doc, m match.Matcher, opt Options) []Result {
 		}
 		start, end := sel.Start, sel.End
 		start, end = withSiblings(sel, start, end, opt.Before, opt.After)
-		if opt.Section {
+		switch {
+		case opt.Body:
+			// A body stands on its own rather than widening the hit: asking
+			// for a section without its heading cannot pull the heading back
+			// in through the block that matched it.
+			if s, e, ok := doc.SectionBody(sel.Start); ok {
+				start, end = trimBlankEnds(doc.Src, s, e)
+			}
+		case opt.Section:
 			if s, e, ok := doc.Section(sel.Start); ok {
 				start, end = min(start, s), max(end, e)
 			}
 		}
-		start, end = clamp(start-opt.Lines, end+opt.Lines, doc.Src.NumLines())
-		start, end = trimBlank(doc.Src, start, end, sel.Start, sel.End)
+		if end >= start {
+			start, end = clamp(start-opt.Lines, end+opt.Lines, doc.Src.NumLines())
+			start, end = trimBlank(doc.Src, start, end, sel.Start, sel.End)
+		}
 		out = append(out, Result{
 			Path:       doc.Src.Path,
 			Kind:       sel.Kind,
@@ -95,7 +111,7 @@ func File(doc *mdoc.Doc, m match.Matcher, opt Options) []Result {
 		return nil
 	}
 
-	out = mergeOverlapping(out)
+	out = mergeOverlapping(out, opt.Distinct)
 	if opt.Rank {
 		// Rank before the cap, so -m keeps the best results rather than the
 		// first ones the file happens to hold.
@@ -261,6 +277,18 @@ func trimBlank(src *mdoc.Source, start, end, keepStart, keepEnd int) (int, int) 
 	return start, end
 }
 
+// trimBlankEnds drops blank lines from both ends of a range with nothing to
+// protect. A range that is blank throughout collapses to an empty one.
+func trimBlankEnds(src *mdoc.Source, start, end int) (int, int) {
+	for start <= end && strings.TrimSpace(src.Line(start)) == "" {
+		start++
+	}
+	for end >= start && strings.TrimSpace(src.Line(end)) == "" {
+		end--
+	}
+	return start, end
+}
+
 func clamp(start, end, numLines int) (int, int) {
 	if start < 0 {
 		start = 0
@@ -274,7 +302,12 @@ func clamp(start, end, numLines int) (int, int) {
 	return start, end
 }
 
-func mergeOverlapping(rs []Result) []Result {
+func mergeOverlapping(rs []Result, distinct bool) []Result {
+	// Results that touch are one region unless each has to stand alone.
+	gap := 1
+	if distinct {
+		gap = 0
+	}
 	sort.SliceStable(rs, func(i, j int) bool {
 		if rs[i].Start != rs[j].Start {
 			return rs[i].Start < rs[j].Start
@@ -284,7 +317,7 @@ func mergeOverlapping(rs []Result) []Result {
 	out := rs[:1]
 	for _, r := range rs[1:] {
 		last := &out[len(out)-1]
-		if r.Start > last.End+1 {
+		if r.Start > last.End+gap {
 			out = append(out, r)
 			continue
 		}
