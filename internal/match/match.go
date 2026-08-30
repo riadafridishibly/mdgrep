@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Span is a byte range within a searched string.
@@ -179,51 +180,94 @@ type substrMatcher struct {
 }
 
 func (m *substrMatcher) Score(text string) (float64, bool) {
-	if m.index(text, 0) >= 0 {
+	if i, _ := m.index(text, 0); i >= 0 {
 		return 1, true
 	}
 	return 0, false
 }
 
-func (m *substrMatcher) index(s string, from int) int {
-	if from >= len(s) {
-		return -1
+// index finds the pattern at or after from and returns where it starts and how
+// many bytes it took. The two are not the same thing under folding: "K" is
+// three bytes and folds onto a one-byte "k", so the width has to be measured
+// rather than assumed from the pattern.
+func (m *substrMatcher) index(s string, from int) (at, width int) {
+	if from > len(s) {
+		return -1, 0
 	}
-	var i int
-	if m.fold {
-		i = indexFold(s[from:], m.pat)
-	} else {
-		i = strings.Index(s[from:], m.pat)
+	if !m.fold {
+		i := strings.Index(s[from:], m.pat)
+		if i < 0 {
+			return -1, 0
+		}
+		return from + i, len(m.pat)
 	}
+	i, w := indexFold(s[from:], m.pat)
 	if i < 0 {
-		return -1
+		return -1, 0
 	}
-	return from + i
+	return from + i, w
 }
 
 func (m *substrMatcher) Spans(line string) []Span {
 	var out []Span
-	for i := m.index(line, 0); i >= 0; i = m.index(line, i+len(m.pat)) {
-		out = append(out, Span{i, i + len(m.pat)})
+	for i, w := m.index(line, 0); i >= 0; i, w = m.index(line, i+w) {
+		out = append(out, Span{i, i + w})
 	}
 	return out
 }
 
-func indexFold(s, sub string) int {
-	// Fold only where it is safe to do so byte-wise; fall back to a scan.
+// indexFold finds sub in s ignoring case, returning where it starts and how
+// wide it is there.
+func indexFold(s, sub string) (at, width int) {
+	if sub == "" {
+		return 0, 0
+	}
+	// Where lowering leaves both sides the same length, every rune folds
+	// within its own width and the fast byte search is exact.
 	ls, lsub := strings.ToLower(s), strings.ToLower(sub)
 	if len(ls) == len(s) && len(lsub) == len(sub) {
-		return strings.Index(ls, lsub)
+		if i := strings.Index(ls, lsub); i >= 0 {
+			return i, len(sub)
+		}
+		return -1, 0
 	}
 	for i := range s {
-		if len(s)-i < len(sub) {
-			break
-		}
-		if strings.EqualFold(s[i:min(i+len(sub), len(s))], sub) {
-			return i
+		if w, ok := foldPrefix(s[i:], sub); ok {
+			return i, w
 		}
 	}
-	return -1
+	return -1, 0
+}
+
+// foldPrefix reports whether s opens with prefix under case folding, and how
+// many bytes of s that took.
+func foldPrefix(s, prefix string) (int, bool) {
+	n := 0
+	for _, want := range prefix {
+		if n >= len(s) {
+			return 0, false
+		}
+		got, w := utf8.DecodeRuneInString(s[n:])
+		if !foldEqual(got, want) {
+			return 0, false
+		}
+		n += w
+	}
+	return n, true
+}
+
+// foldEqual is the rune-wise half of strings.EqualFold: two runes are the same
+// letter when one is reachable from the other around the fold cycle.
+func foldEqual(a, b rune) bool {
+	if a == b {
+		return true
+	}
+	for f := unicode.SimpleFold(a); f != a; f = unicode.SimpleFold(f) {
+		if f == b {
+			return true
+		}
+	}
+	return false
 }
 
 type fuzzyMatcher struct {
@@ -277,8 +321,8 @@ func (m *fuzzyMatcher) Score(text string) (float64, bool) {
 			return 0, false
 		}
 	}
-	t := newTarget(text, m.fold)
-	if len(t.runes) == 0 {
+	t := newTarget(text, m.fold, false)
+	if len(t.cmp) == 0 {
 		return 0, false
 	}
 	// Tokens are weighted by length, because a short one says little about
@@ -300,7 +344,7 @@ func (m *fuzzyMatcher) Score(text string) (float64, bool) {
 }
 
 func (m *fuzzyMatcher) Spans(line string) []Span {
-	t := newTarget(line, m.fold)
+	t := newTarget(line, m.fold, true)
 	var out []Span
 	for _, tok := range m.tokens {
 		s, pos, ok := t.best(tok, m.fold)
@@ -392,24 +436,37 @@ func boundary(prev, cur charClass) float64 {
 }
 
 type target struct {
-	runes  []rune
 	cmp    []rune // case-folded when folding
-	offs   []int  // byte offset of each rune
-	widths []int
 	class  []charClass
+	offs   []int // byte offset of each rune; nil unless spans were asked for
+	widths []int // byte width of each rune, likewise
 }
 
-func newTarget(s string, fold bool) *target {
-	t := &target{}
-	for i, r := range s {
-		t.runes = append(t.runes, r)
-		t.offs = append(t.offs, i)
-		t.widths = append(t.widths, len(string(r)))
+// newTarget indexes s a rune at a time. Byte offsets are only needed to paint
+// a highlight, so they are built on request: a search scores every block it
+// reads and highlights almost none of them.
+func newTarget(s string, fold, offsets bool) *target {
+	n := utf8.RuneCountInString(s)
+	t := &target{cmp: make([]rune, 0, n), class: make([]charClass, 0, n)}
+	if offsets {
+		t.offs = make([]int, 0, n)
+		t.widths = make([]int, 0, n)
+	}
+	for i := 0; i < len(s); {
+		// Decoding explicitly keeps a byte that is not valid UTF-8 one byte
+		// wide, where the replacement rune "range" hands back would measure
+		// three and put a span past the end of the line.
+		r, w := utf8.DecodeRuneInString(s[i:])
 		t.class = append(t.class, classOf(r))
+		if offsets {
+			t.offs = append(t.offs, i)
+			t.widths = append(t.widths, w)
+		}
 		if fold {
 			r = unicode.ToLower(r)
 		}
 		t.cmp = append(t.cmp, r)
+		i += w
 	}
 	return t
 }
@@ -469,6 +526,10 @@ func (t *target) best(tok []rune, fold bool) (float64, []int, bool) {
 		if bestSpan == len(pat) {
 			break // contiguous; nothing can beat it
 		}
+		// Every start through pos[0] completes at this same end, and so
+		// derives this same match. Resume past it instead of re-deriving it
+		// once per character, which is what made a long line quadratic.
+		start = pos[0]
 	}
 	if bestPos == nil {
 		return 0, nil, false
