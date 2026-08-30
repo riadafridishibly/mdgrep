@@ -303,3 +303,18 @@ func TestExcludeFileIsFoundThroughCommondir(t *testing.T) {
 	})
 	check(t, survivors(t, root, filepath.Join(root, "linked")), []string{"linked/keep.md"})
 }
+
+// The walk can reach a nested repository from above, and it keeps its own
+// rules there too. Which directory the search was started from must not decide
+// whether the outer repository's .gitignore covers the inner one.
+func TestNestedRepositoryIsNotJudgedByTheOuterOneMidWalk(t *testing.T) {
+	root := tree(t, map[string]string{
+		".git/HEAD":           "ref: refs/heads/main\n",
+		".gitignore":          "notes.md\n",
+		"notes.md":            "",
+		"inner/.git/HEAD":     "ref: refs/heads/main\n",
+		"inner/notes.md":      "",
+		"inner/deep/notes.md": "",
+	})
+	check(t, survivors(t, root, root), []string{"inner/deep/notes.md", "inner/notes.md"})
+}

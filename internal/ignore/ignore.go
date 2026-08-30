@@ -25,6 +25,10 @@ var sources = [...]string{".gitignore", ".ignore"}
 // reading a sorted listing.
 var lastSource = slices.Max(sources[:])
 
+// gitDir is the entry that marks a repository root, and it sorts inside the
+// range Enter already scans.
+const gitDir = ".git"
+
 // Matcher answers whether the ignore files above a path leave it out. Patterns
 // are read relative to the file holding them and the nearest file has the last
 // word, so the rules are kept as one layer per directory and asked from the
@@ -173,6 +177,11 @@ func commonDir(gitdir string) string {
 // patterns govern the contents rather than the directory itself, so Enter
 // belongs after Excluded has judged it.
 //
+// A directory holding a .git is a repository of its own, and starts the rules
+// over from its own exclude list. What a walk finds inside it must not depend
+// on whether the walk came from outside it, which is the same rule the climb
+// above the search root follows.
+//
 // entries is the directory listing the walk already holds. Nearly no directory
 // has an ignore file, and looking for one in a listing already in hand beats
 // asking the filesystem for a file that is not there.
@@ -187,20 +196,31 @@ func (f Frame) Enter(dir string, entries []fs.DirEntry) Frame {
 	// of it, and a name spelled with one of them says nothing about what
 	// follows it.
 	var present [len(sources)]bool
-	found := false
+	found, repo := false, false
 	for _, e := range entries {
-		if e.Name() > lastSource {
+		name := e.Name()
+		if name > lastSource {
 			break
 		}
-		if i := slices.Index(sources[:], e.Name()); i >= 0 {
+		if name == gitDir {
+			repo = true
+		}
+		if i := slices.Index(sources[:], name); i >= 0 {
 			present[i], found = true, true
 		}
 	}
-	if !found {
+	if !found && !repo {
 		return f
 	}
 
 	abs := f.m.abs(dir)
+	layers := f.layers
+	if repo {
+		layers = nil
+		if l, ok := compose(abs, excludeFile(abs)); ok {
+			layers = append(layers, l)
+		}
+	}
 	var rules ruleSet
 	for i, ok := range present {
 		if ok {
@@ -208,11 +228,14 @@ func (f Frame) Enter(dir string, entries []fs.DirEntry) Frame {
 		}
 	}
 	if len(rules.rules) == 0 {
-		return f
+		if !repo {
+			return f
+		}
+		return Frame{m: f.m, layers: layers}
 	}
 	// Clipped, so the append copies instead of writing into an array a
 	// sibling frame is still reading.
-	return Frame{m: f.m, layers: append(slices.Clip(f.layers), layer{dir: abs, rules: rules})}
+	return Frame{m: f.m, layers: append(slices.Clip(layers), layer{dir: abs, rules: rules})}
 }
 
 // Excluded reports whether the rules leave path out. path must be an entry of
