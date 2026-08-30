@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"mdgrep/internal/edit"
 	"mdgrep/internal/match"
 	"mdgrep/internal/mdoc"
 	"mdgrep/internal/render"
@@ -63,10 +64,30 @@ Filters
 Selection
       --expand N        climb N ancestor levels from the matched node
       --section         widen to the enclosing heading section
+      --section-body    that section without its heading line
   -B, --before N        include N sibling blocks before
   -A, --after N         include N sibling blocks after
   -C, --context N       shorthand for -B N -A N
       --lines N         pad the result with N raw lines on each side
+
+Editing
+      --check           tick the selected task item (--uncheck, --toggle)
+      --replace TEXT    replace the selected region with TEXT
+      --replace-from FILE
+                        the same, with TEXT read from a file ("-" is stdin)
+      --set-text TEXT   change what the matched node says, keeping the markup
+                        that makes it a heading, an item or a fenced block
+      --delete          remove the selected region
+      --append TEXT     insert TEXT after the selected region
+      --prepend TEXT    insert TEXT before it
+      --multi           edit every match; without it, more than one is an error
+      --dry-run         show the edit, write nothing
+
+An edit rewrites what the same flags would have printed, so the search comes
+first: narrow it until one node is selected, then say what to do with it.
+--check and --set-text act on the matched node itself; --replace, --delete,
+--append and --prepend act on the region --section and --expand widen it to.
+The change is printed unless -q, and every file is written in one atomic go.
 
 Output
   -n, --line-number     number the printed lines (the default)
@@ -115,6 +136,32 @@ type config struct {
 	noIgnore  bool
 	help      bool
 	showVer   bool
+
+	check     bool
+	uncheck   bool
+	toggle    bool
+	del       bool
+	replace   optString
+	replFrom  optString
+	setText   optString
+	appendTo  optString
+	prependTo optString
+	multi     bool
+	dryRun    bool
+}
+
+// optString remembers whether a text flag was given at all, so --replace ""
+// asks for an empty replacement rather than for nothing.
+type optString struct {
+	val string
+	set bool
+}
+
+func (o *optString) String() string { return o.val }
+
+func (o *optString) Set(v string) error {
+	o.val, o.set = v, true
+	return nil
 }
 
 // patternList collects repeated -e flags, which are alternatives to one
@@ -160,6 +207,18 @@ func run() int {
 	bind(func(n string) { fs.BoolVar(&c.unchecked, n, false, "") }, "unchecked", "todo")
 	fs.IntVar(&c.opt.Expand, "expand", 0, "")
 	fs.BoolVar(&c.opt.Section, "section", false, "")
+	fs.BoolVar(&c.opt.Body, "section-body", false, "")
+	fs.BoolVar(&c.check, "check", false, "")
+	fs.BoolVar(&c.uncheck, "uncheck", false, "")
+	fs.BoolVar(&c.toggle, "toggle", false, "")
+	fs.BoolVar(&c.del, "delete", false, "")
+	fs.Var(&c.replace, "replace", "")
+	fs.Var(&c.replFrom, "replace-from", "")
+	fs.Var(&c.setText, "set-text", "")
+	fs.Var(&c.appendTo, "append", "")
+	fs.Var(&c.prependTo, "prepend", "")
+	fs.BoolVar(&c.multi, "multi", false, "")
+	fs.BoolVar(&c.dryRun, "dry-run", false, "")
 	bind(func(n string) { fs.IntVar(&c.opt.Before, n, 0, "") }, "B", "before")
 	bind(func(n string) { fs.IntVar(&c.opt.After, n, 0, "") }, "A", "after")
 	bind(func(n string) { fs.IntVar(&c.context, n, 0, "") }, "C", "context")
@@ -199,6 +258,15 @@ func run() int {
 	}
 	c.opt.Kinds = kinds
 	c.opt.Task = taskFilter(c)
+
+	ed, err := buildEdit(&c)
+	// An edit rewrites one node at a time, so neighbouring hits must not be
+	// folded into a single region the way printing folds them.
+	c.opt.Distinct = ed.Op != edit.OpNone
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+		return 2
+	}
 
 	// The first positional is PATTERN unless -e already supplied one, in which
 	// case every positional is a path. Filters never stand in for a pattern:
@@ -251,6 +319,10 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
 	}
+	if ed.Op != edit.OpNone && useStdin {
+		fmt.Fprintln(os.Stderr, "mdgrep: an edit needs files to write to, not stdin")
+		return 2
+	}
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
@@ -289,10 +361,6 @@ func run() int {
 		emit(doc.Src, search.File(doc, matcher, c.opt))
 	}
 
-	type fileResult struct {
-		src *mdoc.Source
-		res []search.Result
-	}
 	results := make([]fileResult, len(files))
 	var wg sync.WaitGroup
 	jobs := make(chan int)
@@ -316,6 +384,9 @@ func run() int {
 	close(jobs)
 	wg.Wait()
 
+	if ed.Op != edit.OpNone {
+		return runEdits(out, p, results, ed, c)
+	}
 	if c.opt.Rank {
 		// Each file already holds its results best first, so a file is worth
 		// as much as its best one.
@@ -332,6 +403,165 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+type fileResult struct {
+	src *mdoc.Source
+	res []search.Result
+}
+
+// buildEdit reads the editing flags as one operation, and rejects the
+// combinations that would make an edit rewrite something other than what the
+// same flags would have printed.
+func buildEdit(c *config) (edit.Options, error) {
+	var ops []edit.Options
+	add := func(op edit.Op, text string) { ops = append(ops, edit.Options{Op: op, Text: text}) }
+	if c.check {
+		add(edit.OpCheck, "")
+	}
+	if c.uncheck {
+		add(edit.OpUncheck, "")
+	}
+	if c.toggle {
+		add(edit.OpToggle, "")
+	}
+	if c.del {
+		add(edit.OpDelete, "")
+	}
+	if c.replace.set {
+		add(edit.OpReplace, c.replace.val)
+	}
+	if c.replFrom.set {
+		text, err := readText(c.replFrom.val)
+		if err != nil {
+			return edit.Options{}, err
+		}
+		add(edit.OpReplace, text)
+	}
+	if c.setText.set {
+		add(edit.OpSetText, c.setText.val)
+	}
+	if c.appendTo.set {
+		add(edit.OpAppend, c.appendTo.val)
+	}
+	if c.prependTo.set {
+		add(edit.OpPrepend, c.prependTo.val)
+	}
+
+	if len(ops) == 0 {
+		if c.multi || c.dryRun {
+			return edit.Options{}, fmt.Errorf("--multi and --dry-run only mean something with an edit")
+		}
+		return edit.Options{}, nil
+	}
+	if len(ops) > 1 {
+		return edit.Options{}, fmt.Errorf("one edit at a time: %s and %s were both asked for", ops[0].Op, ops[1].Op)
+	}
+	e := ops[0]
+
+	switch {
+	case c.count || c.filesOnly:
+		return e, fmt.Errorf("--%s writes files; -c and -l only report on them", e.Op)
+	case c.opt.Before > 0 || c.opt.After > 0 || c.context > 0 || c.opt.Lines > 0:
+		return e, fmt.Errorf("-A, -B, -C and --lines pad what is printed; they do not select what an edit rewrites")
+	case c.opt.Max > 0:
+		return e, fmt.Errorf("-m caps results; an edit wants every match it selects, or --multi")
+	case e.Op.Node() && (c.opt.Section || c.opt.Body):
+		return e, fmt.Errorf("--%s edits the matched node, so --section has nothing to widen; use --replace", e.Op)
+	}
+	// A checkbox edit is about task items, so it says so on the search's
+	// behalf: the hit climbs to the item owning it the way --task does.
+	switch e.Op {
+	case edit.OpCheck, edit.OpUncheck, edit.OpToggle:
+		if c.opt.Task == search.TaskIgnore {
+			c.opt.Task = search.TaskAny
+		}
+	}
+	return e, nil
+}
+
+func readText(path string) (string, error) {
+	if path == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		return string(data), err
+	}
+	data, err := os.ReadFile(path)
+	return string(data), err
+}
+
+// runEdits plans every file's changes before writing any of them, so a run
+// that cannot be carried out in full leaves nothing behind.
+func runEdits(out *bufio.Writer, p *render.Printer, results []fileResult, e edit.Options, c config) int {
+	total := 0
+	for _, r := range results {
+		total += len(r.res)
+	}
+	switch {
+	case total == 0:
+		return 1
+	case total > 1 && !c.multi:
+		reportAmbiguous(results, total)
+		return 2
+	}
+
+	planned := make([][]edit.Change, len(results))
+	for i, r := range results {
+		if len(r.res) == 0 {
+			continue
+		}
+		changes, err := edit.Plan(r.src, r.res, e)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+			return 2
+		}
+		planned[i] = changes
+	}
+
+	for i, changes := range planned {
+		if len(changes) == 0 {
+			continue
+		}
+		src := results[i].src
+		if !c.dryRun && changed(changes) {
+			if err := edit.Write(src.Path, edit.Apply(src, changes)); err != nil {
+				fmt.Fprintf(os.Stderr, "mdgrep: %s: %v\n", src.Path, err)
+				return 2
+			}
+		}
+		if !c.quiet {
+			p.PrintEdits(src, changes, c.dryRun)
+		}
+	}
+	out.Flush()
+	return 0
+}
+
+func changed(changes []edit.Change) bool {
+	for _, c := range changes {
+		if !c.NoOp {
+			return true
+		}
+	}
+	return false
+}
+
+// reportAmbiguous shows what an edit would have hit, so the next attempt can
+// narrow the search rather than guess at it.
+func reportAmbiguous(results []fileResult, total int) {
+	fmt.Fprintf(os.Stderr, "mdgrep: %d matches; narrow the search or pass --multi\n", total)
+	const shown = 10
+	n := 0
+	for _, r := range results {
+		for _, res := range r.res {
+			if n == shown {
+				fmt.Fprintf(os.Stderr, "  … and %d more\n", total-shown)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "  %s:%d: %s\n", r.src.Path, res.Start+1,
+				strings.TrimSpace(r.src.Line(res.Start)))
+			n++
+		}
+	}
 }
 
 func bestScore(res []search.Result) float64 {

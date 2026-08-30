@@ -176,6 +176,7 @@ code block prints the fences too.
 | --- | --- |
 | `--expand N` | climb N ancestor levels from the matched node |
 | `--section` | widen to the enclosing heading section |
+| `--section-body` | that section without its heading line |
 | `-B`, `--before N` | include N sibling blocks before |
 | `-A`, `--after N` | include N sibling blocks after |
 | `-C`, `--context N` | shorthand for `-B N -A N` |
@@ -194,6 +195,65 @@ mdgrep "canary" notes.md -C2                # two blocks either side
 
 Only the matched node is highlighted; expansion lines are printed plain, so it
 stays obvious what actually matched.
+
+### Editing
+
+The same flags that decide what gets printed decide what gets rewritten. Narrow
+the search until it selects the node you mean, then say what to do with it.
+
+| Flag | Meaning |
+| --- | --- |
+| `--check` / `--uncheck` / `--toggle` | set the state of the selected task item |
+| `--replace TEXT` | replace the selected region with TEXT |
+| `--replace-from FILE` | the same, with TEXT read from a file (`-` is stdin) |
+| `--set-text TEXT` | change what the node says, keeping its markup |
+| `--delete` | remove the selected region |
+| `--append TEXT` / `--prepend TEXT` | insert TEXT after or before it |
+| `--multi` | edit every match |
+| `--dry-run` | show the edit, write nothing |
+
+```bash
+mdgrep "ship the docs" --check                  # - [ ] ship the docs -> - [x]
+mdgrep --anchor "#setup" --set-text "Install"   # ## Setup -> ## Install
+mdgrep "^## Changelog" --section-body --replace-from new.md
+mdgrep "obsolete note" --delete
+```
+
+**More than one match is an error.** mdgrep prints what it would have hit and
+writes nothing, so a search that was vaguer than you thought cannot quietly
+rewrite the wrong bullet:
+
+```
+$ mdgrep "ship" --check notes.md
+mdgrep: 2 matches; narrow the search or pass --multi
+  notes.md:5: - [ ] ship the docs
+  notes.md:7: - [ ] ship the tests
+```
+
+`--multi` lifts that rule and edits every match.
+
+`--check`, `--uncheck`, `--toggle` and `--set-text` act on **the matched node**;
+`--replace`, `--delete`, `--append` and `--prepend` act on **the region**, which
+is what `--section`, `--section-body` and `--expand` widen. The flags that only
+pad the printed output — `-A`, `-B`, `-C`, `--lines` — are refused with an edit,
+as are `-c`, `-l` and `-m`.
+
+`--set-text` keeps the markdown that makes a node what it is: a heading keeps
+its level and any trailing `{#id}`, a setext underline is resized to the new
+text, a list item keeps its marker and its checkbox, a fenced block keeps its
+fences. `--replace` keeps nothing — it is the whole region, verbatim.
+
+Inserted text is indented to match the node it lands beside, so a bullet
+appended to a nested item becomes its sibling, and a blank line is added on
+whichever side needs one to keep two blocks apart — never inside a list or a
+table, where a blank line would loosen the list or break the table.
+
+The change is printed as the lines that went and the lines that came, unless
+`-q`; `--json` reports `path`, `op`, `start`, `end`, `old`, `new` and `applied`.
+A checkbox that already reads the way you asked is reported as unchanged and
+the file is left untouched. Each file is written through a temporary file in
+the same directory and renamed over the original, so an interrupted run cannot
+leave a half-written document behind.
 
 ### Output
 
@@ -246,6 +306,7 @@ main.go              CLI: flags, file walking, worker pool
 internal/mdoc        goldmark AST → line-addressable block tree, sections, breadcrumbs, anchors
 internal/match       regexp / literal / fuzzy matchers and highlight spans
 internal/search      block selection, anchor lookup, tightening, promotion, expansion, merging
+internal/edit        planning and applying rewrites, atomic writes
 internal/render      terminal and JSON output
 ```
 
