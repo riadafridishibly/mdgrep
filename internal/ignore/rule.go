@@ -144,28 +144,39 @@ func (p *probe) segments() []string {
 // segment that spans more than one: in the middle it stands for zero or more
 // directories, so "a/**/b" matches "a/b"; at the end it names what is inside a
 // directory rather than the directory, so "a/**" does not match "a" alone.
+//
+// Every other segment consumes exactly one, so only the newest "**" is worth
+// remembering: anything an earlier one could have swallowed the newest one can
+// swallow instead. Widening that one on a mismatch tries every division of the
+// path a pattern allows in a pass over the path, where trying each "**"
+// separately costs a search of the ways they could divide it.
 func matchSegments(pattern, name []string) bool {
-	for len(pattern) > 0 {
-		if pattern[0] == "**" {
-			if len(pattern) == 1 {
-				return len(name) > 0
+	p, n := 0, 0
+	starP, starN := -1, 0
+	for n < len(name) {
+		switch {
+		case p < len(pattern) && pattern[p] == "**":
+			if p == len(pattern)-1 {
+				return true // trailing "**", and there is something inside
 			}
-			for i := 0; i <= len(name); i++ {
-				if matchSegments(pattern[1:], name[i:]) {
-					return true
-				}
-			}
+			starP, starN = p, n
+			p++
+		case p < len(pattern) && segmentMatches(pattern[p], name[n]):
+			p, n = p+1, n+1
+		case starP >= 0:
+			starN++
+			p, n = starP+1, starN
+		default:
 			return false
 		}
-		if len(name) == 0 {
-			return false
-		}
-		if ok, err := path.Match(pattern[0], name[0]); err != nil || !ok {
-			return false
-		}
-		pattern, name = pattern[1:], name[1:]
 	}
-	return len(name) == 0
+	// The path ran out. A "**" still standing wanted a segment it never got.
+	return p == len(pattern)
+}
+
+func segmentMatches(pattern, name string) bool {
+	ok, err := path.Match(pattern, name)
+	return ok && err == nil
 }
 
 func hasMeta(s string) bool {
