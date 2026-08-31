@@ -32,8 +32,8 @@ Matching
       --anchor          PATTERN is a heading link anchor: "#the-foo-bar",
                         "the-foo-bar" or "docs/x.md#the-foo-bar"
       --anchor-style LIST
-                        conventions to try, from github, gitlab, python,
-                        kramdown, pandoc, loose (default all)
+                        github (gh), gitlab (gl), python (mkdocs, pymd),
+                        kramdown (jekyll), pandoc, loose (any); default all
   -w, --word-regexp     match only whole words
   -v, --invert-match    select the nodes that do not match
   -i, --ignore-case     force case-insensitive
@@ -44,8 +44,9 @@ Nodes match against the markdown as written, so "^## " finds every
 second-level heading and -F "**bold**" finds the emphasis markers.
 
 Filters
-  -k, --kind LIST       heading, item, list, paragraph, code, quote, table,
-                        row, cell, html, frontmatter
+  -k, --kind LIST       heading (h, head), item (bullet, li), list,
+                        paragraph (para, p), code, quote, table, row, cell,
+                        html, frontmatter (fm)
       --task            only task list items ("- [ ]" and "- [x]")
       --unchecked       only unticked task items (alias --todo)
       --checked         only ticked task items (alias --done)
@@ -137,6 +138,7 @@ apart where plain runs them into one passage, and both report a refusal in
 their own shape. Colour is off when stdout is not a terminal, NO_COLOR is set
 or TERM=dumb.
 
+A short flag takes its value attached or apart: -C2 and -C 2 are the same.
 Exit status is 0 when something matched, 1 when nothing did, 2 on error.
 `
 

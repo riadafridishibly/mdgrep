@@ -562,7 +562,7 @@ func permute(fs *flag.FlagSet, args []string) []string {
 			flags = append(flags, a)
 			continue
 		}
-		// Accept the attached form people type for grep: -C2, -x1, -s0.7.
+		// Accept the attached form people type for grep: -C2, -m5, -kheading.
 		if !strings.HasPrefix(a, "--") && len(name) > 1 && fs.Lookup(name) == nil {
 			if f := fs.Lookup(name[:1]); f != nil && !isBoolFlag(f) {
 				flags = append(flags, "-"+name[:1], name[1:])
