@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/riadafridishibly/mdgrep/internal/edit"
 	"github.com/riadafridishibly/mdgrep/internal/ignore"
@@ -149,7 +150,9 @@ Output
                         would otherwise end with, since that line follows it
       --outline         one indented line per heading: what is in these files
                         rather than where something appears. Takes paths and
-                        no PATTERN, and is the cheapest view of a tree
+                        no PATTERN, and is the cheapest view of a tree. One
+                        line per heading is all it prints, so it takes none of
+                        the flags under Selection either
       --separator STR   what to print between two results of a file (default
                         "--"); pass "" to leave them out
       --truncate N      print at most N lines of any one result, then a line
@@ -159,12 +162,13 @@ Output
       --format WHEN     plain (default), compact or json. compact prints the
                         path once per file and then one tab-separated record
                         per result — "start[-end] kind text", with newlines
-                        escaped so a record is always one line — which costs a
-                        fraction of the same results as json. Neither machine
-                        format is coloured, and compact leaves out the
-                        breadcrumb and the score; ask for json if you want them.
-                        One record is one node: two hits that touch are printed
-                        as one passage in plain output and kept apart here
+                        escaped so a record is always one line, path included
+                        — which costs a fraction of the same results as json.
+                        Neither machine format is coloured, and compact leaves
+                        out the breadcrumb and the score; ask for json if you
+                        want them. One record is one node: two hits that touch
+                        are printed as one passage in plain output and kept
+                        apart here
       --json            one JSON object per result (same as --format json)
   -c, --count           print only the number of results per file
   -l, --files-with-matches
@@ -207,7 +211,7 @@ type config struct {
 	outline   bool
 	color     string
 	jsonOut   bool
-	format    string
+	format    optString
 	count     bool
 	filesOnly bool
 	quiet     bool
@@ -341,7 +345,7 @@ func run() int {
 	fs.IntVar(&c.truncate, "truncate", 0, "")
 	fs.StringVar(&c.color, "color", "auto", "")
 	fs.BoolVar(&c.jsonOut, "json", false, "")
-	fs.StringVar(&c.format, "format", "", "")
+	fs.Var(&c.format, "format", "")
 	bind(func(n string) { fs.BoolVar(&c.count, n, false, "") }, "c", "count")
 	bind(func(n string) { fs.BoolVar(&c.filesOnly, n, false, "") }, "l", "files-with-matches")
 	bind(func(n string) { fs.BoolVar(&c.quiet, n, false, "") }, "q", "quiet")
@@ -1035,9 +1039,6 @@ func taskFilter(c config) search.TaskFilter {
 	return search.TaskIgnore
 }
 
-// parseFormat folds --format and --json into one answer. --json predates
-// --format and stays as its own spelling of the same thing, so the pair is
-// only an error when the two disagree.
 // separator reads --separator, where leaving the flag out is the default rule
 // and passing an empty string is the deliberate choice to have none.
 func separator(o optString) string {
@@ -1080,11 +1081,17 @@ func dashed(name string) string {
 	return "--" + name
 }
 
-func parseFormat(spec string, jsonFlag, outline bool) (render.Format, error) {
-	if outline && (spec != "" || jsonFlag) {
+// parseFormat folds --format and --json into one answer. --json predates
+// --format and stays as its own spelling of the same thing, so the pair is
+// only an error when the two disagree.
+func parseFormat(spec optString, jsonFlag, outline bool) (render.Format, error) {
+	if outline && (spec.set || jsonFlag) {
 		return 0, fmt.Errorf("--outline is its own format; drop --format or --json")
 	}
-	if spec == "" {
+	// spec.set, not spec.val: --format with an empty value is what an unset
+	// shell variable expands to, and it names a format nobody has rather than
+	// standing for the flag being left out.
+	if !spec.set {
 		switch {
 		case outline:
 			return render.Outline, nil
@@ -1093,12 +1100,12 @@ func parseFormat(spec string, jsonFlag, outline bool) (render.Format, error) {
 		}
 		return render.Plain, nil
 	}
-	f, ok := formats[strings.ToLower(strings.TrimSpace(spec))]
+	f, ok := formats[strings.ToLower(strings.TrimSpace(spec.val))]
 	if !ok {
-		return 0, fmt.Errorf("unknown format %q: plain, compact or json", spec)
+		return 0, fmt.Errorf("unknown format %q: plain, compact or json", spec.val)
 	}
 	if jsonFlag && f != render.JSON {
-		return 0, fmt.Errorf("--json and --format %s ask for different output", spec)
+		return 0, fmt.Errorf("--json and --format %s ask for different output", spec.val)
 	}
 	return f, nil
 }
@@ -1156,7 +1163,10 @@ func helpSections() []helpSection {
 }
 
 func isHelpTitle(line string) bool {
-	if line == "" || !unicode.IsUpper(rune(line[0])) {
+	// The whole first rune, not its leading byte: 0xC3 opens most of the
+	// accented Latin letters and is 'Ã' read on its own, which is upper case.
+	first, _ := utf8.DecodeRuneInString(line)
+	if line == "" || !unicode.IsUpper(first) {
 		return false
 	}
 	for _, r := range line {

@@ -181,10 +181,11 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 //
 // The text is escaped so a record is always one line, which is the whole point
 // of the format — a reader splits on newline and then on tab, and a path is
-// the line that has no tab in it.
+// the line that has no tab in it. The path is escaped for the same reason: a
+// filename may hold a tab or a newline, and the format has to survive one.
 func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
 	p.wroteAny = true
-	fmt.Fprintln(p.W, src.Path)
+	fmt.Fprintln(p.W, escape(src.Path))
 	for _, r := range results {
 		end, cut := p.cap(r.Start, r.End)
 		text := strings.Join(src.Lines(r.Start, end), "\n")

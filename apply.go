@@ -421,10 +421,18 @@ type docCache struct {
 	docs  map[string]*mdoc.Doc
 	info  map[string]os.FileInfo
 	order []string
+	// alias maps a spelling that reached a file already held under another
+	// name to that name, so the second entry to use it costs a map lookup
+	// rather than another stat and another walk of order.
+	alias map[string]string
 }
 
 func newDocCache() *docCache {
-	return &docCache{docs: map[string]*mdoc.Doc{}, info: map[string]os.FileInfo{}}
+	return &docCache{
+		docs:  map[string]*mdoc.Doc{},
+		info:  map[string]os.FileInfo{},
+		alias: map[string]string{},
+	}
 }
 
 // get answers with the parsed file and the name the plan is holding it under.
@@ -437,12 +445,19 @@ func (d *docCache) get(path string) (*mdoc.Doc, string, error) {
 	if doc, ok := d.docs[path]; ok {
 		return doc, path, nil
 	}
+	// An alias answers with the name it stands for, never with itself, or the
+	// changes of two spellings would be gathered in two places and the file
+	// written twice.
+	if seen, ok := d.alias[path]; ok {
+		return d.docs[seen], seen, nil
+	}
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, "", err
 	}
 	for _, seen := range d.order {
 		if os.SameFile(fi, d.info[seen]) {
+			d.alias[path] = seen
 			return d.docs[seen], seen, nil
 		}
 	}

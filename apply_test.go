@@ -445,3 +445,31 @@ func TestApplyTakesOneFileNamedTwoWaysAsOneFile(t *testing.T) {
 		}
 	})
 }
+
+// Two spellings of one path are one file, however many entries use either. The
+// second and later entries under an alias answer from the cache, and they have
+// to answer with the name the plan first used or their changes would be
+// gathered apart from the rest and the file written twice.
+func TestApplyGathersEverySpellingOfOnePath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(path, []byte(tasks), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(dir, ".", "notes.md")
+	p := plan(t,
+		fmt.Sprintf(`{"path":%q,"match":"ship the docs","op":"check"}`, path),
+		fmt.Sprintf(`{"path":%q,"match":"ship the tests","op":"check"}`, alias),
+		fmt.Sprintf(`{"path":%q,"match":"^## Setup","op":"set-text","text":"Install"}`, alias),
+	)
+	_, stderr, code := capture(t, "--apply", p)
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	got := read(t, path)
+	for _, want := range []string{"- [x] ship the docs", "- [x] ship the tests", "## Install"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q; every entry has to reach one copy of the file:\n%s", want, got)
+		}
+	}
+}
