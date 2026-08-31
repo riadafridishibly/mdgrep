@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # The fuzz job looks for input nobody has thought of yet, which is a thing
+    # to do overnight rather than in front of a review.
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      # The walk collects from several goroutines at once and the search runs a
+      # worker per core, so the race detector is the point of this job rather
+      # than an extra on it.
+      - name: test
+        run: go test -race ./...
+
+  fuzz:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The seed corpus runs with every other test. This is the part that looks
+      # for new input, and the targets are found rather than listed, so a new
+      # one is fuzzed by writing it and nothing else.
+      - name: fuzz
+        run: |
+          for pkg in $(go list ./...); do
+            for target in $(go test -list 'Fuzz.*' "$pkg" | grep '^Fuzz' || true); do
+              echo "== $pkg $target"
+              go test "$pkg" -run "$target" -fuzz "$target\$" -fuzztime 30s
+            done
+          done
