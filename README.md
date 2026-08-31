@@ -262,8 +262,31 @@ for a single edit.
 ### Pipelines
 
 A search that narrows in steps is a pipeline: find the section, then the list
-inside it, then the open boxes in that list. `--stream` is what one stage
-hands the next.
+inside it, then the open boxes in that list. `--then` joins two searches into
+one run.
+
+```bash
+mdgrep "^## Release" --section docs \
+  --then -k list \
+  --then --todo --check --multi
+```
+
+Everything after `--then` is another search, and each stage searches only
+inside the nodes the stage before it selected. A stage is a whole mdgrep
+command line of its own, so it takes the matching, filter and selection flags
+and reads them exactly as it would on its own — which is the point of spelling
+a stage as a command line rather than inventing a query syntax for one. The
+word is read before the flags are, the way a shell reads `|` before the
+commands around it.
+
+Each stage does one job. Only the first names the files, so a word on a later
+stage is its pattern and a stage that writes none selects by its filters
+alone; only the last stage prints or writes, and it is the one the output and
+editing flags belong to. A flag given where it would be read and then change
+nothing is refused by name.
+
+The same pipeline can cross processes instead. `--stream` is what one stage
+hands the next:
 
 ```bash
 mdgrep "^## Release" --section docs --stream \
@@ -300,6 +323,11 @@ of "read stdin", and naming it alongside a file is refused rather than half
 honoured. Markdown arriving on stdin is still read as markdown — the header
 line is what tells the two apart.
 
+`--then` and a pipe of `--stream` describe the same pipeline, one with a
+process boundary in it and one without, and they answer alike. `--then` parses
+each file once for the whole run and can say which stage of it narrowed to
+nothing; `--stream` can be saved, replayed, and passed between machines.
+
 A stream is a stage in the middle, so it takes no edit, and none of `-c`,
 `-l`, `-q`, `--truncate`, `--color` or the line-number and breadcrumb flags:
 each would be read and then change nothing the next stage receives.
@@ -330,6 +358,7 @@ the search and one lost to a typo would come back as "no matches".
 | `--format WHEN` | `plain` (default), `compact`, `json` or `stream` |
 | `--json` | one JSON object per result (same as `--format json`) |
 | `--stream` | hand the regions to the next mdgrep (same as `--format stream`) |
+| `--then` | narrow what the search before it selected; everything after it is another search |
 | `-c`, `--count` | number of results per file |
 | `-l`, `--files-with-matches` | names of matching files only |
 | `-m`, `--max-count N` | stop after N results per file |
@@ -442,7 +471,7 @@ mdgrep --help anchor    # or any flag name
 ## Development
 
 ```
-main.go              a run end to end: parse, walk, search in a worker pool
+main.go              a run end to end: parse, walk, the stages of a search
 internal/cli         the flags, and the search, edit and output they describe
 internal/help        the manual, and the rules for printing one part of it
 internal/walk        the files a search reads: paths, extensions, stdin

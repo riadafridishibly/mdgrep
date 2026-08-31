@@ -105,8 +105,24 @@ planned against the files as read, so none can match what another writes, and
 the plan applies whole or not at all.
 
 Pipelines
+      --then            narrow what the search before it selected: everything
+                        after this word is another search, and the last one is
+                        the one that prints or writes
       --stream          hand one region per result to the next mdgrep rather
                         than printing them; same as --format stream
+
+  $ mdgrep "^## Release" --section docs \
+      --then -k list --then --todo --check --multi
+
+Each stage of a --then is a whole mdgrep command line of its own, so it takes
+the Matching, Filters and Selection flags and reads them as this manual says
+it does. Only the first stage names files, so a word on a later one is its
+pattern and a stage that writes none selects by its filters alone; only the
+last stage prints or writes, and it is the one the Output and Editing flags
+belong to. The word itself is read before the flags are, the way a shell reads
+a pipe before the commands around it.
+
+A pipeline can cross processes instead, which is what --stream is for:
 
   $ mdgrep "^## Release" --section docs --stream \
       | mdgrep "" -k list --stream \
@@ -124,7 +140,8 @@ one takes no PATH: a PATH means stdin goes unread, the way grep reads one, and
 "-" is the explicit spelling of "read stdin". Markdown on stdin is still read
 as markdown, since the header is what tells the two apart. A stream is a stage
 in the middle, so it takes no edit and none of the flags that decorate a
-printed page.
+printed page. The two spellings describe the same pipeline, one with a process
+boundary in it and one without, and they answer alike.
 
 Output
   -n, --line-number     number the printed lines (the default)

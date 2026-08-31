@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/riadafridishibly/mdgrep/internal/cli"
 	"github.com/riadafridishibly/mdgrep/internal/edit"
 	"github.com/riadafridishibly/mdgrep/internal/help"
+	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 	"github.com/riadafridishibly/mdgrep/internal/plan"
 	"github.com/riadafridishibly/mdgrep/internal/render"
@@ -51,18 +53,59 @@ func main() {
 	os.Exit(run())
 }
 
+// stage is one step of a search: a command line of its own, and the matcher
+// its flags describe. Every stage but the last narrows the document down for
+// the one after it; the last stage is the one that prints or writes.
+type stage struct {
+	c  *cli.Config
+	fs *flag.FlagSet
+	m  match.Matcher
+}
+
+// staged names which stage of a pipeline a message is about, since several of
+// them look alike on the line and a complaint about a flag has to say which
+// search it was given to. A run of one stage is the whole command, and says
+// nothing about stages at all.
+func staged(i, n int, err error) error {
+	if n == 1 {
+		return err
+	}
+	return fmt.Errorf("stage %d of %d: %w", i+1, n, err)
+}
+
 func run() int {
-	c, fs, err := cli.Parse(os.Args[1:])
+	lines, err := cli.Stages(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
 	}
-	if c.Help.Asked() {
+	stages := make([]*stage, len(lines))
+	for i, args := range lines {
+		c, fs, err := cli.Parse(args)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", staged(i, len(lines), err), help.Hint)
+			return 2
+		}
+		stages[i] = &stage{c: c, fs: fs}
+	}
+	first, last := stages[0], stages[len(stages)-1]
+	// Every stage is held to its place before anything dispatches on what it
+	// was given, so a pipeline cannot be talked into a plan, or into printing
+	// halfway along, by a flag that only the run as a whole could honour.
+	if len(stages) > 1 {
+		for i, st := range stages {
+			if err := cli.StageFlags(st.fs, i, len(stages)); err != nil {
+				fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", staged(i, len(stages), err), help.Hint)
+				return 2
+			}
+		}
+	}
+	if first.c.Help.Asked() {
 		// --help=editing names its topic outright. Bare --help leaves it to
 		// the one positional still standing, if there is one.
-		topic := c.Help.Topic()
-		if topic == "" && fs.NArg() == 1 {
-			topic = helpTopic(os.Args[1:], fs.Arg(0))
+		topic := first.c.Help.Topic()
+		if topic == "" && first.fs.NArg() == 1 {
+			topic = helpTopic(lines[0], first.fs.Arg(0))
 		}
 		text, err := help.Text(topic)
 		if err != nil {
@@ -72,58 +115,68 @@ func run() int {
 		fmt.Fprint(os.Stdout, text)
 		return 0
 	}
-	if c.ShowVer {
+	if first.c.ShowVer {
 		fmt.Fprintf(os.Stdout, "mdgrep %s\n", buildVersion())
 		return 0
 	}
-	format, err := c.Format()
+	// The last stage is the one anybody reads, so it is the one that says what
+	// the output looks like and what the run does to the files it selected.
+	format, err := last.c.Format()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
 	}
-	if err := c.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
-		return 2
+	for i, st := range stages {
+		if err := st.c.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", staged(i, len(stages), err))
+			return 2
+		}
 	}
 	// A stream is checked before anything dispatches on it, because the flags
 	// it cannot honour include the ones that would take the run elsewhere.
 	if format == render.Stream {
-		if err := cli.StreamFlags(fs); err != nil {
+		if err := cli.StreamFlags(last.fs); err != nil {
 			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 			return 2
 		}
 	}
 	// A plan is a whole run of its own: it names its files, its searches and
 	// its edits, so nothing below this point has anything left to work out.
-	if _, given := c.Apply.Value(); given {
-		return plan.Run(c, fs, format)
+	if _, given := last.c.Apply.Value(); given {
+		return plan.Run(last.c, last.fs, format)
 	}
-	if c.Outline {
-		if err := cli.OutlineFlags(fs); err != nil {
+	if last.c.Outline {
+		if err := cli.OutlineFlags(last.fs); err != nil {
 			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 			return 2
 		}
 		// --outline is a question about structure, so it fills in the search a
 		// caller would otherwise spell out: every heading, matched by nothing
 		// in particular. Either half can still be overridden.
-		if c.Kinds == "" {
-			c.Kinds = "heading"
+		if last.c.Kinds == "" {
+			last.c.Kinds = "heading"
 		}
 	}
-	kinds, err := cli.ParseKinds(c.Kinds)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
-		return 2
+	for i, st := range stages {
+		kinds, err := cli.ParseKinds(st.c.Kinds)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", staged(i, len(stages), err))
+			return 2
+		}
+		st.c.Opt.Kinds = kinds
+		st.c.Opt.Task = st.c.TaskFilter()
+		// A stage that hands its nodes on keeps them apart: each is a region
+		// of its own for the next stage to look inside, and two run together
+		// would offer that stage a node neither of them selected.
+		st.c.Opt.Distinct = true
 	}
-	c.Opt.Kinds = kinds
-	c.Opt.Task = c.TaskFilter()
 
-	ed, err := c.Edit()
+	ed, err := last.c.Edit()
 	// Neighbouring hits are run together for a person reading the page as one
 	// passage, and kept apart for everyone else: an edit rewrites each node on
 	// its own, a machine format is counted and iterated over, an outline is one
 	// line per heading, and -c is a tally of nodes.
-	c.Opt.Distinct = ed.Op != edit.OpNone || format != render.Plain || c.Count
+	last.c.Opt.Distinct = ed.Op != edit.OpNone || format != render.Plain || last.c.Count
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
@@ -133,27 +186,36 @@ func run() int {
 	// case every positional is a path. Filters never stand in for a pattern:
 	// an empty one matches everything, so "mdgrep '' docs --todo" scopes a
 	// filter to a directory the way grep would.
-	paths := fs.Args()
-	if len(c.Patterns) == 0 {
+	paths := first.fs.Args()
+	if len(first.c.Patterns) == 0 {
 		switch {
-		case c.Outline:
+		case first.c.Outline:
 			// An outline names no pattern, so every positional is a path.
-			c.Patterns = cli.PatternList{""}
-		case fs.NArg() == 0:
+			first.c.Patterns = cli.PatternList{""}
+		case first.fs.NArg() == 0:
 			fmt.Fprintf(os.Stderr, "mdgrep: missing PATTERN\n%s\n", help.Hint)
 			return 2
 		default:
-			c.Patterns, paths = cli.PatternList{fs.Arg(0)}, paths[1:]
+			first.c.Patterns, paths = cli.PatternList{first.fs.Arg(0)}, paths[1:]
+		}
+	}
+	for i, st := range stages[1:] {
+		if err := stagePattern(st); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", staged(i+1, len(stages), err), help.Hint)
+			return 2
 		}
 	}
 
-	matcher, err := c.Matcher()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
-		return 2
+	for i, st := range stages {
+		st.m, err = st.c.Matcher()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", staged(i, len(stages), err))
+			return 2
+		}
 	}
+	matcher := last.m
 
-	files, useStdin, unread, err := walk.Files(paths, c.Exts(), c.Hidden, c.NoIgnore)
+	files, useStdin, unread, err := walk.Files(paths, first.c.Exts(), first.c.Hidden, first.c.NoIgnore)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
@@ -203,7 +265,7 @@ func run() int {
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
-	p := c.Printer(out, format)
+	p := last.c.Printer(out, format)
 	p.Begin()
 
 	found := false
@@ -213,10 +275,10 @@ func run() int {
 		}
 		found = true
 		switch {
-		case c.Quiet:
-		case c.FilesOnly:
+		case last.c.Quiet:
+		case last.c.FilesOnly:
 			fmt.Fprintln(out, src.Path)
-		case c.Count:
+		case last.c.Count:
 			fmt.Fprintf(out, "%s:%d\n", src.Path, len(res))
 		default:
 			p.Print(src, res, matcher)
@@ -225,7 +287,7 @@ func run() int {
 
 	if useStdin {
 		doc := mdoc.Parse("<stdin>", stdinData)
-		emit(doc.Src, search.File(doc, matcher, c.Opt))
+		emit(doc.Src, pipeline(doc, stages, nil))
 	}
 
 	results := make([]report.File, len(files))
@@ -241,11 +303,10 @@ func run() int {
 					continue
 				}
 				doc := mdoc.Parse(files[i], data)
-				// Scope is the one option that differs per file, since it is
-				// the earlier stage's answer about that file and no other.
-				opt := c.Opt
-				opt.Scope = scope.For(files[i])
-				results[i] = report.File{Src: doc.Src, Res: search.File(doc, matcher, opt)}
+				// The scope a stream handed in is the one thing that differs
+				// per file, since it is the earlier stage's answer about that
+				// file and no other.
+				results[i] = report.File{Src: doc.Src, Res: pipeline(doc, stages, scope.For(files[i]))}
 			}
 		})
 	}
@@ -256,9 +317,9 @@ func run() int {
 	wg.Wait()
 
 	if ed.Op != edit.OpNone {
-		return done(runEdits(out, p, results, ed, c))
+		return done(runEdits(out, p, results, ed, last.c))
 	}
-	if c.Opt.Rank {
+	if last.c.Opt.Rank {
 		// Each file already holds its results best first, so a file is worth
 		// as much as its best one.
 		sort.SliceStable(results, func(i, j int) bool {
@@ -274,6 +335,56 @@ func run() int {
 		return done(1)
 	}
 	return done(0)
+}
+
+// pipeline runs one document through every stage in turn. A stage searches
+// only inside the regions the stage before it selected, and the last stage's
+// results are the run's. A stage that selects nothing ends the file there,
+// since a later stage has nothing left to look inside.
+func pipeline(doc *mdoc.Doc, stages []*stage, scope []search.Region) []search.Result {
+	for _, st := range stages[:len(stages)-1] {
+		opt := st.c.Opt
+		opt.Scope = scope
+		res := search.File(doc, st.m, opt)
+		if len(res) == 0 {
+			return nil
+		}
+		scope = regions(res)
+	}
+	last := stages[len(stages)-1]
+	opt := last.c.Opt
+	opt.Scope = scope
+	return search.File(doc, last.m, opt)
+}
+
+// regions is what one stage hands the next: the span of each result, which is
+// the node that matched together with whatever --section or --expand widened
+// it by, and nothing about the text.
+func regions(res []search.Result) []search.Region {
+	out := make([]search.Region, len(res))
+	for i, r := range res {
+		out[i] = search.Region{Start: r.Start, End: r.End}
+	}
+	return out
+}
+
+// stagePattern reads the positionals of a stage that is not the first one.
+// Only the first stage names files, so a word here is the pattern and can be
+// nothing else -- and a stage that writes none searches for the empty pattern,
+// which matches every node its filters admit. The first stage has to spell
+// that "" out, since there a bare word could be a path.
+func stagePattern(st *stage) error {
+	switch {
+	case len(st.c.Patterns) > 0 && st.fs.NArg() > 0:
+		return fmt.Errorf("-e gave this stage its pattern and a stage names no files, so %q has nowhere to go", st.fs.Arg(0))
+	case st.fs.NArg() > 1:
+		return fmt.Errorf("a stage names no files, so it takes one PATTERN at most, not %d words", st.fs.NArg())
+	case st.fs.NArg() == 1:
+		st.c.Patterns = cli.PatternList{st.fs.Arg(0)}
+	case len(st.c.Patterns) == 0:
+		st.c.Patterns = cli.PatternList{""}
+	}
+	return nil
 }
 
 // runEdits plans every file's changes and stages every file beside itself

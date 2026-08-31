@@ -28,9 +28,9 @@ Intro text.
 - [ ] delta task
 `
 
-// stage runs one stage of a pipeline: what an earlier stage wrote arrives on
+// runStage runs one stage of a pipeline: what an earlier stage wrote arrives on
 // stdin, and what this one writes comes back for the next.
-func stage(t *testing.T, stdin string, args ...string) (out, errOut string, code int) {
+func runStage(t *testing.T, stdin string, args ...string) (out, errOut string, code int) {
 	t.Helper()
 	onStdin(t, stdin)
 	return capture(t, args...)
@@ -49,7 +49,7 @@ func TestStreamNarrowsThroughEveryStage(t *testing.T) {
 		t.Fatalf("stage 1 = %q, want a region %s", first, want)
 	}
 
-	second, stderr, code := stage(t, first, "", "-k", "list", "--stream")
+	second, stderr, code := runStage(t, first, "", "-k", "list", "--stream")
 	if code != 0 {
 		t.Fatalf("stage 2 exit %d: %s", code, stderr)
 	}
@@ -59,7 +59,7 @@ func TestStreamNarrowsThroughEveryStage(t *testing.T) {
 		}
 	}
 
-	third, stderr, code := stage(t, second, "", "--todo")
+	third, stderr, code := runStage(t, second, "", "--todo")
 	if code != 0 {
 		t.Fatalf("stage 3 exit %d: %s", code, stderr)
 	}
@@ -82,8 +82,8 @@ func TestStreamEndsInAnEdit(t *testing.T) {
 	path := doc(t, pipedDoc)
 
 	first, _, _ := capture(t, "^## Some header", "--section", path, "--stream")
-	second, _, _ := stage(t, first, "", "-k", "list", "--stream")
-	_, stderr, code := stage(t, second, "", "--todo", "--check", "--multi")
+	second, _, _ := runStage(t, first, "", "-k", "list", "--stream")
+	_, stderr, code := runStage(t, second, "", "--todo", "--check", "--multi")
 	if code != 0 {
 		t.Fatalf("edit exit %d: %s", code, stderr)
 	}
@@ -111,11 +111,11 @@ func TestStreamAdmitsOnlyWholeNodes(t *testing.T) {
 	// Line 8 alone is one item of a list that runs from 7 to 9.
 	one := `{"mdgrep":1}` + "\n" + `{"path":"` + path + `","start":8,"end":8}` + "\n"
 
-	item, _, code := stage(t, one, "", "-k", "item")
+	item, _, code := runStage(t, one, "", "-k", "item")
 	if code != 0 || !strings.Contains(item, "alpha task") {
 		t.Errorf("the item the region holds should still match: exit %d, %q", code, item)
 	}
-	list, _, code := stage(t, one, "", "-k", "list")
+	list, _, code := runStage(t, one, "", "-k", "list")
 	if code != 1 {
 		t.Errorf("a list straddling the region should not match: exit %d, %q", code, list)
 	}
@@ -133,7 +133,7 @@ func TestStreamHeaderIsWrittenWithoutResults(t *testing.T) {
 	if strings.TrimSpace(out) != `{"mdgrep":1}` {
 		t.Errorf("empty stream = %q, want the header alone", out)
 	}
-	if _, _, code := stage(t, out, "", "--todo"); code != 1 {
+	if _, _, code := runStage(t, out, "", "--todo"); code != 1 {
 		t.Errorf("an empty stream selects nothing: exit = %d, want 1", code)
 	}
 }
@@ -141,7 +141,7 @@ func TestStreamHeaderIsWrittenWithoutResults(t *testing.T) {
 // Markdown on stdin is still markdown. The header is what tells the two
 // apart, so a document keeps arriving as one.
 func TestMarkdownOnStdinIsStillMarkdown(t *testing.T) {
-	out, _, code := stage(t, pipedDoc, "alpha task")
+	out, _, code := runStage(t, pipedDoc, "alpha task")
 	if code != 0 || !strings.Contains(out, "alpha task") {
 		t.Fatalf("exit %d, out %q", code, out)
 	}
@@ -157,7 +157,7 @@ func TestStreamBesideAPathIsRefused(t *testing.T) {
 	path := doc(t, pipedDoc)
 	first, _, _ := capture(t, "^## Some header", "--section", path, "--stream")
 
-	_, stderr, code := stage(t, first, "", "-", path)
+	_, stderr, code := runStage(t, first, "", "-", path)
 	if code != 2 || !strings.Contains(stderr, "takes no PATH") {
 		t.Errorf("exit %d, stderr %q", code, stderr)
 	}
@@ -169,7 +169,7 @@ func TestStreamIsReadWhenStdinIsNamed(t *testing.T) {
 	path := doc(t, pipedDoc)
 	first, _, _ := capture(t, "^## Some header", "--section", path, "--stream")
 
-	out, stderr, code := stage(t, first, "", "-", "--todo")
+	out, stderr, code := runStage(t, first, "", "-", "--todo")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
@@ -225,7 +225,7 @@ func TestBrokenStreamRefusesTheRun(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, stderr, code := stage(t, tt.text, "")
+			_, stderr, code := runStage(t, tt.text, "")
 			if code != 2 {
 				t.Fatalf("exit = %d, want 2", code)
 			}
