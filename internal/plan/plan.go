@@ -426,14 +426,14 @@ type docCache struct {
 	// rather than another stat.
 	alias map[string]string
 	// sameSize groups the names held so far by what two spellings of one file
-	// must agree on, so a new spelling is compared against the few files that
-	// could be it rather than against every file the plan has touched.
+	// almost always agree on, so a new spelling is compared against the few
+	// files that could be it before it is compared against all of them.
 	sameSize map[fileID][]string
 }
 
 // fileID is the part of a file's identity a map can be keyed on. It does not
 // decide identity -- os.SameFile does that -- it only says which held files
-// are worth asking about.
+// are worth asking about first.
 type fileID struct {
 	size int64
 	mod  int64
@@ -466,12 +466,9 @@ func (d *docCache) get(path string) (*mdoc.Doc, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	id := idOf(fi)
-	for _, seen := range d.sameSize[id] {
-		if os.SameFile(fi, d.info[seen]) {
-			d.alias[path] = seen
-			return d.docs[seen], seen, nil
-		}
+	if seen := d.heldAs(fi); seen != "" {
+		d.alias[path] = seen
+		return d.docs[seen], seen, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -480,6 +477,35 @@ func (d *docCache) get(path string) (*mdoc.Doc, string, error) {
 	doc := mdoc.Parse(path, data)
 	d.docs[path], d.info[path] = doc, fi
 	d.order = append(d.order, path)
+	id := idOf(fi)
 	d.sameSize[id] = append(d.sameSize[id], path)
 	return doc, path, nil
+}
+
+// heldAs is the name the plan already holds this file under, or "" if it has
+// not read the file yet. Size and modification time are what two spellings of
+// one file agree on in the ordinary case, so they narrow the question to a
+// handful of candidates -- but the two spellings are stat'd at different
+// moments, and anything writing the file in between leaves them disagreeing.
+// A file the bucket misses is therefore not yet a file the plan has not seen:
+// the rest have to be asked before it can be read a second time, since taking
+// one file for two plans each change against the original and writes the file
+// twice, the second write undoing the first.
+func (d *docCache) heldAs(fi os.FileInfo) string {
+	id := idOf(fi)
+	for _, seen := range d.sameSize[id] {
+		if os.SameFile(fi, d.info[seen]) {
+			return seen
+		}
+	}
+	for _, seen := range d.order {
+		// The bucket has answered for these already.
+		if idOf(d.info[seen]) == id {
+			continue
+		}
+		if os.SameFile(fi, d.info[seen]) {
+			return seen
+		}
+	}
+	return ""
 }

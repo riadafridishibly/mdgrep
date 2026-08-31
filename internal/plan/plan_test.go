@@ -75,3 +75,41 @@ func TestDocCacheHoldsOneFileUnderOneName(t *testing.T) {
 		t.Errorf("order = %v, want one file", d.order)
 	}
 }
+
+// The bucket a new spelling is looked up in is keyed on the size and time the
+// file was last written, and the two spellings are stat'd at different
+// moments. Anything writing the file in between puts them in different
+// buckets, and a plan that took the miss for an unread file would write the
+// file twice, the second write undoing the first.
+func TestDocCacheFindsAFileThatChangedBetweenTwoSpellings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.md")
+	if err := os.WriteFile(path, []byte("# One\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.md")
+	if err := os.Symlink(path, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	d := newDocCache()
+	if _, held, err := d.get(path); err != nil || held != path {
+		t.Fatalf("get(%q) = %q, %v", path, held, err)
+	}
+	// Somebody else writes the file: its size and mtime both move, so the
+	// stat behind the second spelling lands in a bucket the first is not in.
+	if err := os.WriteFile(path, []byte("# One\n\nand more\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, held, err := d.get(link)
+	if err != nil {
+		t.Fatalf("get(%q): %v", link, err)
+	}
+	if held != path {
+		t.Errorf("get(%q) = %q, want it held under %q", link, held, path)
+	}
+	if len(d.order) != 1 {
+		t.Errorf("order = %v, want one file: the plan read it twice", d.order)
+	}
+}
