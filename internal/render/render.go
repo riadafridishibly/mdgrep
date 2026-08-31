@@ -12,6 +12,7 @@ import (
 	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 	"github.com/riadafridishibly/mdgrep/internal/search"
+	"github.com/riadafridishibly/mdgrep/internal/stream"
 )
 
 const (
@@ -39,7 +40,15 @@ const (
 	// appear": one indented line per heading, which is the cheapest useful
 	// view of a tree.
 	Outline
+	// Stream is what one mdgrep hands the next in a pipe: the file and the
+	// span of each result, and none of the text, because the stage reading it
+	// opens the file itself.
+	Stream
 )
+
+// machine reports whether a format is read by a program rather than by a
+// person: never coloured, and never run into prose.
+func (f Format) machine() bool { return f == Compact || f == JSON || f == Stream }
 
 type Printer struct {
 	W           *bufio.Writer
@@ -62,10 +71,20 @@ type Printer struct {
 // paint colours a string for a person. Compact and JSON are read by programs,
 // so they are never coloured; Plain and Outline are read by people.
 func (p *Printer) paint(code, s string) string {
-	if !p.Color || s == "" || p.Format == Compact || p.Format == JSON {
+	if !p.Color || s == "" || p.Format.machine() {
 		return s
 	}
 	return code + s + reset
+}
+
+// Begin writes whatever a format puts before its first result. A stream says
+// it is one up front, and says so even when nothing matches: an empty stream
+// is a search that ran and selected nothing, where an empty pipe is no search
+// at all.
+func (p *Printer) Begin() {
+	if p.Format == Stream {
+		stream.WriteHeader(p.W)
+	}
 }
 
 // Print writes one file's results. src supplies the lines, m highlights them.
@@ -74,6 +93,9 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 		return
 	}
 	switch p.Format {
+	case Stream:
+		p.printStream(results)
+		return
 	case JSON:
 		p.printJSON(src, results, m)
 		return
@@ -286,6 +308,15 @@ type jsonResult struct {
 	// TruncatedBefore to start.
 	TruncatedBefore int `json:"truncated_before,omitempty"`
 	TruncatedAfter  int `json:"truncated_after,omitempty"`
+}
+
+// printStream writes one region per result: where it is, and nothing about
+// what it says. The next stage reads the file for the rest.
+func (p *Printer) printStream(results []search.Result) {
+	for _, r := range results {
+		p.wroteAny = true
+		stream.WriteRegion(p.W, r.Path, r.Start, r.End)
+	}
 }
 
 func (p *Printer) printJSON(src *mdoc.Source, results []search.Result, m match.Matcher) {

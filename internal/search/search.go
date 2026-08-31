@@ -47,6 +47,30 @@ type Options struct {
 	// wants them separate, because each is a node it could be asked to
 	// rewrite on its own.
 	Distinct bool
+	// Scope restricts the search to these line ranges, as an earlier stage of
+	// a pipeline selected them: a block lying outside every one of them is not
+	// a candidate. Nil searches the whole file.
+	Scope []Region
+}
+
+// Region is a range of lines a search may look at: zero-based and inclusive,
+// the way a Result reports one. It is what one stage of a pipeline hands the
+// next, in place of the text that stage printed.
+type Region struct{ Start, End int }
+
+// inScope reports whether a block lies inside the regions an earlier stage
+// selected. A block straddling a boundary is out: narrowing hands on the
+// nodes the last stage selected, not the ones it would have cut in half.
+func inScope(b *mdoc.Block, scope []Region) bool {
+	if scope == nil {
+		return true
+	}
+	for _, r := range scope {
+		if r.Start <= b.Start && b.End <= r.End {
+			return true
+		}
+	}
+	return false
 }
 
 // Result is one region of a file to print.
@@ -148,7 +172,7 @@ func anchorHits(doc *mdoc.Doc, a *Anchor, opt Options) []hit {
 	anchors := doc.HeadingAnchors(a.styles)
 	var out []hit
 	for i, h := range doc.Headings {
-		if h.Located && a.matches(doc.Src.Path, anchors[i]) {
+		if h.Located && inScope(h, opt.Scope) && a.matches(doc.Src.Path, anchors[i]) {
 			out = append(out, hit{h, 1})
 		}
 	}
@@ -162,6 +186,9 @@ func matchHits(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
 	matched := map[*mdoc.Block]float64{}
 	for _, b := range doc.Blocks {
 		if !b.Located {
+			continue
+		}
+		if !inScope(b, opt.Scope) {
 			continue
 		}
 		if !searchable(b, opt) {

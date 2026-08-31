@@ -104,6 +104,28 @@ carries its own search, so it takes no PATTERN and no PATH. Every entry is
 planned against the files as read, so none can match what another writes, and
 the plan applies whole or not at all.
 
+Pipelines
+      --stream          hand one region per result to the next mdgrep rather
+                        than printing them; same as --format stream
+
+  $ mdgrep "^## Release" --section docs --stream \
+      | mdgrep "" -k list --stream \
+      | mdgrep "" --todo --check --multi
+
+A stream is a header line and then one JSON object per result: "path",
+"start" and "end", 1-based and inclusive, and nothing about the text. The
+stage reading it opens each file again and searches only inside those lines,
+so a line number is still the line's own, a breadcrumb is still the whole
+trail, and the last stage of a pipeline holds real paths and can edit them.
+Narrowing goes by containment: a node lying inside a region is a candidate and
+a node straddling one is not, though --section and --expand may still widen a
+candidate back out past it. A stream names its own files, so a stage reading
+one takes no PATH: a PATH means stdin goes unread, the way grep reads one, and
+"-" is the explicit spelling of "read stdin". Markdown on stdin is still read
+as markdown, since the header is what tells the two apart. A stream is a stage
+in the middle, so it takes no edit and none of the flags that decorate a
+printed page.
+
 Output
   -n, --line-number     number the printed lines (the default)
   -N, --no-line-number  drop the line-number gutter
@@ -115,7 +137,7 @@ Output
       --truncate N      print at most N lines of a result, keeping the
                         matched node, then a count of what was held back
       --color WHEN      auto, always or never (default auto)
-      --format WHEN     plain (default), compact or json
+      --format WHEN     plain (default), compact, json or stream
       --json            one JSON object per result (same as --format json)
   -c, --count           print only the number of results per file
   -l, --files-with-matches
@@ -128,8 +150,9 @@ Output
       --no-ignore       search past .gitignore, .ignore, .git/info/exclude
                         and the skip list (node_modules, vendor and friends)
   -h, --help [TOPIC]    the whole manual, or one part of it: matching,
-                        filters, selection, editing, plans, output. A flag
-                        name works too, as in "mdgrep --help anchor"
+                        filters, selection, editing, plans, pipelines,
+                        output. A flag name works too, as in
+                        "mdgrep --help anchor"
   -V, --version         print the version and exit
 
 compact is one tab-separated record per result — "start[-end] kind text

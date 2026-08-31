@@ -23,6 +23,7 @@ import (
 	"github.com/riadafridishibly/mdgrep/internal/render"
 	"github.com/riadafridishibly/mdgrep/internal/report"
 	"github.com/riadafridishibly/mdgrep/internal/search"
+	"github.com/riadafridishibly/mdgrep/internal/stream"
 	"github.com/riadafridishibly/mdgrep/internal/walk"
 )
 
@@ -83,6 +84,14 @@ func run() int {
 	if err := c.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
+	}
+	// A stream is checked before anything dispatches on it, because the flags
+	// it cannot honour include the ones that would take the run elsewhere.
+	if format == render.Stream {
+		if err := cli.StreamFlags(fs); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
+			return 2
+		}
 	}
 	// A plan is a whole run of its own: it names its files, its searches and
 	// its edits, so nothing below this point has anything left to work out.
@@ -161,6 +170,32 @@ func run() int {
 		}
 		return code
 	}
+	// A pipe carrying a stream names its own files, so it stands in for the
+	// walk rather than being parsed as a document: the regions say which lines
+	// of those files are still in play, and everything downstream of here --
+	// line numbers, breadcrumbs, and the path an edit writes to -- comes from
+	// the file itself rather than from the text an earlier stage printed.
+	var scope *stream.Scope
+	var stdinData []byte
+	if useStdin {
+		stdinData, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: stdin: %v\n", err)
+			return 2
+		}
+		sc, isStream, err := stream.Parse(stdinData)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+			return 2
+		}
+		if isStream {
+			if len(files) > 0 {
+				fmt.Fprintln(os.Stderr, "mdgrep: a stream names its own files, so it takes no PATH")
+				return 2
+			}
+			scope, files, useStdin, stdinData = sc, sc.Paths, false, nil
+		}
+	}
 	if ed.Op != edit.OpNone && useStdin {
 		fmt.Fprintln(os.Stderr, "mdgrep: an edit needs files to write to, not stdin")
 		return 2
@@ -169,6 +204,7 @@ func run() int {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	p := c.Printer(out, format)
+	p.Begin()
 
 	found := false
 	emit := func(src *mdoc.Source, res []search.Result) {
@@ -188,12 +224,7 @@ func run() int {
 	}
 
 	if useStdin {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "mdgrep: stdin: %v\n", err)
-			return 2
-		}
-		doc := mdoc.Parse("<stdin>", data)
+		doc := mdoc.Parse("<stdin>", stdinData)
 		emit(doc.Src, search.File(doc, matcher, c.Opt))
 	}
 
@@ -210,7 +241,11 @@ func run() int {
 					continue
 				}
 				doc := mdoc.Parse(files[i], data)
-				results[i] = report.File{Src: doc.Src, Res: search.File(doc, matcher, c.Opt)}
+				// Scope is the one option that differs per file, since it is
+				// the earlier stage's answer about that file and no other.
+				opt := c.Opt
+				opt.Scope = scope.For(files[i])
+				results[i] = report.File{Src: doc.Src, Res: search.File(doc, matcher, opt)}
 			}
 		})
 	}

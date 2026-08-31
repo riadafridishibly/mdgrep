@@ -40,6 +40,7 @@ type Config struct {
 	Outline    bool
 	Color      string
 	JsonOut    bool
+	StreamOut  bool
 	FormatFlag OptString
 	Count      bool
 	FilesOnly  bool
@@ -249,6 +250,7 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 	fs.IntVar(&c.Truncate, "truncate", 0, "")
 	fs.StringVar(&c.Color, "color", "auto", "")
 	fs.BoolVar(&c.JsonOut, "json", false, "")
+	fs.BoolVar(&c.StreamOut, "stream", false, "")
 	fs.Var(&c.FormatFlag, "format", "")
 	bind(func(n string) { fs.BoolVar(&c.Count, n, false, "") }, "c", "count")
 	bind(func(n string) { fs.BoolVar(&c.FilesOnly, n, false, "") }, "l", "files-with-matches")
@@ -690,6 +692,39 @@ func OutlineFlags(fs *flag.FlagSet) error {
 	return nil
 }
 
+// streamIgnores names the flags that describe a page a stream does not print:
+// how a result is decorated, and the shapes that stand a tally or a file name
+// where a result would have gone. A stream is a list of regions, so each of
+// these would be read, understood, and then change nothing the next stage sees.
+var streamIgnores = map[string]bool{
+	"truncate": true, "no-breadcrumb": true, "separator": true, "color": true,
+	"n": true, "line-number": true, "N": true, "no-line-number": true,
+	"c": true, "count": true, "l": true, "files-with-matches": true,
+	"q": true, "quiet": true,
+}
+
+// streamEdits names every flag that writes. A stream is one stage of a
+// pipeline handing its nodes to the next, and a file rewritten halfway along
+// one is a search whose later stages read something nobody asked for.
+var streamEdits = map[string]bool{
+	"check": true, "uncheck": true, "toggle": true, "delete": true,
+	"replace": true, "replace-from": true, "set-text": true, "set-text-from": true,
+	"append": true, "append-from": true, "prepend": true, "prepend-from": true,
+	"multi": true, "expect": true, "dry-run": true, "apply": true,
+}
+
+// StreamFlags refuses the flags a stream cannot honour, the way OutlineFlags
+// refuses the ones an outline has nothing to widen.
+func StreamFlags(fs *flag.FlagSet) error {
+	if named := Given(fs, func(name string) bool { return streamEdits[name] }); named != "" {
+		return fmt.Errorf("a stream hands its nodes to the next stage, so %s belongs on that stage rather than this one", named)
+	}
+	if named := Given(fs, func(name string) bool { return streamIgnores[name] }); named != "" {
+		return fmt.Errorf("a stream is a list of regions, so there is nothing for %s to say about it", named)
+	}
+	return nil
+}
+
 // Given lists the flags a run was given that match want, spelled the way the
 // caller would have typed them, and empty when none were: the shape a mode
 // that refuses the flags it cannot honour needs to name them.
@@ -708,12 +743,16 @@ func Given(fs *flag.FlagSet, want func(name string) bool) string {
 	return strings.Join(named, ", ")
 }
 
-// parseFormat folds --format and --json into one answer. --json predates
-// --format and stays as its own spelling of the same thing, so the pair is
-// only an error when the two disagree.
-func parseFormat(spec OptString, jsonFlag, outline bool) (render.Format, error) {
-	if outline && (spec.set || jsonFlag) {
-		return 0, fmt.Errorf("--outline is its own format; drop --format or --json")
+// parseFormat folds --format, --json and --stream into one answer. --json
+// predates --format and stays as its own spelling of the same thing, and
+// --stream is the same shorthand for the format a pipeline runs on, so a pair
+// is only an error when the two disagree.
+func parseFormat(spec OptString, jsonFlag, streamFlag, outline bool) (render.Format, error) {
+	if outline && (spec.set || jsonFlag || streamFlag) {
+		return 0, fmt.Errorf("--outline is its own format; drop --format, --json or --stream")
+	}
+	if jsonFlag && streamFlag {
+		return 0, fmt.Errorf("--json prints the results and --stream hands them on; ask for one")
 	}
 	// spec.set, not spec.val: --format with an empty value is what an unset
 	// shell variable expands to, and it names a format nobody has rather than
@@ -724,21 +763,27 @@ func parseFormat(spec OptString, jsonFlag, outline bool) (render.Format, error) 
 			return render.Outline, nil
 		case jsonFlag:
 			return render.JSON, nil
+		case streamFlag:
+			return render.Stream, nil
 		}
 		return render.Plain, nil
 	}
 	f, ok := formats[strings.ToLower(strings.TrimSpace(spec.val))]
 	if !ok {
-		return 0, fmt.Errorf("unknown format %q: plain, compact or json", spec.val)
+		return 0, fmt.Errorf("unknown format %q: plain, compact, json or stream", spec.val)
 	}
 	if jsonFlag && f != render.JSON {
 		return 0, fmt.Errorf("--json and --format %s ask for different output", spec.val)
+	}
+	if streamFlag && f != render.Stream {
+		return 0, fmt.Errorf("--stream and --format %s ask for different output", spec.val)
 	}
 	return f, nil
 }
 
 var formats = map[string]render.Format{
-	"plain": render.Plain, "compact": render.Compact, "json": render.JSON,
+	"plain": render.Plain, "compact": render.Compact,
+	"json": render.JSON, "stream": render.Stream,
 }
 
 // ParseKinds reads --kind's list into the set a search filters by. A name no
@@ -792,7 +837,7 @@ func useColor(when string) bool {
 // Format is the output shape the format flags name, with --json and --outline
 // read as the shorthands for one that they are.
 func (c *Config) Format() (render.Format, error) {
-	return parseFormat(c.FormatFlag, c.JsonOut, c.Outline)
+	return parseFormat(c.FormatFlag, c.JsonOut, c.StreamOut, c.Outline)
 }
 
 // Exts is the set of file extensions a walk should read.

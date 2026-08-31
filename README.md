@@ -259,6 +259,63 @@ lines. Every failure is reported against its number, so one round trip says
 everything the next plan has to fix. `--dry-run` and `-q` mean what they mean
 for a single edit.
 
+### Pipelines
+
+A search that narrows in steps is a pipeline: find the section, then the list
+inside it, then the open boxes in that list. `--stream` is what one stage
+hands the next.
+
+```bash
+mdgrep "^## Release" --section docs --stream \
+  | mdgrep "" -k list --stream \
+  | mdgrep "" --todo --check --multi
+```
+
+What travels down the pipe is not the text a stage printed but the regions it
+selected — a header line, then one JSON object per result:
+
+```
+$ mdgrep "^## Some header" --section . --stream
+{"mdgrep":1}
+{"path":"b.md","start":1,"end":3}
+{"path":"demo.md","start":3,"end":13}
+```
+
+`path`, `start` and `end`, 1-based and inclusive, and nothing about the text.
+The stage reading it opens each file again and searches only inside those
+lines. That is what a pipe of text cannot do: text loses the path, restarts
+the line numbers at 1, and mixes the files together under headings that parse
+as markdown of their own. Regions lose none of it, so a line number is still
+the line's own, a breadcrumb is still the whole trail, and the last stage of a
+pipeline holds real paths — which is why an edit can stand at the end of one.
+
+Narrowing goes by containment: a node the region holds whole is a candidate, a
+node straddling it is not. Widening is the other direction and still works,
+so `--section` on a scoped heading prints the section it names.
+
+A stream names its own files, so a stage reading one takes no `PATH`. A `PATH`
+means stdin is not read at all, the way grep reads one, so a stage that names
+a file searches that file rather than the stream; `-` is the explicit spelling
+of "read stdin", and naming it alongside a file is refused rather than half
+honoured. Markdown arriving on stdin is still read as markdown — the header
+line is what tells the two apart.
+
+A stream is a stage in the middle, so it takes no edit, and none of `-c`,
+`-l`, `-q`, `--truncate`, `--color` or the line-number and breadcrumb flags:
+each would be read and then change nothing the next stage receives.
+
+A stream is a file like any other, so it can be kept and replayed:
+
+```bash
+mdgrep "" docs --todo --stream > open-boxes.jsonl
+mdgrep "" --section < open-boxes.jsonl
+```
+
+A search that matched nothing still writes its header, so an empty stream says
+the search ran; an empty pipe says there was none. A malformed record refuses
+the run rather than being skipped, since the regions are the whole subject of
+the search and one lost to a typo would come back as "no matches".
+
 ### Output
 
 | Flag | Meaning |
@@ -270,8 +327,9 @@ for a single edit.
 | `--separator STR` | what goes between two results of a file (default `--`) |
 | `--truncate N` | print at most N lines of any one result |
 | `--color WHEN` | `auto` (default), `always`, `never` |
-| `--format WHEN` | `plain` (default), `compact` or `json` |
+| `--format WHEN` | `plain` (default), `compact`, `json` or `stream` |
 | `--json` | one JSON object per result (same as `--format json`) |
+| `--stream` | hand the regions to the next mdgrep (same as `--format stream`) |
 | `-c`, `--count` | number of results per file |
 | `-l`, `--files-with-matches` | names of matching files only |
 | `-m`, `--max-count N` | stop after N results per file |
@@ -396,6 +454,7 @@ internal/edit        planning and applying rewrites, atomic writes
 internal/plan        --apply: a plan of edits read as JSON, applied per file
 internal/render      terminal, compact and JSON output
 internal/report      why a run was refused, in whichever format was asked for
+internal/stream      --stream: the regions one mdgrep hands the next in a pipe
 ```
 
 GFM is on, so tables, task lists, strikethrough and autolinks parse; front
