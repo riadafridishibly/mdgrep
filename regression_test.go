@@ -202,6 +202,7 @@ func TestApplyRefusalIsAlwaysJSONWhenAskedFor(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
+	named := false
 	for line := range strings.SplitSeq(strings.TrimSpace(stderr), "\n") {
 		if line == "" {
 			continue
@@ -211,9 +212,15 @@ func TestApplyRefusalIsAlwaysJSONWhenAskedFor(t *testing.T) {
 			t.Errorf("stderr line is not JSON: %q", line)
 			continue
 		}
-		if _, ok := rec["entry"]; !ok {
-			t.Errorf("refusal record names no entry: %q", line)
+		if _, ok := rec["entry"]; ok {
+			named = true
 		}
+	}
+	// The run closes with a record about the run rather than about one entry,
+	// so not every line names one -- but the entry that could not be carried
+	// out has to be somewhere a reader can find it.
+	if !named {
+		t.Errorf("no refusal record names the entry that failed:\n%s", stderr)
 	}
 }
 

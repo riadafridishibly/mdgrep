@@ -164,7 +164,7 @@ func matchHits(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
 		if !b.Located {
 			continue
 		}
-		if opt.Kinds != nil && !opt.Kinds[b.Kind] {
+		if !searchable(b, opt) {
 			continue
 		}
 		// Blocks are matched against the markdown as written, so anchors,
@@ -199,14 +199,41 @@ func matchHits(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
 	return out
 }
 
+// searchable reports whether a block is one the kind filter admits. A bullet's
+// text lives in a child block, so those children have to be scored for a
+// search for items to find anything -- but they are admitted on their parent's
+// account, and promote is what decides whether they earned it.
+func searchable(b *mdoc.Block, opt Options) bool {
+	if opt.Kinds == nil || opt.Kinds[b.Kind] {
+		return true
+	}
+	return opt.Kinds[mdoc.KindItem] && insideItem(b)
+}
+
+// insideItem reports whether b is the text of a list item rather than a block
+// standing on its own.
+func insideItem(b *mdoc.Block) bool {
+	return (b.Kind == mdoc.KindParagraph || b.Kind == mdoc.KindTextBlock) &&
+		b.Parent != nil && b.Parent.Kind == mdoc.KindItem
+}
+
 // promote lifts a hit to the node a reader thinks of as "the match": text
 // inside a list item becomes the whole item, a task filter climbs on to the
 // checkbox item owning the hit, then extra levels climb the tree. ok is false
-// when the task filter rejects the hit.
+// when the task filter rejects the hit, or when the lift did not reach a kind
+// the caller asked for.
 func promote(b *mdoc.Block, opt Options) (*mdoc.Block, bool) {
-	if (b.Kind == mdoc.KindParagraph || b.Kind == mdoc.KindTextBlock) &&
-		b.Parent != nil && b.Parent.Kind == mdoc.KindItem {
+	if insideItem(b) {
 		b = b.Parent
+	}
+	// The filter is applied here rather than to the block that carried the
+	// text, because the lift above is the whole reason a bullet's children
+	// were scored. A paragraph that is nobody's bullet did not become one, and
+	// a caller who asked for items is not shown it. Expand climbs afterwards,
+	// so what it widens to is not filtered again: --kind says what matches,
+	// not what a match is widened to.
+	if opt.Kinds != nil && !opt.Kinds[b.Kind] {
+		return nil, false
 	}
 	if opt.Task != TaskIgnore {
 		t := nearestTask(b)

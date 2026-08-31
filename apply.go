@@ -99,11 +99,12 @@ func runApply(c config, fs *flag.FlagSet, format render.Format) int {
 		return 2
 	}
 
+	asJSON := format == render.JSON
 	cache := newDocCache()
 	planned := map[string][]planChange{}
 	refused := 0
 	for i, e := range entries {
-		changes, path, ok := planOne(i+1, e, cache, format == render.JSON)
+		changes, path, ok := planOne(i+1, e, cache, asJSON)
 		if !ok {
 			refused++
 			continue
@@ -111,13 +112,29 @@ func runApply(c config, fs *flag.FlagSet, format render.Format) int {
 		planned[path] = append(planned[path], changes...)
 	}
 	if refused > 0 {
-		fmt.Fprintf(os.Stderr, "mdgrep: %d of %d entries refused; nothing was written\n",
-			refused, len(entries))
+		refuse(asJSON, reason{
+			kind:    "refused",
+			text:    fmt.Sprintf("%d of %d entries refused; nothing was written", refused, len(entries)),
+			entries: refused,
+		})
 		return 2
 	}
 	for _, path := range cache.order {
 		if err := orderChanges(planned[path]); err != nil {
-			fmt.Fprintf(os.Stderr, "mdgrep: %s: %v\n", path, err)
+			refuse(asJSON, reason{
+				kind: "conflict",
+				text: fmt.Sprintf("%s: %v", path, err),
+				path: path,
+			})
+			return 2
+		}
+	}
+
+	// A plan applies whole or not at all, so every file is written beside
+	// itself first and only renamed into place once all of them are there.
+	// A file that cannot be written is then found before any has been.
+	if !c.dryRun {
+		if err := stageAll(cache, planned, asJSON); err != nil {
 			return 2
 		}
 	}
@@ -127,22 +144,78 @@ func runApply(c config, fs *flag.FlagSet, format render.Format) int {
 	p := newPrinter(out, c, format)
 	for _, path := range cache.order {
 		changes := changesOf(planned[path])
-		if len(changes) == 0 {
+		if len(changes) == 0 || c.quiet {
 			continue
 		}
-		src := cache.docs[path].Src
-		if !c.dryRun && changed(changes) {
-			if err := edit.Write(path, edit.Apply(src, changes)); err != nil {
-				fmt.Fprintf(os.Stderr, "mdgrep: %s: %v\n", path, err)
-				return 2
-			}
-		}
-		if !c.quiet {
-			p.PrintEdits(src, changes, c.dryRun)
-		}
+		p.PrintEdits(cache.docs[path].Src, changes, c.dryRun)
 	}
 	out.Flush()
 	return 0
+}
+
+// stageAll writes the new contents of every file the plan touches, then
+// renames them all. Staging is where a write fails in practice -- a directory
+// that cannot be written to, a full disk -- and nothing is renamed until every
+// file has cleared it.
+//
+// The renames themselves are not one operation and cannot be made one, so a
+// failure part way through is reported for what it is: the files already in
+// place are named, because a caller that is told only "refused" would go on
+// believing its plan never ran.
+func stageAll(cache *docCache, planned map[string][]planChange, asJSON bool) error {
+	var staged []*edit.Staged
+	var paths []string
+	discard := func() {
+		for _, s := range staged {
+			s.Discard()
+		}
+	}
+	for _, path := range cache.order {
+		changes := changesOf(planned[path])
+		if len(changes) == 0 || !changed(changes) {
+			continue
+		}
+		s, err := edit.Stage(path, edit.Apply(cache.docs[path].Src, changes))
+		if err != nil {
+			discard()
+			refuse(asJSON, reason{
+				kind: "write",
+				text: fmt.Sprintf("%s: %v; nothing was written", path, err),
+				path: path,
+			})
+			return err
+		}
+		staged, paths = append(staged, s), append(paths, path)
+	}
+	for i, s := range staged {
+		if err := s.Commit(); err != nil {
+			discard()
+			refuse(asJSON, reason{
+				kind:    "write",
+				text:    fmt.Sprintf("%s: %v; %s", paths[i], err, wroteSoFar(paths[:i])),
+				path:    paths[i],
+				written: paths[:i],
+			})
+			return err
+		}
+	}
+	return nil
+}
+
+// refuse reports a refusal that has no matches to show -- a malformed entry, a
+// file that cannot be read or written, two entries over one node -- through the
+// same reader a caller uses for the refusals that do.
+func refuse(asJSON bool, why reason) {
+	reportRefused(os.Stderr, nil, 0, why, asJSON)
+}
+
+// wroteSoFar says which files a failed rename left changed, since a plan that
+// promised all or nothing owes the caller the list when it cannot keep that.
+func wroteSoFar(written []string) string {
+	if len(written) == 0 {
+		return "nothing was written"
+	}
+	return "already written: " + strings.Join(written, ", ")
 }
 
 // applyFlags rejects the flags a plan supersedes, rather than accepting them
@@ -215,17 +288,17 @@ func changesOf(changes []planChange) []edit.Change {
 // way a single edit reports one and answering whether the entry can be carried
 // out at all.
 func planOne(n int, e planEntry, cache *docCache, asJSON bool) ([]planChange, string, bool) {
-	fail := func(err error) ([]planChange, string, bool) {
-		fmt.Fprintf(os.Stderr, "mdgrep: entry %d: %v\n", n, err)
+	fail := func(kind string, err error) ([]planChange, string, bool) {
+		refuse(asJSON, reason{kind: kind, text: err.Error(), entry: n})
 		return nil, "", false
 	}
 	opt, ed, matcher, err := planSearch(e)
 	if err != nil {
-		return fail(err)
+		return fail("entry", err)
 	}
 	doc, path, err := cache.get(e.Path)
 	if err != nil {
-		return fail(err)
+		return fail("file", err)
 	}
 	res := search.File(doc, matcher, opt)
 	expect := optInt{}
@@ -239,7 +312,7 @@ func planOne(n int, e planEntry, cache *docCache, asJSON bool) ([]planChange, st
 	}
 	changes, err := edit.Plan(doc.Src, res, ed)
 	if err != nil {
-		return fail(err)
+		return fail("edit", err)
 	}
 	out := make([]planChange, len(changes))
 	for i, c := range changes {

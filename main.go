@@ -759,6 +759,16 @@ type reason struct {
 	// entry is which entry of an --apply plan was refused, 1-based, and zero
 	// when the refusal is a single edit's own.
 	entry int
+	// path is the file the refusal is about, when it is about a file rather
+	// than an entry: one that cannot be written.
+	path string
+	// written names the files a run left changed before it stopped. A plan
+	// applies whole or not at all, so this is empty except in the one case
+	// that promise cannot be kept: a rename failing part way through.
+	written []string
+	// entries is how many entries a plan refused, on the record that closes
+	// a refused run.
+	entries int
 }
 
 // entryPrefix says which entry of a plan a refusal belongs to, since a plan
@@ -812,6 +822,9 @@ type jsonRefusal struct {
 	Error    string      `json:"error"`
 	Message  string      `json:"message"`
 	Entry    int         `json:"entry,omitempty"`
+	Path     string      `json:"path,omitempty"`
+	Entries  int         `json:"entries,omitempty"`
+	Written  []string    `json:"written,omitempty"`
 	Total    int         `json:"total"`
 	Expected int         `json:"expected,omitempty"`
 	Matches  []jsonMatch `json:"matches"`
@@ -825,6 +838,9 @@ func reportRefusedJSON(w io.Writer, results []fileResult, total int, why reason)
 		Error:    why.kind,
 		Message:  why.text,
 		Entry:    why.entry,
+		Path:     why.path,
+		Entries:  why.entries,
+		Written:  why.written,
 		Total:    total,
 		Expected: why.expected,
 		Matches:  []jsonMatch{},
@@ -1173,11 +1189,6 @@ func parseKinds(spec string) (map[mdoc.Kind]bool, error) {
 			return nil, fmt.Errorf("unknown node kind %q", raw)
 		}
 		out[k] = true
-		// A bullet's text lives in a child block, so keep those searchable and
-		// let promotion lift the hit back up to the item.
-		if k == mdoc.KindItem {
-			out[mdoc.KindParagraph], out[mdoc.KindTextBlock] = true, true
-		}
 	}
 	return out, nil
 }
