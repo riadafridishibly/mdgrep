@@ -132,11 +132,12 @@ Output
   -V, --version         print the version and exit
 
 compact is one tab-separated record per result — "start[-end] kind text
-truncated", newlines escaped — under the path, for a fraction of what json
-costs; json adds the breadcrumb and the score. Both keep two touching nodes
-apart where plain runs them into one passage, and both report a refusal in
-their own shape. Colour is off when stdout is not a terminal, NO_COLOR is set
-or TERM=dumb.
+before after", newlines escaped — under the path, for a fraction of what json
+costs. before and after are the lines --truncate held back on each side, and
+the span is the node's, so the text starts at start plus before. json adds the
+breadcrumb and the score. Both keep two touching nodes apart where plain runs
+them into one passage, and both report a refusal in their own shape. Colour is
+off when stdout is not a terminal, NO_COLOR is set or TERM=dumb.
 
 A short flag takes its value attached or apart: -C2 and -C 2 are the same.
 Everything after -- is a PATTERN or a PATH, dashes and all.

@@ -175,24 +175,27 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 
 // printCompact writes the path once and then one record per result:
 //
-//	start[-end] <TAB> kind <TAB> text <TAB> truncated
+//	start[-end] <TAB> kind <TAB> text <TAB> before <TAB> after
 //
 // The text is escaped so a record is always one line, which is the whole point
 // of the format — a reader splits on newline and then on tab, and a path is
 // the line that has no tab in it. The path is escaped for the same reason: a
 // filename may hold a tab or a newline, and the format has to survive one.
 //
-// truncated is how many lines --truncate held back, so the count is read as a
-// number rather than out of an English notice inside the text, which a
-// document that says the same thing would be indistinguishable from.
+// before and after are how many lines --truncate held back on each side, so
+// the count is read as a number rather than out of an English notice inside
+// the text, which a document that says the same thing would be
+// indistinguishable from. They are two fields and not their sum because the
+// span is the node's and the text is the window: a reader adds before to
+// start to find the line the text begins on, which one total cannot say.
 func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
 	p.wroteAny = true
 	fmt.Fprintln(p.W, Escape(src.Path))
 	for _, r := range results {
 		first, last, before, after := p.window(r)
 		text := strings.Join(src.Lines(first, last), "\n")
-		fmt.Fprintf(p.W, "%s\t%s\t%s\t%d\n",
-			lineSpan(r.Start, r.End), r.Kind, Escape(text), before+after)
+		fmt.Fprintf(p.W, "%s\t%s\t%s\t%d\t%d\n",
+			lineSpan(r.Start, r.End), r.Kind, Escape(text), before, after)
 	}
 }
 
@@ -253,10 +256,13 @@ type jsonResult struct {
 	Checked    *bool    `json:"checked,omitempty"`
 	Breadcrumb []string `json:"breadcrumb,omitempty"`
 	Text       string   `json:"text"`
-	// Truncated counts the lines --truncate held back, so a reader can tell a
-	// short node from a capped one without measuring the text against start
-	// and end.
-	Truncated int `json:"truncated,omitempty"`
+	// TruncatedBefore and TruncatedAfter count the lines --truncate held back
+	// on each side, so a reader can tell a short node from a capped one
+	// without measuring the text against start and end -- and, since start is
+	// the node's and text is the window, can place the window by adding
+	// TruncatedBefore to start.
+	TruncatedBefore int `json:"truncated_before,omitempty"`
+	TruncatedAfter  int `json:"truncated_after,omitempty"`
 }
 
 func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
@@ -270,15 +276,16 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 		}
 		first, last, before, after := p.window(r)
 		enc.Encode(jsonResult{
-			Path:       r.Path,
-			Kind:       string(r.Kind),
-			Score:      r.Score,
-			Start:      r.Start + 1,
-			End:        max(r.End, r.Start) + 1,
-			Checked:    checked,
-			Breadcrumb: r.Breadcrumb,
-			Text:       strings.Join(src.Lines(first, last), "\n"),
-			Truncated:  before + after,
+			Path:            r.Path,
+			Kind:            string(r.Kind),
+			Score:           r.Score,
+			Start:           r.Start + 1,
+			End:             max(r.End, r.Start) + 1,
+			Checked:         checked,
+			Breadcrumb:      r.Breadcrumb,
+			Text:            strings.Join(src.Lines(first, last), "\n"),
+			TruncatedBefore: before,
+			TruncatedAfter:  after,
 		})
 	}
 }

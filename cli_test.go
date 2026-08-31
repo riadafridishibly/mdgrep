@@ -233,8 +233,8 @@ func TestCompactKeepsOneRecordPerLine(t *testing.T) {
 		t.Errorf("the path line should have no tab in it: %q", lines[0])
 	}
 	fields := strings.Split(lines[1], "\t")
-	if len(fields) != 4 {
-		t.Fatalf("want 4 tab-separated fields, got %d: %q", len(fields), lines[1])
+	if len(fields) != 5 {
+		t.Fatalf("want 5 tab-separated fields, got %d: %q", len(fields), lines[1])
 	}
 	if fields[0] != "3-5" {
 		t.Errorf("span = %q, want 3-5", fields[0])
@@ -518,8 +518,8 @@ func TestTruncateStaysParseable(t *testing.T) {
 		t.Errorf("the count belongs in its own field, not in the text:\n%s", stdout)
 	}
 	fields := strings.Split(strings.Split(strings.TrimSpace(stdout), "\n")[1], "\t")
-	if len(fields) != 4 || fields[3] != "4" {
-		t.Errorf("truncated field = %q, want 4 fields ending in 4:\n%s", fields, stdout)
+	if len(fields) != 5 || fields[3] != "0" || fields[4] != "4" {
+		t.Errorf("truncated fields = %q, want 5 fields ending in 0, 4:\n%s", fields, stdout)
 	}
 
 	stdout, _, code = capture(t, "one", path, "--truncate", "3", "--json")
@@ -527,14 +527,15 @@ func TestTruncateStaysParseable(t *testing.T) {
 		t.Fatalf("exit = %d", code)
 	}
 	var got struct {
-		Text      string `json:"text"`
-		Truncated int    `json:"truncated"`
+		Text   string `json:"text"`
+		Before int    `json:"truncated_before"`
+		After  int    `json:"truncated_after"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
 		t.Fatalf("json: %v\n%s", err, stdout)
 	}
-	if got.Truncated != 4 {
-		t.Errorf("truncated = %d, want 4", got.Truncated)
+	if got.Before != 0 || got.After != 4 {
+		t.Errorf("truncated_before, truncated_after = %d, %d, want 0, 4", got.Before, got.After)
 	}
 	if strings.Contains(got.Text, "…") {
 		t.Errorf("json text carries a display marker: %q", got.Text)

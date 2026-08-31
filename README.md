@@ -321,16 +321,20 @@ docs/pruning.md
 
 `--format compact` prints the path once per file and then one tab-separated
 record per result — the line span, the kind, the text with its newlines
-escaped, and the number of lines `--truncate` held back — so a record is
-always one line and the path is the line with no tab in it:
+escaped, and how many lines `--truncate` held back before and after it — so a
+record is always one line and the path is the line with no tab in it:
 
 ```
 $ mdgrep "" pruning.md --format compact
 pruning.md
-1	heading	# Pruning	0
-3	heading	## Winter Pruning	0
-5-6	paragraph	Cut back the leader\nbefore the sap rises.	0
+1	heading	# Pruning	0	0
+3	heading	## Winter Pruning	0	0
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0
 ```
+
+The span is the node's and the text is the window `--truncate` kept, so the
+two counts are what places one in the other: the text begins on the span's
+start plus the lines held back before it.
 
 One record is one node. Two hits that touch — neighbouring checkboxes, headings
 with nothing between them — are printed as a single passage in plain output,
@@ -344,8 +348,8 @@ whenever those two are not what is wanted.
 
 `--json` emits one object per line: `path`, `kind`, `score`, `start`, `end`
 (1-based, inclusive), `breadcrumb`, `text`, plus `checked` on task items and
-`truncated` under `--truncate`. An edit reports `op`, `old`, `new` and
-`applied` instead. A refused edit is one
+`truncated_before` and `truncated_after` under `--truncate`. An edit reports
+`op`, `old`, `new` and `applied` instead. A refused edit is one
 object on stderr — `error` (`ambiguous`, `expect`, or `nomatch` for a plan
 entry), `message`, `total`, `expected`, the capped `matches` list, and `entry`
 under `--apply` — so a JSON caller parses the refusal with the reader it

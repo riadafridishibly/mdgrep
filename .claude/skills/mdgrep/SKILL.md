@@ -45,13 +45,16 @@ counts, `-m N` caps per file, `-q` answers in the exit status alone.
 
 ```
 pruning.md
-1	heading	# Pruning	0
-5-6	paragraph	Cut back the leader\nbefore the sap rises.	0
+1	heading	# Pruning	0	0
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0
 ```
 
-Tab-separated `start[-end] kind text truncated`, newlines escaped — in the path
-too, so a record is one line and a path is the line with no tab. An edit records
-`start[-end] op applied|dry|unchanged new`, an insertion the one line it lands on.
+Tab-separated `start[-end] kind text before after`, newlines escaped — in the
+path too, so a record is one line and a path is the line with no tab. The span
+is the node's, the text is what `--truncate` kept, and `before` and `after` are
+the lines it held back on each side: the text starts at start plus `before`. An
+edit records `start[-end] op applied|dry|unchanged new`, an insertion the one
+line it lands on.
 
 ## Edit
 
