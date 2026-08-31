@@ -101,8 +101,11 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 		if crumb := p.crumb(r); p.Breadcrumb && len(crumb) > 0 {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(crumb)))
 		}
-		end, cut := p.cap(r.Start, r.End)
-		for n := r.Start; n <= end; n++ {
+		first, last, before, after := p.window(r)
+		if before > 0 {
+			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(before)))
+		}
+		for n := first; n <= last; n++ {
 			line := src.Line(n)
 			body := line
 			if n >= r.HitStart && n <= r.HitEnd {
@@ -115,8 +118,8 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 				fmt.Fprintf(p.W, "  %s\n", body)
 			}
 		}
-		if cut > 0 {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(cut)))
+		if after > 0 {
+			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(after)))
 		}
 	}
 }
@@ -134,14 +137,19 @@ func (p *Printer) crumb(r search.Result) []string {
 	return r.Breadcrumb
 }
 
-// cap applies Truncate to one result, returning the last line to print and how
-// many lines were left out.
-func (p *Printer) cap(start, end int) (last, cut int) {
-	if p.Truncate <= 0 || end-start+1 <= p.Truncate {
-		return end, 0
+// window applies Truncate to one result. The cap is a budget of lines, and the
+// matched line is what the caller asked for, so the window keeps the hit and
+// spends what is left on the context above it before the context below.
+func (p *Printer) window(r search.Result) (first, last, before, after int) {
+	if p.Truncate <= 0 || r.End-r.Start+1 <= p.Truncate {
+		return r.Start, r.End, 0, 0
 	}
-	last = start + p.Truncate - 1
-	return last, end - last
+	first = r.Start
+	if r.HitStart > first+p.Truncate-1 {
+		first = min(r.HitStart, r.End-p.Truncate+1)
+	}
+	last = min(first+p.Truncate-1, r.End)
+	return first, last, first - r.Start, r.End - last
 }
 
 func elision(cut int) string {
@@ -187,10 +195,13 @@ func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
 	p.wroteAny = true
 	fmt.Fprintln(p.W, escape(src.Path))
 	for _, r := range results {
-		end, cut := p.cap(r.Start, r.End)
-		text := strings.Join(src.Lines(r.Start, end), "\n")
-		if cut > 0 {
-			text += "\n" + elision(cut)
+		first, last, before, after := p.window(r)
+		text := strings.Join(src.Lines(first, last), "\n")
+		if before > 0 {
+			text = elision(before) + "\n" + text
+		}
+		if after > 0 {
+			text += "\n" + elision(after)
 		}
 		fmt.Fprintf(p.W, "%s\t%s\t%s\n", lineSpan(r.Start, r.End), r.Kind, escape(text))
 	}
@@ -228,9 +239,11 @@ func (p *Printer) printOutline(src *mdoc.Source, results []search.Result) {
 }
 
 // lineSpan numbers a result the way the rest of the output does, 1-based and
-// inclusive, and says a single line once rather than as a span of itself.
+// inclusive. A region that covers no line at all is spelled End < Start, and a
+// span running backwards is one no reader of "start[-end]" can take, so a
+// single line — real or empty — is said once as itself.
 func lineSpan(start, end int) string {
-	if start == end {
+	if end <= start {
 		return strconv.Itoa(start + 1)
 	}
 	return strconv.Itoa(start+1) + "-" + strconv.Itoa(end+1)
@@ -264,17 +277,17 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 		if r.Task {
 			checked = &r.Checked
 		}
-		end, cut := p.cap(r.Start, r.End)
+		first, last, before, after := p.window(r)
 		enc.Encode(jsonResult{
 			Path:       r.Path,
 			Kind:       string(r.Kind),
 			Score:      r.Score,
 			Start:      r.Start + 1,
-			End:        r.End + 1,
+			End:        max(r.End, r.Start) + 1,
 			Checked:    checked,
 			Breadcrumb: r.Breadcrumb,
-			Text:       strings.Join(src.Lines(r.Start, end), "\n"),
-			Truncated:  cut,
+			Text:       strings.Join(src.Lines(first, last), "\n"),
+			Truncated:  before + after,
 		})
 	}
 }

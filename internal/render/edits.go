@@ -90,20 +90,9 @@ func (p *Printer) printEditCompact(src *mdoc.Source, changes []edit.Change, dry 
 	fmt.Fprintln(p.W, escape(src.Path))
 	for _, c := range changes {
 		fmt.Fprintf(p.W, "%s\t%s\t%s\t%s\n",
-			editSpan(c), c.Op,
+			lineSpan(c.Start, c.End), c.Op,
 			editStatus(c.NoOp, dry), escape(strings.Join(c.New, "\n")))
 	}
-}
-
-// editSpan numbers the lines a change covers. An insertion covers none: it is
-// a point, spelled End == Start-1, and printing that as a span would be a
-// range running backwards that no reader of "start[-end]" can take. A point is
-// the line it lands on, said once.
-func editSpan(c edit.Change) string {
-	if c.End < c.Start {
-		return lineSpan(c.Start, c.Start)
-	}
-	return lineSpan(c.Start, c.End)
 }
 
 func editStatus(noop, dry bool) string {

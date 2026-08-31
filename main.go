@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -360,13 +361,9 @@ func run() int {
 		return 2
 	}
 	if c.help {
-		// A topic is only a topic when it is the only thing left on the line.
-		// Appending --help to a command already half typed is how the manual
-		// is usually reached, and the pattern and paths still standing there
-		// are what the caller wanted help about, not the help they wanted.
 		topic := ""
 		if fs.NArg() == 1 {
-			topic = fs.Arg(0)
+			topic = helpTopic(os.Args[1:], fs.Arg(0))
 		}
 		text, err := help(topic)
 		if err != nil {
@@ -703,6 +700,13 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []fileResult, e edit
 			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 			return 2
 		}
+		// A ranked search hands back its results best first, and edit.Apply
+		// walks a file once, forwards: a change out of line order is one it
+		// steps over, leaving a report that claims an edit the file never
+		// took.
+		sort.SliceStable(changes, func(a, b int) bool {
+			return changes[a].Start < changes[b].Start
+		})
 		planned[i] = changes
 	}
 
@@ -1112,6 +1116,26 @@ func parseFormat(spec optString, jsonFlag, outline bool) (render.Format, error) 
 
 var formats = map[string]render.Format{
 	"plain": render.Plain, "compact": render.Compact, "json": render.JSON,
+}
+
+// helpTopic is the word --help was asked about: the one still standing on the
+// line, and standing after the flag. Appending --help to a command already
+// half typed is how the manual is usually reached, and the pattern typed
+// before it is what the caller wanted help about, not the help they wanted.
+func helpTopic(args []string, arg string) string {
+	for i, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		if name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "="); name != "h" && name != "help" {
+			continue
+		}
+		if slices.Contains(args[i+1:], arg) {
+			return arg
+		}
+		return ""
+	}
+	return ""
 }
 
 // help answers --help, either in full or one titled part of it. Splitting the
