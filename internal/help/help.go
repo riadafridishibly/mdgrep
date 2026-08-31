@@ -18,37 +18,40 @@ const Usage = `mdgrep — node-aware grep for markdown
 
 usage: mdgrep [OPTIONS] PATTERN [PATH...]
 
-PATTERN is a regular expression by default. A hit prints the markdown node it
-landed in — the whole bullet, row or paragraph — rather than the single line.
-An empty pattern matches everything, so "mdgrep '' docs --todo" lists every
-open checkbox under docs/.
+A hit prints the markdown node it landed in — the whole bullet, row or
+paragraph — rather than the single line. PATTERN is a regular expression by
+default, and an empty one matches everything. With no PATH, mdgrep reads
+stdin when it is a pipe and searches the current directory otherwise.
 
 Matching
   -e, --regexp PATTERN  use PATTERN as the pattern; repeat for alternatives
   -F, --fixed-strings   match PATTERN literally
-      --fuzzy           fuzzy match: every whitespace-separated token of
-                        PATTERN must appear, loosely and in order. Results
-                        come back best first rather than in file order
+      --fuzzy           fuzzy match: every token of PATTERN must appear,
+                        loosely and in order. Results come back best first
       --min-score N     fuzzy score threshold, 0..1 (default 0.7)
       --anchor          PATTERN is a heading link anchor: "#the-foo-bar",
-                        "the-foo-bar" or "docs/x.md#the-foo-bar" all find the
-                        heading "## The Foo Bar"
+                        "the-foo-bar" or "docs/x.md#the-foo-bar"
       --anchor-style LIST
-                        anchor conventions to try (default all): github,
-                        gitlab,python,kramdown,pandoc,loose
+                        conventions to try, from github, gitlab, python,
+                        kramdown, pandoc, loose (default all)
   -w, --word-regexp     match only whole words
   -v, --invert-match    select the nodes that do not match
   -i, --ignore-case     force case-insensitive
   -s, --case-sensitive  force case-sensitive
-  -S, --smart-case      case-insensitive until PATTERN has an upper-case
-                        letter (the default)
+  -S, --smart-case      fold until PATTERN has an upper-case letter (default)
+
+Nodes match against the markdown as written, so "^## " finds every
+second-level heading and -F "**bold**" finds the emphasis markers.
 
 Filters
-  -k, --kind LIST       only these node kinds: heading,item,paragraph,code,
-                        quote,table,row,html,frontmatter,list
+  -k, --kind LIST       heading, item, list, paragraph, code, quote, table,
+                        row, cell, html, frontmatter
       --task            only task list items ("- [ ]" and "- [x]")
       --unchecked       only unticked task items (alias --todo)
       --checked         only ticked task items (alias --done)
+
+A filter never stands in for the pattern: pass an empty one to select by
+filter alone, as in "mdgrep '' docs --todo".
 
 Selection
       --expand N        climb N ancestor levels from the matched node
@@ -59,99 +62,81 @@ Selection
   -C, --context N       shorthand for -B N -A N
       --lines N         pad the result with N raw lines on each side
 
+-B, -A and -C count sibling blocks, not lines; use --lines for raw lines.
+
 Editing
-      --check           tick the selected task item (--uncheck, --toggle)
-      --replace TEXT    replace the selected region with TEXT
+      --check, --uncheck, --toggle
+                        set the state of the selected task item
       --set-text TEXT   change what the matched node says, keeping the markup
                         that makes it a heading, an item or a fenced block
+      --replace TEXT    replace the selected region with TEXT
       --delete          remove the selected region
       --append TEXT     insert TEXT after the selected region
       --prepend TEXT    insert TEXT before it
       --replace-from FILE, --set-text-from FILE, --append-from FILE,
       --prepend-from FILE
-                        the same four edits with TEXT read from a file ("-"
-                        is stdin), so a multi-line body needs no quoting
+                        the same four edits, TEXT read from a file ("-" is
+                        stdin)
       --multi           edit every match; without it, more than one is an error
       --expect N        edit only if exactly N nodes matched, else fail
       --dry-run         show the edit, write nothing
+
+An edit rewrites what the same flags would have printed: narrow the search to
+one node, then say what to do with it. --check and --set-text act on the
+matched node; --replace, --delete, --append and --prepend act on the region
+--section and --expand widen it to. Every file is written in one atomic go.
+
+Plans
       --apply FILE      carry out a plan of edits read from FILE ("-" is
-                        stdin): one JSON object per line, each with "path",
-                        "match" and "op", plus "text" for replace, set-text,
-                        append and prepend. "kind", "fixed", "expand",
-                        "section", "section-body", "expect" and "multi" say
-                        per entry what the flags of those names say here. A
-                        plan carries its own search, so it takes no PATTERN,
-                        no PATH and no other matching or editing flag. Every
-                        entry is planned against the files as they were read,
-                        so entries are independent: one cannot match what
-                        another writes, and two that reach for the same lines
-                        refuse the plan, as does any entry that cannot be
-                        carried out. Nothing is written unless all of it can be
+                        stdin): one JSON object per line
 
   $ cat plan.jsonl
   {"path":"notes.md","match":"ship the docs","op":"check"}
   {"path":"notes.md","match":"^## Setup","op":"set-text","text":"Install"}
   $ mdgrep --apply plan.jsonl
 
-An edit rewrites what the same flags would have printed, so the search comes
-first: narrow it until one node is selected, then say what to do with it.
---check and --set-text act on the matched node itself; --replace, --delete,
---append and --prepend act on the region --section and --expand widen it to.
-The change is printed unless -q, and every file is written in one atomic go.
-A refused edit lists what it would have hit on stderr, as one JSON object when
---json is set, so the next attempt can be narrower. A plan is refused whole:
-every entry that cannot be carried out is reported against its number, and no
-file is written.
+An entry takes "path", "match" and "op", plus "text" for the edits that write
+one. "kind", "fixed", "expand", "section", "section-body", "expect" and
+"multi" say per entry what the flags of those names say here, and the plan
+carries its own search, so it takes no PATTERN and no PATH. Every entry is
+planned against the files as read, so none can match what another writes, and
+the plan applies whole or not at all.
 
 Output
   -n, --line-number     number the printed lines (the default)
-  -N, --no-line-number
-      --no-breadcrumb   hide the heading trail above each result. The trail
-                        stops at the parent when the result is the heading it
-                        would otherwise end with, since that line follows it
-      --outline         one indented line per heading: what is in these files
-                        rather than where something appears. Takes paths and
-                        no PATTERN, and is the cheapest view of a tree. One
-                        line per heading is all it prints, so it takes none of
-                        the flags under Selection either
+  -N, --no-line-number  drop the line-number gutter
+      --no-breadcrumb   hide the heading trail above each result
+      --outline         one indented line per heading; takes paths, no
+                        PATTERN, and none of the Selection flags
       --separator STR   what to print between two results of a file (default
                         "--"); pass "" to leave them out
-      --truncate N      print at most N lines of any one result, keeping the
-                        matched node, then a line saying how many were held
-                        back. The machine formats report the count as a
-                        number instead: "truncated" in json, the last field
-                        of a compact record
+      --truncate N      print at most N lines of a result, keeping the
+                        matched node, then a count of what was held back
       --color WHEN      auto, always or never (default auto)
-      --format WHEN     plain (default), compact or json. compact prints the
-                        path once per file and then one tab-separated record
-                        per result — "start[-end] kind text truncated", with
-                        newlines escaped so a record is always one line, path
-                        included — which costs a fraction of the same results
-                        as json. Neither machine format is coloured, and
-                        compact leaves out the breadcrumb and the score; ask
-                        for json if you want them. One record is one node: two
-                        hits that touch are printed as one passage in plain
-                        output and kept apart here. Both machine formats say
-                        why a run was refused in their own shape rather than
-                        in English
+      --format WHEN     plain (default), compact or json
       --json            one JSON object per result (same as --format json)
   -c, --count           print only the number of results per file
   -l, --files-with-matches
                         print only the names of files with results
   -m, --max-count N     stop after N results per file
   -q, --quiet           print nothing; the exit status carries the answer
-      --ext LIST        file extensions to search (default md,markdown,mdown,mkd,mdx)
+      --ext LIST        file extensions to search
+                        (default md,markdown,mdown,mkd,mdx)
       --hidden          descend into hidden directories
-      --no-ignore       search everything, including what the ignore files
-                        (.gitignore, .ignore, .git/info/exclude) and the skip
-                        list (node_modules, vendor and friends) leave out
+      --no-ignore       search past .gitignore, .ignore, .git/info/exclude
+                        and the skip list (node_modules, vendor and friends)
   -h, --help [TOPIC]    the whole manual, or one part of it: matching,
-                        filters, selection, editing, output. A flag name works
-                        too, so "mdgrep --help anchor" prints the part that
-                        documents --anchor
-  -V, --version
+                        filters, selection, editing, plans, output. A flag
+                        name works too, as in "mdgrep --help anchor"
+  -V, --version         print the version and exit
 
--B, -A and -C count sibling nodes, not lines; use --lines for raw lines.
+compact is one tab-separated record per result — "start[-end] kind text
+truncated", newlines escaped — under the path, for a fraction of what json
+costs; json adds the breadcrumb and the score. Both keep two touching nodes
+apart where plain runs them into one passage, and both report a refusal in
+their own shape. Colour is off when stdout is not a terminal, NO_COLOR is set
+or TERM=dumb.
+
 Exit status is 0 when something matched, 1 when nothing did, 2 on error.
 `
 

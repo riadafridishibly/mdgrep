@@ -15,9 +15,9 @@ filter-only query is written. It matches the markdown as written, so `^## ` is
 every second-level heading. PATH is files or directories, default cwd, stdin
 when piped. Exit **0** matched, **1** no match, **2** error.
 
-`mdgrep --help TOPIC` (`matching`, `filters`, `selection`, `editing`, `output`,
-or any flag name) costs 90–570 tokens against ~1600 for the manual — fetch one
-freely for the list at the bottom.
+`mdgrep --help TOPIC` (`matching`, `filters`, `selection`, `editing`, `plans`,
+`output`, or any flag name) costs 90–570 tokens against ~1300 for the manual —
+fetch one freely for the list at the bottom.
 
 ## Search
 

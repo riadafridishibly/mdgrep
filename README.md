@@ -372,20 +372,26 @@ the line that says what went wrong and points at `--help`.
 `--help` takes a topic, so remembering one flag does not cost the whole manual:
 
 ```bash
-mdgrep --help editing   # matching, filters, selection, editing, output
+mdgrep --help editing   # matching, filters, selection, editing, plans, output
+mdgrep --help=editing   # the same, as one word
 mdgrep --help anchor    # or any flag name
 ```
 
 ## Development
 
 ```
-main.go              CLI: flags, file walking, worker pool
-apply.go             --apply: a plan of edits read as JSON, applied per file
+main.go              a run end to end: parse, walk, search in a worker pool
+internal/cli         the flags, and the search, edit and output they describe
+internal/help        the manual, and the rules for printing one part of it
+internal/walk        the files a search reads: paths, extensions, stdin
+internal/ignore      .gitignore, .ignore, .git/info/exclude and the skip list
 internal/mdoc        goldmark AST → line-addressable block tree, sections, anchors
 internal/match       regexp / literal / fuzzy matchers and highlight spans
 internal/search      block selection, anchor lookup, expansion, merging
 internal/edit        planning and applying rewrites, atomic writes
-internal/render      terminal and JSON output
+internal/plan        --apply: a plan of edits read as JSON, applied per file
+internal/render      terminal, compact and JSON output
+internal/report      why a run was refused, in whichever format was asked for
 ```
 
 GFM is on, so tables, task lists, strikethrough and autolinks parse; front
