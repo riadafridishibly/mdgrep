@@ -634,6 +634,24 @@ func TestFlagsThatWouldBeDroppedAreRefused(t *testing.T) {
 			[]string{"--anchor", "--anchor-style", "gh", "#install", path},
 		},
 		{
+			"ignore-case with anchor",
+			[]string{"--anchor", "-i", "#install", path},
+			"--anchor selects a heading",
+			[]string{"--anchor", "#install", path},
+		},
+		{
+			"case-sensitive with anchor",
+			[]string{"--anchor", "-s", "#install", path},
+			"--anchor selects a heading",
+			[]string{"--anchor", "#install", path},
+		},
+		{
+			"smart-case with anchor",
+			[]string{"--anchor", "-S", "#install", path},
+			"--anchor selects a heading",
+			[]string{"--anchor", "#install", path},
+		},
+		{
 			"ignore-case against case-sensitive",
 			[]string{"-i", "-s", "installer", path},
 			"-i, -s and -S",

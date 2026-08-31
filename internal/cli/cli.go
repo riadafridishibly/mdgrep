@@ -275,7 +275,8 @@ func (c *Config) Matcher() (match.Matcher, error) {
 	switch {
 	case c.fuzzy && c.fixed:
 		return nil, errors.New("--fuzzy and --fixed-strings are mutually exclusive")
-	case c.useAnchor && (c.fuzzy || c.fixed || c.Word || c.Invert):
+	case c.useAnchor && (c.fuzzy || c.fixed || c.Word || c.Invert ||
+		c.ForceFold || c.ForceCase || c.smart):
 		return nil, errors.New("--anchor selects a heading by name and takes no other matching flag")
 	// A flag nothing reads is a flag the caller expected to have an effect, so
 	// the run says it will not rather than searching some other way in silence.
