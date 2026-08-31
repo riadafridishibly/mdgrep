@@ -133,6 +133,9 @@ func refusedCompact(w io.Writer, files []File, total int, why Reason) {
 		render.Escape(why.Path), render.Escape(why.Text))
 	shown := 0
 	for _, r := range files {
+		if shown == shownMatches {
+			break
+		}
 		for _, res := range r.Res {
 			if shown == shownMatches {
 				break
