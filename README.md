@@ -168,6 +168,7 @@ search until it selects the node you mean, then say what to do with it.
 | `--multi` | edit every match |
 | `--expect N` | edit only if exactly N nodes matched |
 | `--dry-run` | show the edit, write nothing |
+| `--apply FILE` | run a plan of edits, one JSON object per line (`-` is stdin) |
 
 ```bash
 mdgrep "ship the docs" --check                  # - [ ] ship the docs -> - [x]
@@ -214,6 +215,48 @@ Files are written atomically, through a temporary file renamed over the
 original. A checkbox that already reads the way you asked is reported unchanged
 and left alone. `-A`, `-B`, `-C`, `--lines`, `-c`, `-l` and `-m` are refused
 with an edit.
+
+### A plan of edits
+
+Ticking eight boxes one at a time is eight processes, eight searches and eight
+writes. `--apply` takes the lot as a plan — one JSON object per line, read from
+a file or from stdin as `-`:
+
+```bash
+mdgrep --apply - <<'EOF'
+{"path":"docs/checklist.md","match":"walk the rows","op":"check"}
+{"path":"docs/checklist.md","match":"log the block","op":"check"}
+{"path":"docs/setup.md","match":"^## Install","op":"set-text","text":"Setup"}
+EOF
+```
+
+An entry needs `path`, `match` and `op`, plus `text` for the four edits that
+write it. `kind`, `fixed`, `expand`, `section`, `section-body`, `expect` and
+`multi` say per entry what the flags of those names say, and an unknown key is
+an error rather than a silently different edit. The plan carries its own search,
+so it takes no PATTERN, no PATH and no other matching or editing flag.
+
+Each file is parsed once however many entries name it, and written once with
+every change they asked for. Every entry is planned against the file **as it was
+read**, which makes the entries independent of one another: an entry cannot
+match text another entry writes, and the order they are written in never changes
+what any of them selects. The refusal rules carry over per entry — one match
+unless `multi` is set, exactly `expect` many where it is given — and the plan
+applies whole or not at all:
+
+```
+$ mdgrep --apply plan.jsonl
+mdgrep: entry 2: 2 matches; narrow "match" or set "multi": true
+  docs/checklist.md:5: - [ ] ship the docs
+  docs/checklist.md:7: - [ ] ship the tests
+mdgrep: 1 of 3 entries refused; nothing was written
+```
+
+An entry that matches nothing, matches more than it may, or names a file that
+cannot be read refuses the run, as does a pair of entries reaching for the same
+lines. Every failure is reported against its number, so one round trip says
+everything the next plan has to fix. `--dry-run` and `-q` mean what they mean
+for a single edit.
 
 ### Output
 
@@ -300,9 +343,10 @@ whenever those two are not what is wanted.
 (1-based, inclusive), `breadcrumb`, `text`, plus `checked` on task items and
 `truncated` under `--truncate`. An edit reports `op`, `old`, `new` and
 `applied` instead. A refused edit is one
-object on stderr — `error` (`ambiguous` or `expect`), `message`, `total`,
-`expected` and the capped `matches` list — so a JSON caller parses the refusal
-with the reader it already has.
+object on stderr — `error` (`ambiguous`, `expect`, or `nomatch` for a plan
+entry), `message`, `total`, `expected`, the capped `matches` list, and `entry`
+under `--apply` — so a JSON caller parses the refusal with the reader it
+already has.
 
 ```bash
 mdgrep "rollback" docs --json | jq -r '.path + ":" + (.start|tostring)'
@@ -322,6 +366,7 @@ mdgrep --help anchor    # or any flag name
 
 ```
 main.go              CLI: flags, file walking, worker pool
+apply.go             --apply: a plan of edits read as JSON, applied per file
 internal/mdoc        goldmark AST → line-addressable block tree, sections, anchors
 internal/match       regexp / literal / fuzzy matchers and highlight spans
 internal/search      block selection, anchor lookup, expansion, merging

@@ -150,7 +150,7 @@ func FuzzRefusalJSON(f *testing.F) {
 		total := len(res)
 
 		for _, expect := range []optInt{{}, {val: total + 1, set: true}} {
-			why, code := countGate(total, expect, false)
+			why, code := countGate(total, expect, false, flagWords)
 			if code == 0 || why.kind == "nomatch" {
 				continue
 			}

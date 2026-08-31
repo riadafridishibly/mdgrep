@@ -112,6 +112,24 @@ Editing
       --multi           edit every match; without it, more than one is an error
       --expect N        edit only if exactly N nodes matched, else fail
       --dry-run         show the edit, write nothing
+      --apply FILE      carry out a plan of edits read from FILE ("-" is
+                        stdin): one JSON object per line, each with "path",
+                        "match" and "op", plus "text" for replace, set-text,
+                        append and prepend. "kind", "fixed", "expand",
+                        "section", "section-body", "expect" and "multi" say
+                        per entry what the flags of those names say here. A
+                        plan carries its own search, so it takes no PATTERN,
+                        no PATH and no other matching or editing flag. Every
+                        entry is planned against the files as they were read,
+                        so entries are independent: one cannot match what
+                        another writes, and two that reach for the same lines
+                        refuse the plan, as does any entry that cannot be
+                        carried out. Nothing is written unless all of it can be
+
+  $ cat plan.jsonl
+  {"path":"notes.md","match":"ship the docs","op":"check"}
+  {"path":"notes.md","match":"^## Setup","op":"set-text","text":"Install"}
+  $ mdgrep --apply plan.jsonl
 
 An edit rewrites what the same flags would have printed, so the search comes
 first: narrow it until one node is selected, then say what to do with it.
@@ -119,7 +137,9 @@ first: narrow it until one node is selected, then say what to do with it.
 --append and --prepend act on the region --section and --expand widen it to.
 The change is printed unless -q, and every file is written in one atomic go.
 A refused edit lists what it would have hit on stderr, as one JSON object when
---json is set, so the next attempt can be narrower.
+--json is set, so the next attempt can be narrower. A plan is refused whole:
+every entry that cannot be carried out is reported against its number, and no
+file is written.
 
 Output
   -n, --line-number     number the printed lines (the default)
@@ -212,6 +232,7 @@ type config struct {
 	multi     bool
 	expect    optInt
 	dryRun    bool
+	apply     optString
 }
 
 // optString remembers whether a text flag was given at all, so --replace ""
@@ -305,6 +326,7 @@ func run() int {
 	fs.BoolVar(&c.multi, "multi", false, "")
 	fs.Var(&c.expect, "expect", "")
 	fs.BoolVar(&c.dryRun, "dry-run", false, "")
+	fs.Var(&c.apply, "apply", "")
 	bind(func(n string) { fs.IntVar(&c.opt.Before, n, 0, "") }, "B", "before")
 	bind(func(n string) { fs.IntVar(&c.opt.After, n, 0, "") }, "A", "after")
 	bind(func(n string) { fs.IntVar(&c.context, n, 0, "") }, "C", "context")
@@ -354,6 +376,11 @@ func run() int {
 	if c.truncate < 0 {
 		fmt.Fprintf(os.Stderr, "mdgrep: --truncate %d: a cap on printed lines cannot be negative\n", c.truncate)
 		return 2
+	}
+	// A plan is a whole run of its own: it names its files, its searches and
+	// its edits, so nothing below this point has anything left to work out.
+	if c.apply.set {
+		return runApply(c, fs, format)
 	}
 	// --outline is a question about structure, so it fills in the search a
 	// caller would otherwise spell out: every heading, matched by nothing in
@@ -443,15 +470,7 @@ func run() int {
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
-	p := &render.Printer{
-		W:           out,
-		Color:       useColor(c.color),
-		LineNumbers: !c.noNums,
-		Breadcrumb:  !c.noCrumb,
-		Format:      format,
-		Separator:   separator(c.separator),
-		Truncate:    c.truncate,
-	}
+	p := newPrinter(out, c, format)
 
 	found := false
 	emit := func(src *mdoc.Source, res []search.Result) {
@@ -527,6 +546,18 @@ func run() int {
 type fileResult struct {
 	src *mdoc.Source
 	res []search.Result
+}
+
+func newPrinter(out *bufio.Writer, c config, format render.Format) *render.Printer {
+	return &render.Printer{
+		W:           out,
+		Color:       useColor(c.color),
+		LineNumbers: !c.noNums,
+		Breadcrumb:  !c.noCrumb,
+		Format:      format,
+		Separator:   separator(c.separator),
+		Truncate:    c.truncate,
+	}
 }
 
 // buildEdit reads the editing flags as one operation, and rejects the
@@ -635,7 +666,7 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []fileResult, e edit
 	for _, r := range results {
 		total += len(r.res)
 	}
-	if why, code := countGate(total, c.expect, c.multi); code != 0 {
+	if why, code := countGate(total, c.expect, c.multi, flagWords); code != 0 {
 		// Nothing matching is the search's own answer, and stays as quiet
 		// here as it is everywhere else.
 		if why.kind != "nomatch" {
@@ -685,25 +716,34 @@ func changed(changes []edit.Change) bool {
 	return false
 }
 
+// gateWords spells the two ways out of a refusal. A plan entry cannot pass a
+// flag, so it is pointed at the keys it can set instead.
+type gateWords struct{ expect, narrow string }
+
+var (
+	flagWords = gateWords{"--expect", "narrow the search or pass --multi"}
+	planWords = gateWords{`"expect"`, `narrow "match" or set "multi": true`}
+)
+
 // countGate decides whether an edit may go ahead on the number of nodes the
 // search found. --expect states the count outright; without it a lone match is
 // the only unambiguous instruction, and --multi waives that.
-func countGate(total int, expect optInt, multi bool) (reason, int) {
+func countGate(total int, expect optInt, multi bool, w gateWords) (reason, int) {
 	switch {
 	case expect.set && total != expect.val:
 		return reason{
 			kind:     "expect",
-			text:     fmt.Sprintf("--expect %d, but %d matched", expect.val, total),
+			text:     fmt.Sprintf("%s %d, but %d matched", w.expect, expect.val, total),
 			expected: expect.val,
 		}, 2
 	case expect.set:
 		return reason{}, 0
 	case total == 0:
-		return reason{kind: "nomatch"}, 1
+		return reason{kind: "nomatch", text: "nothing matched"}, 1
 	case total > 1 && !multi:
 		return reason{
 			kind: "ambiguous",
-			text: fmt.Sprintf("%d matches; narrow the search or pass --multi", total),
+			text: fmt.Sprintf("%d matches; %s", total, w.narrow),
 		}, 2
 	}
 	return reason{}, 0
@@ -716,6 +756,18 @@ type reason struct {
 	kind     string
 	text     string
 	expected int
+	// entry is which entry of an --apply plan was refused, 1-based, and zero
+	// when the refusal is a single edit's own.
+	entry int
+}
+
+// entryPrefix says which entry of a plan a refusal belongs to, since a plan
+// reports as many refusals as it has entries that cannot be carried out.
+func entryPrefix(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("entry %d: ", n)
 }
 
 // shownMatches caps how many hits a refusal lists. The list is there to make
@@ -730,7 +782,7 @@ func reportRefused(w io.Writer, results []fileResult, total int, why reason, asJ
 		reportRefusedJSON(w, results, total, why)
 		return
 	}
-	fmt.Fprintf(w, "mdgrep: %s\n", why.text)
+	fmt.Fprintf(w, "mdgrep: %s%s\n", entryPrefix(why.entry), why.text)
 	n := 0
 	for _, r := range results {
 		for _, res := range r.res {
@@ -759,6 +811,7 @@ type jsonMatch struct {
 type jsonRefusal struct {
 	Error    string      `json:"error"`
 	Message  string      `json:"message"`
+	Entry    int         `json:"entry,omitempty"`
 	Total    int         `json:"total"`
 	Expected int         `json:"expected,omitempty"`
 	Matches  []jsonMatch `json:"matches"`
@@ -771,6 +824,7 @@ func reportRefusedJSON(w io.Writer, results []fileResult, total int, why reason)
 	out := jsonRefusal{
 		Error:    why.kind,
 		Message:  why.text,
+		Entry:    why.entry,
 		Total:    total,
 		Expected: why.expected,
 		Matches:  []jsonMatch{},
