@@ -357,7 +357,15 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	if e.Fixed {
 		mode = match.Substring
 	}
-	matcher, err := cli.BuildMatcher(&cli.Config{Patterns: cli.PatternList{*e.Match}}, mode, false)
+	// A plan says what it searches for and nothing more, so every other input
+	// to the matcher is named here rather than left to a default a command
+	// line would have supplied.
+	matcher, err := cli.BuildMatcher(cli.Matching{
+		Patterns: []string{*e.Match},
+		Mode:     mode,
+		Case:     cli.Smart,
+		MinScore: cli.DefaultMinScore,
+	})
 	if err != nil {
 		return bad("%v", err)
 	}

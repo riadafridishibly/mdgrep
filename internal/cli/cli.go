@@ -299,7 +299,14 @@ func (c *Config) Matcher() (match.Matcher, error) {
 		c.Opt.Before, c.Opt.After = c.Context, c.Context
 	}
 	if !c.useAnchor {
-		return BuildMatcher(c, mode, c.smart)
+		return BuildMatcher(Matching{
+			Patterns: c.Patterns,
+			Mode:     mode,
+			Case:     c.caseRule(),
+			MinScore: c.MinScore.Or(DefaultMinScore),
+			Word:     c.Word,
+			Invert:   c.Invert,
+		})
 	}
 	anchor, err := c.buildAnchor()
 	if err != nil {
@@ -511,36 +518,70 @@ func parseAnchorStyles(spec string) ([]mdoc.AnchorStyle, error) {
 // DefaultMinScore is the fuzzy threshold a run that names none searches with.
 const DefaultMinScore = 0.7
 
+// Case is how a pattern's own letters are read. Smart is the default and the
+// zero value: -i and -s are the two ways of saying it should not be.
+type Case int
+
+const (
+	Smart Case = iota
+	Fold
+	Exact
+)
+
+// Matching is everything a matcher is built from. A plan entry has no command
+// line to read defaults out of, so it says each of these rather than borrowing
+// whatever a Config would have held: a field added here is a field both
+// callers have to answer for.
+type Matching struct {
+	Patterns []string
+	Mode     match.Mode
+	Case     Case
+	MinScore float64
+	Word     bool
+	Invert   bool
+}
+
 // BuildMatcher turns every pattern into one matcher, alternatives to each
 // other the way repeated -e is in grep.
 //
-// Smart case is the default and needs no flag of its own here, since -i and -s
-// are refused alongside -S. It reads all the patterns together: a single
-// upper-case letter anywhere in them makes the whole search case sensitive.
-func BuildMatcher(c *Config, mode match.Mode, smart bool) (match.Matcher, error) {
-	opt := match.Options{Mode: mode, MinScore: c.MinScore.Or(DefaultMinScore), Word: c.Word}
-	switch {
-	case c.ForceFold && !smart:
+// Smart case reads all the patterns together: a single upper-case letter
+// anywhere in them makes the whole search case sensitive.
+func BuildMatcher(m Matching) (match.Matcher, error) {
+	opt := match.Options{Mode: m.Mode, MinScore: m.MinScore, Word: m.Word}
+	switch m.Case {
+	case Fold:
 		opt.IgnoreCase = true
-	case c.ForceCase && !smart:
+	case Exact:
 		opt.IgnoreCase = false
 	default:
-		opt.IgnoreCase = match.SmartCase(strings.Join(c.Patterns, " "))
+		opt.IgnoreCase = match.SmartCase(strings.Join(m.Patterns, " "))
 	}
 
-	ms := make([]match.Matcher, 0, len(c.Patterns))
-	for _, p := range c.Patterns {
-		m, err := match.New(p, opt)
+	ms := make([]match.Matcher, 0, len(m.Patterns))
+	for _, p := range m.Patterns {
+		one, err := match.New(p, opt)
 		if err != nil {
 			return nil, err
 		}
-		ms = append(ms, m)
+		ms = append(ms, one)
 	}
-	m := match.Any(ms)
-	if c.Invert {
-		m = match.Not(m)
+	built := match.Any(ms)
+	if m.Invert {
+		built = match.Not(built)
 	}
-	return m, nil
+	return built, nil
+}
+
+// caseRule reads the three case flags, which Matcher has already refused each
+// other, into the one rule BuildMatcher takes.
+func (c *Config) caseRule() Case {
+	switch {
+	case c.ForceFold:
+		return Fold
+	case c.ForceCase:
+		return Exact
+	}
+	return Smart
 }
 
 // permute moves flags ahead of positional arguments so the pattern may be
