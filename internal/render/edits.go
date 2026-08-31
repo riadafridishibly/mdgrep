@@ -16,8 +16,12 @@ func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) 
 	if len(changes) == 0 {
 		return
 	}
-	if p.JSON {
+	switch p.Format {
+	case JSON:
 		p.printEditJSON(changes, dry)
+		return
+	case Compact:
+		p.printEditCompact(src, changes, dry)
 		return
 	}
 	if p.wroteAny {
@@ -39,8 +43,8 @@ func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) 
 	// side is numbered against a running offset rather than the old file.
 	offset := 0
 	for i, c := range changes {
-		if i > 0 {
-			fmt.Fprintln(p.W, p.paint(dim, "  --"))
+		if i > 0 && p.Separator != "" {
+			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, p.Separator))
 		}
 		if p.Breadcrumb && len(c.Breadcrumb) > 0 {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(c.Breadcrumb)))
@@ -72,6 +76,33 @@ func (p *Printer) editLine(color, mark string, num, width int, line string) {
 		p.paint(color, fmt.Sprintf("%*d", width, num+1)),
 		p.paint(dim, "│"),
 		line)
+}
+
+// printEditCompact reports a change the way printCompact reports a result:
+// the path once, then one record per change.
+//
+//	start[-end] <TAB> op <TAB> applied|dry|unchanged <TAB> new text
+//
+// The old text is left out — the caller either has the file or asked for a dry
+// run against it — and "new" is empty for a deletion.
+func (p *Printer) printEditCompact(src *mdoc.Source, changes []edit.Change, dry bool) {
+	p.wroteAny = true
+	fmt.Fprintln(p.W, escape(src.Path))
+	for _, c := range changes {
+		fmt.Fprintf(p.W, "%s\t%s\t%s\t%s\n",
+			lineSpan(c.Start, c.End), c.Op,
+			editStatus(c.NoOp, dry), escape(strings.Join(c.New, "\n")))
+	}
+}
+
+func editStatus(noop, dry bool) string {
+	switch {
+	case noop:
+		return "unchanged"
+	case dry:
+		return "dry"
+	}
+	return "applied"
 }
 
 type jsonEdit struct {

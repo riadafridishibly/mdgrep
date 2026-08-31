@@ -35,7 +35,7 @@ func TestCountGate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			why, code := countGate(tt.total, tt.expect, tt.multi)
+			why, code := countGate(tt.total, tt.expect, tt.multi, flagWords)
 			if why.kind != tt.kind || code != tt.code {
 				t.Errorf("got (%q, %d), want (%q, %d)", why.kind, code, tt.kind, tt.code)
 			}
@@ -73,7 +73,7 @@ func TestReportRefusedText(t *testing.T) {
 	if total != 2 {
 		t.Fatalf("total = %d, want 2", total)
 	}
-	why, code := countGate(total, optInt{}, false)
+	why, code := countGate(total, optInt{}, false, flagWords)
 	if code != 2 {
 		t.Fatalf("code = %d, want 2", code)
 	}
@@ -93,7 +93,7 @@ func TestReportRefusedTextCaps(t *testing.T) {
 		t.Fatalf("total = %d, want 25", total)
 	}
 	var buf bytes.Buffer
-	why, _ := countGate(total, optInt{}, false)
+	why, _ := countGate(total, optInt{}, false, flagWords)
 	reportRefused(&buf, results, total, why, false)
 	if n := strings.Count(buf.String(), "d.md:"); n != shownMatches {
 		t.Errorf("listed %d matches, want %d", n, shownMatches)
@@ -120,7 +120,7 @@ func decodeRefusal(t *testing.T, b []byte) jsonRefusal {
 
 func TestReportRefusedJSON(t *testing.T) {
 	results, total := found(t, "# H\n\n- alpha needle\n- beta needle\n", "needle")
-	why, _ := countGate(total, optInt{}, false)
+	why, _ := countGate(total, optInt{}, false, flagWords)
 	var buf bytes.Buffer
 	reportRefused(&buf, results, total, why, true)
 
@@ -148,7 +148,7 @@ func TestReportRefusedJSON(t *testing.T) {
 func TestReportRefusedJSONExpect(t *testing.T) {
 	results, total := found(t, "# H\n\n- alpha needle\n- beta needle\n", "needle")
 	expect := expecting(5)
-	why, code := countGate(total, expect, false)
+	why, code := countGate(total, expect, false, flagWords)
 	if code != 2 {
 		t.Fatalf("code = %d, want 2", code)
 	}
@@ -171,7 +171,7 @@ func TestReportRefusedJSONExpect(t *testing.T) {
 // field is still an array, so a caller can range over it without a nil check.
 func TestReportRefusedJSONNoMatches(t *testing.T) {
 	expect := expecting(1)
-	why, _ := countGate(0, expect, false)
+	why, _ := countGate(0, expect, false, flagWords)
 	var buf bytes.Buffer
 	reportRefused(&buf, nil, 0, why, true)
 
@@ -185,7 +185,7 @@ func TestReportRefusedJSONNoMatches(t *testing.T) {
 
 func TestReportRefusedJSONCaps(t *testing.T) {
 	results, total := found(t, manyItems(25), "needle")
-	why, _ := countGate(total, optInt{}, false)
+	why, _ := countGate(total, optInt{}, false, flagWords)
 	var buf bytes.Buffer
 	reportRefused(&buf, results, total, why, true)
 

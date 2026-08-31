@@ -262,3 +262,32 @@ func TestWriteReplacesTheFileAndKeepsItsMode(t *testing.T) {
 		t.Fatalf("stray files: %v", entries)
 	}
 }
+
+func TestWriteFollowsASymlinkToTheFileItPointsAt(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.md")
+	link := filepath.Join(dir, "link.md")
+	if err := os.WriteFile(target, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := Write(link, "rewritten\n"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Error("the link was replaced by a regular file")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "rewritten\n" {
+		t.Errorf("the file the link points at = %q", data)
+	}
+}

@@ -347,3 +347,54 @@ func TestDistinctKeepsTouchingResultsApart(t *testing.T) {
 		t.Fatalf("got %d results, want 2", len(res))
 	}
 }
+
+// merged holds a heading that interrupts a paragraph, so the two blocks are
+// adjacent and their results are merged into one region.
+const merged = "# Doc\n" + // 0
+	"\n" + // 1
+	"## Alpha\n" + // 2
+	"\n" + // 3
+	"nnn a very long paragraph line ddd lll with plenty of filler\n" + // 4
+	"## ndl\n" + // 5
+	"\n" + // 6
+	"tail\n" // 7
+
+// A merged region is ranked by the best thing in it, but everything else it
+// says describes the node it begins on. A region whose Kind came from one hit
+// while its trail and first line came from another told the printer it was a
+// heading, which then stripped a real ancestor off the trail.
+func TestMergedRegionDescribesTheNodeItBeginsOn(t *testing.T) {
+	m, err := match.New("ndl", match.Options{Mode: match.Fuzzy, IgnoreCase: true, MinScore: 0.1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := File(mdoc.Parse("t.md", []byte(merged)), m, Options{})
+	if len(res) != 1 {
+		t.Fatalf("res = %+v, want the paragraph and the heading as one region", res)
+	}
+	r := res[0]
+	if r.Start != 4 || r.End != 5 {
+		t.Fatalf("region = %d-%d, want 4-5", r.Start, r.End)
+	}
+	if r.HitStart != 4 {
+		t.Errorf("HitStart = %d, want the paragraph at 4", r.HitStart)
+	}
+	if r.Kind != mdoc.KindParagraph {
+		t.Errorf("Kind = %q, want the kind of the node at HitStart", r.Kind)
+	}
+	if r.Level != 0 {
+		t.Errorf("Level = %d, want 0 for a paragraph", r.Level)
+	}
+	want := []string{"Doc", "Alpha"}
+	if len(r.Breadcrumb) != len(want) {
+		t.Fatalf("Breadcrumb = %v, want %v", r.Breadcrumb, want)
+	}
+	for i, w := range want {
+		if r.Breadcrumb[i] != w {
+			t.Fatalf("Breadcrumb = %v, want %v", r.Breadcrumb, want)
+		}
+	}
+	if r.Score != 1 {
+		t.Errorf("Score = %v, want the best score in the region", r.Score)
+	}
+}

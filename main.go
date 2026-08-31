@@ -13,10 +13,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/riadafridishibly/mdgrep/internal/edit"
 	"github.com/riadafridishibly/mdgrep/internal/ignore"
@@ -111,6 +114,24 @@ Editing
       --multi           edit every match; without it, more than one is an error
       --expect N        edit only if exactly N nodes matched, else fail
       --dry-run         show the edit, write nothing
+      --apply FILE      carry out a plan of edits read from FILE ("-" is
+                        stdin): one JSON object per line, each with "path",
+                        "match" and "op", plus "text" for replace, set-text,
+                        append and prepend. "kind", "fixed", "expand",
+                        "section", "section-body", "expect" and "multi" say
+                        per entry what the flags of those names say here. A
+                        plan carries its own search, so it takes no PATTERN,
+                        no PATH and no other matching or editing flag. Every
+                        entry is planned against the files as they were read,
+                        so entries are independent: one cannot match what
+                        another writes, and two that reach for the same lines
+                        refuse the plan, as does any entry that cannot be
+                        carried out. Nothing is written unless all of it can be
+
+  $ cat plan.jsonl
+  {"path":"notes.md","match":"ship the docs","op":"check"}
+  {"path":"notes.md","match":"^## Setup","op":"set-text","text":"Install"}
+  $ mdgrep --apply plan.jsonl
 
 An edit rewrites what the same flags would have printed, so the search comes
 first: narrow it until one node is selected, then say what to do with it.
@@ -118,14 +139,38 @@ first: narrow it until one node is selected, then say what to do with it.
 --append and --prepend act on the region --section and --expand widen it to.
 The change is printed unless -q, and every file is written in one atomic go.
 A refused edit lists what it would have hit on stderr, as one JSON object when
---json is set, so the next attempt can be narrower.
+--json is set, so the next attempt can be narrower. A plan is refused whole:
+every entry that cannot be carried out is reported against its number, and no
+file is written.
 
 Output
   -n, --line-number     number the printed lines (the default)
   -N, --no-line-number
-      --no-breadcrumb   hide the heading trail above each result
+      --no-breadcrumb   hide the heading trail above each result. The trail
+                        stops at the parent when the result is the heading it
+                        would otherwise end with, since that line follows it
+      --outline         one indented line per heading: what is in these files
+                        rather than where something appears. Takes paths and
+                        no PATTERN, and is the cheapest view of a tree. One
+                        line per heading is all it prints, so it takes none of
+                        the flags under Selection either
+      --separator STR   what to print between two results of a file (default
+                        "--"); pass "" to leave them out
+      --truncate N      print at most N lines of any one result, then a line
+                        saying how many were held back. json reports the
+                        count as "truncated" instead
       --color WHEN      auto, always or never (default auto)
-      --json            one JSON object per result
+      --format WHEN     plain (default), compact or json. compact prints the
+                        path once per file and then one tab-separated record
+                        per result — "start[-end] kind text", with newlines
+                        escaped so a record is always one line, path included
+                        — which costs a fraction of the same results as json.
+                        Neither machine format is coloured, and compact leaves
+                        out the breadcrumb and the score; ask for json if you
+                        want them. One record is one node: two hits that touch
+                        are printed as one passage in plain output and kept
+                        apart here
+      --json            one JSON object per result (same as --format json)
   -c, --count           print only the number of results per file
   -l, --files-with-matches
                         print only the names of files with results
@@ -136,7 +181,10 @@ Output
       --no-ignore       search everything, including what the ignore files
                         (.gitignore, .ignore, .git/info/exclude) and the skip
                         list (node_modules, vendor and friends) leave out
-  -h, --help
+  -h, --help [TOPIC]    the whole manual, or one part of it: matching,
+                        filters, selection, editing, output. A flag name works
+                        too, so "mdgrep --help anchor" prints the part that
+                        documents --anchor
   -V, --version
 
 -B, -A and -C count sibling nodes, not lines; use --lines for raw lines.
@@ -159,8 +207,12 @@ type config struct {
 	context   int
 	noNums    bool
 	noCrumb   bool
+	separator optString
+	truncate  int
+	outline   bool
 	color     string
 	jsonOut   bool
+	format    optString
 	count     bool
 	filesOnly bool
 	quiet     bool
@@ -185,6 +237,7 @@ type config struct {
 	multi     bool
 	expect    optInt
 	dryRun    bool
+	apply     optString
 }
 
 // optString remembers whether a text flag was given at all, so --replace ""
@@ -278,6 +331,7 @@ func run() int {
 	fs.BoolVar(&c.multi, "multi", false, "")
 	fs.Var(&c.expect, "expect", "")
 	fs.BoolVar(&c.dryRun, "dry-run", false, "")
+	fs.Var(&c.apply, "apply", "")
 	bind(func(n string) { fs.IntVar(&c.opt.Before, n, 0, "") }, "B", "before")
 	bind(func(n string) { fs.IntVar(&c.opt.After, n, 0, "") }, "A", "after")
 	bind(func(n string) { fs.IntVar(&c.context, n, 0, "") }, "C", "context")
@@ -287,8 +341,12 @@ func run() int {
 	// Numbering is already on; -n exists so a grep habit does not error out.
 	bind(func(n string) { fs.Bool(n, false, "") }, "n", "line-number")
 	fs.BoolVar(&c.noCrumb, "no-breadcrumb", false, "")
+	fs.BoolVar(&c.outline, "outline", false, "")
+	fs.Var(&c.separator, "separator", "")
+	fs.IntVar(&c.truncate, "truncate", 0, "")
 	fs.StringVar(&c.color, "color", "auto", "")
 	fs.BoolVar(&c.jsonOut, "json", false, "")
+	fs.Var(&c.format, "format", "")
 	bind(func(n string) { fs.BoolVar(&c.count, n, false, "") }, "c", "count")
 	bind(func(n string) { fs.BoolVar(&c.filesOnly, n, false, "") }, "l", "files-with-matches")
 	bind(func(n string) { fs.BoolVar(&c.quiet, n, false, "") }, "q", "quiet")
@@ -303,12 +361,47 @@ func run() int {
 		return 2
 	}
 	if c.help {
-		fmt.Fprint(os.Stdout, usage)
+		topic := ""
+		if fs.NArg() == 1 {
+			topic = helpTopic(os.Args[1:], fs.Arg(0))
+		}
+		text, err := help(topic)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+			return 2
+		}
+		fmt.Fprint(os.Stdout, text)
 		return 0
 	}
 	if c.showVer {
 		fmt.Fprintf(os.Stdout, "mdgrep %s\n", buildVersion())
 		return 0
+	}
+	format, err := parseFormat(c.format, c.jsonOut, c.outline)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, hint)
+		return 2
+	}
+	if c.truncate < 0 {
+		fmt.Fprintf(os.Stderr, "mdgrep: --truncate %d: a cap on printed lines cannot be negative\n", c.truncate)
+		return 2
+	}
+	// A plan is a whole run of its own: it names its files, its searches and
+	// its edits, so nothing below this point has anything left to work out.
+	if c.apply.set {
+		return runApply(c, fs, format)
+	}
+	if c.outline {
+		if err := outlineFlags(fs); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, hint)
+			return 2
+		}
+		// --outline is a question about structure, so it fills in the search a
+		// caller would otherwise spell out: every heading, matched by nothing
+		// in particular. Either half can still be overridden.
+		if c.kinds == "" {
+			c.kinds = "heading"
+		}
 	}
 	kinds, err := parseKinds(c.kinds)
 	if err != nil {
@@ -319,9 +412,11 @@ func run() int {
 	c.opt.Task = taskFilter(c)
 
 	ed, err := buildEdit(&c)
-	// An edit rewrites one node at a time, so neighbouring hits must not be
-	// folded into a single region the way printing folds them.
-	c.opt.Distinct = ed.Op != edit.OpNone
+	// Neighbouring hits are run together for a person reading the page as one
+	// passage, and kept apart for everyone else: an edit rewrites each node on
+	// its own, a machine format is counted and iterated over, an outline is one
+	// line per heading, and -c is a tally of nodes.
+	c.opt.Distinct = ed.Op != edit.OpNone || format != render.Plain || c.count
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
@@ -333,11 +428,16 @@ func run() int {
 	// filter to a directory the way grep would.
 	paths := fs.Args()
 	if len(c.patterns) == 0 {
-		if fs.NArg() == 0 {
+		switch {
+		case c.outline:
+			// An outline names no pattern, so every positional is a path.
+			c.patterns = patternList{""}
+		case fs.NArg() == 0:
 			fmt.Fprintf(os.Stderr, "mdgrep: missing PATTERN\n%s\n", hint)
 			return 2
+		default:
+			c.patterns, paths = patternList{fs.Arg(0)}, paths[1:]
 		}
-		c.patterns, paths = patternList{fs.Arg(0)}, paths[1:]
 	}
 
 	mode := match.Regexp
@@ -385,13 +485,7 @@ func run() int {
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
-	p := &render.Printer{
-		W:           out,
-		Color:       useColor(c.color),
-		LineNumbers: !c.noNums,
-		Breadcrumb:  !c.noCrumb,
-		JSON:        c.jsonOut,
-	}
+	p := newPrinter(out, c, format)
 
 	found := false
 	emit := func(src *mdoc.Source, res []search.Result) {
@@ -469,6 +563,18 @@ type fileResult struct {
 	res []search.Result
 }
 
+func newPrinter(out *bufio.Writer, c config, format render.Format) *render.Printer {
+	return &render.Printer{
+		W:           out,
+		Color:       useColor(c.color),
+		LineNumbers: !c.noNums,
+		Breadcrumb:  !c.noCrumb,
+		Format:      format,
+		Separator:   separator(c.separator),
+		Truncate:    c.truncate,
+	}
+}
+
 // buildEdit reads the editing flags as one operation, and rejects the
 // combinations that would make an edit rewrite something other than what the
 // same flags would have printed.
@@ -522,6 +628,10 @@ func buildEdit(c *config) (edit.Options, error) {
 		return e, fmt.Errorf("-A, -B, -C and --lines pad what is printed; they do not select what an edit rewrites")
 	case c.opt.Max > 0:
 		return e, fmt.Errorf("-m caps results; an edit wants every match it selects, or --multi")
+	case c.truncate > 0:
+		return e, fmt.Errorf("--truncate caps what is printed; an edit reports the whole of what it wrote")
+	case c.outline:
+		return e, fmt.Errorf("--outline reports structure; it does not select what an edit rewrites")
 	case c.expect.set && c.expect.val < 1:
 		return e, fmt.Errorf("--expect states how many nodes the search should find, so it wants a count above zero")
 	case e.Op.Node() && (c.opt.Section || c.opt.Body):
@@ -571,11 +681,11 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []fileResult, e edit
 	for _, r := range results {
 		total += len(r.res)
 	}
-	if why, code := countGate(total, c.expect, c.multi); code != 0 {
+	if why, code := countGate(total, c.expect, c.multi, flagWords); code != 0 {
 		// Nothing matching is the search's own answer, and stays as quiet
 		// here as it is everywhere else.
 		if why.kind != "nomatch" {
-			reportRefused(os.Stderr, results, total, why, c.jsonOut)
+			reportRefused(os.Stderr, results, total, why, p.Format == render.JSON)
 		}
 		return code
 	}
@@ -590,6 +700,13 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []fileResult, e edit
 			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 			return 2
 		}
+		// A ranked search hands back its results best first, and edit.Apply
+		// walks a file once, forwards: a change out of line order is one it
+		// steps over, leaving a report that claims an edit the file never
+		// took.
+		sort.SliceStable(changes, func(a, b int) bool {
+			return changes[a].Start < changes[b].Start
+		})
 		planned[i] = changes
 	}
 
@@ -621,25 +738,34 @@ func changed(changes []edit.Change) bool {
 	return false
 }
 
+// gateWords spells the two ways out of a refusal. A plan entry cannot pass a
+// flag, so it is pointed at the keys it can set instead.
+type gateWords struct{ expect, narrow string }
+
+var (
+	flagWords = gateWords{"--expect", "narrow the search or pass --multi"}
+	planWords = gateWords{`"expect"`, `narrow "match" or set "multi": true`}
+)
+
 // countGate decides whether an edit may go ahead on the number of nodes the
 // search found. --expect states the count outright; without it a lone match is
 // the only unambiguous instruction, and --multi waives that.
-func countGate(total int, expect optInt, multi bool) (reason, int) {
+func countGate(total int, expect optInt, multi bool, w gateWords) (reason, int) {
 	switch {
 	case expect.set && total != expect.val:
 		return reason{
 			kind:     "expect",
-			text:     fmt.Sprintf("--expect %d, but %d matched", expect.val, total),
+			text:     fmt.Sprintf("%s %d, but %d matched", w.expect, expect.val, total),
 			expected: expect.val,
 		}, 2
 	case expect.set:
 		return reason{}, 0
 	case total == 0:
-		return reason{kind: "nomatch"}, 1
+		return reason{kind: "nomatch", text: "nothing matched"}, 1
 	case total > 1 && !multi:
 		return reason{
 			kind: "ambiguous",
-			text: fmt.Sprintf("%d matches; narrow the search or pass --multi", total),
+			text: fmt.Sprintf("%d matches; %s", total, w.narrow),
 		}, 2
 	}
 	return reason{}, 0
@@ -652,6 +778,28 @@ type reason struct {
 	kind     string
 	text     string
 	expected int
+	// entry is which entry of an --apply plan was refused, 1-based, and zero
+	// when the refusal is a single edit's own.
+	entry int
+	// path is the file the refusal is about, when it is about a file rather
+	// than an entry: one that cannot be written.
+	path string
+	// written names the files a run left changed before it stopped. A plan
+	// applies whole or not at all, so this is empty except in the one case
+	// that promise cannot be kept: a rename failing part way through.
+	written []string
+	// entries is how many entries a plan refused, on the record that closes
+	// a refused run.
+	entries int
+}
+
+// entryPrefix says which entry of a plan a refusal belongs to, since a plan
+// reports as many refusals as it has entries that cannot be carried out.
+func entryPrefix(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("entry %d: ", n)
 }
 
 // shownMatches caps how many hits a refusal lists. The list is there to make
@@ -666,7 +814,7 @@ func reportRefused(w io.Writer, results []fileResult, total int, why reason, asJ
 		reportRefusedJSON(w, results, total, why)
 		return
 	}
-	fmt.Fprintf(w, "mdgrep: %s\n", why.text)
+	fmt.Fprintf(w, "mdgrep: %s%s\n", entryPrefix(why.entry), why.text)
 	n := 0
 	for _, r := range results {
 		for _, res := range r.res {
@@ -695,6 +843,10 @@ type jsonMatch struct {
 type jsonRefusal struct {
 	Error    string      `json:"error"`
 	Message  string      `json:"message"`
+	Entry    int         `json:"entry,omitempty"`
+	Path     string      `json:"path,omitempty"`
+	Entries  int         `json:"entries,omitempty"`
+	Written  []string    `json:"written,omitempty"`
 	Total    int         `json:"total"`
 	Expected int         `json:"expected,omitempty"`
 	Matches  []jsonMatch `json:"matches"`
@@ -707,6 +859,10 @@ func reportRefusedJSON(w io.Writer, results []fileResult, total int, why reason)
 	out := jsonRefusal{
 		Error:    why.kind,
 		Message:  why.text,
+		Entry:    why.entry,
+		Path:     why.path,
+		Entries:  why.entries,
+		Written:  why.written,
 		Total:    total,
 		Expected: why.expected,
 		Matches:  []jsonMatch{},
@@ -887,6 +1043,218 @@ func taskFilter(c config) search.TaskFilter {
 	return search.TaskIgnore
 }
 
+// separator reads --separator, where leaving the flag out is the default rule
+// and passing an empty string is the deliberate choice to have none.
+func separator(o optString) string {
+	if !o.set {
+		return "--"
+	}
+	return o.val
+}
+
+// widens are the flags that make a result cover more than the node that
+// matched.
+var widens = map[string]bool{
+	"B": true, "before": true, "A": true, "after": true, "C": true, "context": true,
+	"lines": true, "expand": true, "section": true, "section-body": true,
+}
+
+// outlineFlags rejects the flags that widen a result. An outline is one line
+// per heading, and a widened result no longer begins on the heading that line
+// is meant to be -- so rather than print a body line where a heading belongs,
+// or silently drop the widening, the run says the two cannot be combined.
+func outlineFlags(fs *flag.FlagSet) error {
+	var extra []string
+	fs.Visit(func(f *flag.Flag) {
+		if widens[f.Name] {
+			extra = append(extra, dashed(f.Name))
+		}
+	})
+	if len(extra) > 0 {
+		return fmt.Errorf("--outline is one line per heading, so there is nothing for %s to widen",
+			strings.Join(extra, ", "))
+	}
+	return nil
+}
+
+// dashed spells a flag the way the caller would have typed it.
+func dashed(name string) string {
+	if len(name) == 1 {
+		return "-" + name
+	}
+	return "--" + name
+}
+
+// parseFormat folds --format and --json into one answer. --json predates
+// --format and stays as its own spelling of the same thing, so the pair is
+// only an error when the two disagree.
+func parseFormat(spec optString, jsonFlag, outline bool) (render.Format, error) {
+	if outline && (spec.set || jsonFlag) {
+		return 0, fmt.Errorf("--outline is its own format; drop --format or --json")
+	}
+	// spec.set, not spec.val: --format with an empty value is what an unset
+	// shell variable expands to, and it names a format nobody has rather than
+	// standing for the flag being left out.
+	if !spec.set {
+		switch {
+		case outline:
+			return render.Outline, nil
+		case jsonFlag:
+			return render.JSON, nil
+		}
+		return render.Plain, nil
+	}
+	f, ok := formats[strings.ToLower(strings.TrimSpace(spec.val))]
+	if !ok {
+		return 0, fmt.Errorf("unknown format %q: plain, compact or json", spec.val)
+	}
+	if jsonFlag && f != render.JSON {
+		return 0, fmt.Errorf("--json and --format %s ask for different output", spec.val)
+	}
+	return f, nil
+}
+
+var formats = map[string]render.Format{
+	"plain": render.Plain, "compact": render.Compact, "json": render.JSON,
+}
+
+// helpTopic is the word --help was asked about: the one still standing on the
+// line, and standing after the flag. Appending --help to a command already
+// half typed is how the manual is usually reached, and the pattern typed
+// before it is what the caller wanted help about, not the help they wanted.
+func helpTopic(args []string, arg string) string {
+	for i, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		if name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "="); name != "h" && name != "help" {
+			continue
+		}
+		if slices.Contains(args[i+1:], arg) {
+			return arg
+		}
+		return ""
+	}
+	return ""
+}
+
+// help answers --help, either in full or one titled part of it. Splitting the
+// manual rather than keeping a second copy of it means a topic cannot drift
+// from what the full text says.
+func help(topic string) (string, error) {
+	if topic == "" {
+		return usage, nil
+	}
+	secs := helpSections()
+	sec, err := pickSection(secs, topic)
+	if err != nil {
+		return "", err
+	}
+	return usageLine() + "\n\n" + sec.body, nil
+}
+
+// usageLine is the one line of the manual that says how to invoke the command.
+// A topic repeats it so a narrowed help still stands on its own.
+func usageLine() string {
+	for line := range strings.SplitSeq(usage, "\n") {
+		if strings.HasPrefix(line, "usage:") {
+			return line
+		}
+	}
+	return ""
+}
+
+type helpSection struct {
+	title string
+	body  string
+}
+
+// helpSections splits the manual at its titles. A title is a bare word alone on
+// a line; everything above the first one introduces the command rather than any
+// one part of it, so it is not a topic.
+func helpSections() []helpSection {
+	var out []helpSection
+	for _, line := range strings.SplitAfter(usage, "\n") {
+		if title := strings.TrimRight(line, "\n"); isHelpTitle(title) {
+			out = append(out, helpSection{title: title, body: line})
+			continue
+		}
+		if len(out) > 0 {
+			out[len(out)-1].body += line
+		}
+	}
+	return out
+}
+
+func isHelpTitle(line string) bool {
+	// The whole first rune, not its leading byte: 0xC3 opens most of the
+	// accented Latin letters and is 'Ã' read on its own, which is upper case.
+	first, _ := utf8.DecodeRuneInString(line)
+	if line == "" || !unicode.IsUpper(first) {
+		return false
+	}
+	for _, r := range line {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// pickSection reads a topic the way a caller is likely to type one: the title
+// itself, a prefix of it ("edit" for Editing), or failing that the name of a
+// flag, so "--help anchor" finds the part that documents --anchor.
+func pickSection(secs []helpSection, topic string) (helpSection, error) {
+	want := strings.ToLower(strings.TrimLeft(topic, "-"))
+	var hits []helpSection
+	for _, s := range secs {
+		if strings.HasPrefix(strings.ToLower(s.title), want) {
+			hits = append(hits, s)
+		}
+	}
+	if len(hits) == 0 {
+		for _, s := range secs {
+			if definesFlag(s.body, want) {
+				hits = append(hits, s)
+			}
+		}
+	}
+	switch len(hits) {
+	case 1:
+		return hits[0], nil
+	case 0:
+		return helpSection{}, fmt.Errorf("no help topic %q; try %s", topic, helpTopics(secs))
+	}
+	return helpSection{}, fmt.Errorf("%q matches %s", topic, helpTopics(hits))
+}
+
+// definesFlag reports whether a section documents --name, as opposed to merely
+// mentioning it in passing: a definition stands in the flag column, and the
+// prose that describes one flag is free to name others.
+func definesFlag(body, name string) bool {
+	for line := range strings.SplitSeq(body, "\n") {
+		if !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		head, _, _ := strings.Cut(strings.TrimSpace(line), "  ")
+		for _, spelling := range strings.Split(head, ",") {
+			flag, _, _ := strings.Cut(strings.TrimSpace(spelling), " ")
+			if flag == "--"+name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func helpTopics(secs []helpSection) string {
+	names := make([]string, len(secs))
+	for i, s := range secs {
+		names[i] = strings.ToLower(s.title)
+	}
+	return strings.Join(names, ", ")
+}
+
 func parseKinds(spec string) (map[mdoc.Kind]bool, error) {
 	if strings.TrimSpace(spec) == "" {
 		return nil, nil
@@ -902,11 +1270,6 @@ func parseKinds(spec string) (map[mdoc.Kind]bool, error) {
 			return nil, fmt.Errorf("unknown node kind %q", raw)
 		}
 		out[k] = true
-		// A bullet's text lives in a child block, so keep those searchable and
-		// let promotion lift the hit back up to the item.
-		if k == mdoc.KindItem {
-			out[mdoc.KindParagraph], out[mdoc.KindTextBlock] = true, true
-		}
 	}
 	return out, nil
 }

@@ -168,6 +168,7 @@ search until it selects the node you mean, then say what to do with it.
 | `--multi` | edit every match |
 | `--expect N` | edit only if exactly N nodes matched |
 | `--dry-run` | show the edit, write nothing |
+| `--apply FILE` | run a plan of edits, one JSON object per line (`-` is stdin) |
 
 ```bash
 mdgrep "ship the docs" --check                  # - [ ] ship the docs -> - [x]
@@ -211,9 +212,52 @@ printf -- '- [ ] verify checksum\n- [ ] sign the tarball\n' |
 ```
 
 Files are written atomically, through a temporary file renamed over the
-original. A checkbox that already reads the way you asked is reported unchanged
+original; a symlinked path is followed first, so what changes is the document
+the link points at rather than the link. A checkbox that already reads the way you asked is reported unchanged
 and left alone. `-A`, `-B`, `-C`, `--lines`, `-c`, `-l` and `-m` are refused
 with an edit.
+
+### A plan of edits
+
+Ticking eight boxes one at a time is eight processes, eight searches and eight
+writes. `--apply` takes the lot as a plan — one JSON object per line, read from
+a file or from stdin as `-`:
+
+```bash
+mdgrep --apply - <<'EOF'
+{"path":"docs/checklist.md","match":"walk the rows","op":"check"}
+{"path":"docs/checklist.md","match":"log the block","op":"check"}
+{"path":"docs/setup.md","match":"^## Install","op":"set-text","text":"Setup"}
+EOF
+```
+
+An entry needs `path`, `match` and `op`, plus `text` for the four edits that
+write it. `kind`, `fixed`, `expand`, `section`, `section-body`, `expect` and
+`multi` say per entry what the flags of those names say, and an unknown key is
+an error rather than a silently different edit. The plan carries its own search,
+so it takes no PATTERN, no PATH and no other matching or editing flag.
+
+Each file is parsed once however many entries name it, and written once with
+every change they asked for. Every entry is planned against the file **as it was
+read**, which makes the entries independent of one another: an entry cannot
+match text another entry writes, and the order they are written in never changes
+what any of them selects. The refusal rules carry over per entry — one match
+unless `multi` is set, exactly `expect` many where it is given — and the plan
+applies whole or not at all:
+
+```
+$ mdgrep --apply plan.jsonl
+mdgrep: entry 2: 2 matches; narrow "match" or set "multi": true
+  docs/checklist.md:5: - [ ] ship the docs
+  docs/checklist.md:7: - [ ] ship the tests
+mdgrep: 1 of 3 entries refused; nothing was written
+```
+
+An entry that matches nothing, matches more than it may, or names a file that
+cannot be read refuses the run, as does a pair of entries reaching for the same
+lines. Every failure is reported against its number, so one round trip says
+everything the next plan has to fix. `--dry-run` and `-q` mean what they mean
+for a single edit.
 
 ### Output
 
@@ -222,8 +266,12 @@ with an edit.
 | `-n`, `--line-number` | number the printed lines (the default) |
 | `-N`, `--no-line-number` | drop the line-number gutter |
 | `--no-breadcrumb` | hide the heading trail |
+| `--outline` | one indented line per heading, no PATTERN, no widening |
+| `--separator STR` | what goes between two results of a file (default `--`) |
+| `--truncate N` | print at most N lines of any one result |
 | `--color WHEN` | `auto` (default), `always`, `never` |
-| `--json` | one JSON object per result |
+| `--format WHEN` | `plain` (default), `compact` or `json` |
+| `--json` | one JSON object per result (same as `--format json`) |
 | `-c`, `--count` | number of results per file |
 | `-l`, `--files-with-matches` | names of matching files only |
 | `-m`, `--max-count N` | stop after N results per file |
@@ -231,17 +279,77 @@ with an edit.
 | `--ext LIST` | file extensions to search |
 | `--hidden` | descend into hidden directories |
 | `--no-ignore` | search everything, including what the ignore files (`.gitignore`, `.ignore`, `.git/info/exclude`) and the skip list (`node_modules`, `vendor`, and friends) leave out |
-| `-h`, `--help` / `-V`, `--version` | |
+| `-h`, `--help [TOPIC]` | the whole manual, or one part of it |
+| `-V`, `--version` | |
 
 Colour turns itself off when stdout is not a terminal, or under `NO_COLOR` or
 `TERM=dumb`.
 
+The trail above a heading stops at that heading's parent, since the heading
+itself is the next line printed. `--section-body` keeps the whole trail, because
+there the heading line never appears.
+
+`--outline` answers "what is in these files" rather than "where does this
+appear". It takes paths where a search takes a pattern, and it takes none of
+the selection flags: one line per heading is all it has to print, so there is
+nothing for `--section`, `-B`, `--lines` or `--expand` to widen.
+
+```
+$ mdgrep --outline docs/pruning.md
+docs/pruning.md
+   1 │ # Pruning
+   5 │   ## Winter Pruning
+  16 │   ## Summer Pruning
+  27 │   ## Central Leader
+```
+
+`--separator ''` drops the `--` between results, and `--truncate N` caps how
+much of one node is printed — a hit inside a 400-line fenced block otherwise
+prints all 400 lines:
+
+```
+$ mdgrep "orchard survey" docs --truncate 3
+docs/pruning.md
+  Pruning › Winter Pruning
+  12 │ ```bash
+  13 │ orchard survey --block 04
+  14 │ orchard survey --block 05
+  … +38 lines
+```
+
+### Machine-readable output
+
+`--format compact` prints the path once per file and then one tab-separated
+record per result — the line span, the kind, and the text with its newlines
+escaped, so a record is always one line and the path is the line with no tab
+in it:
+
+```
+$ mdgrep "" pruning.md --format compact
+pruning.md
+1	heading	# Pruning
+3	heading	## Winter Pruning
+5-6	paragraph	Cut back the leader\nbefore the sap rises.
+```
+
+One record is one node. Two hits that touch — neighbouring checkboxes, headings
+with nothing between them — are printed as a single passage in plain output,
+where the page reads as prose; the machine formats, `--outline` and `-c` keep
+them apart, so a record can be counted and a count is a count of nodes.
+
+An edit reports the span, the operation, `applied`/`dry`/`unchanged`, and the
+new text. Compact leaves out the breadcrumb and the score; it costs about a
+third of what `--json` costs on the same results, so it is the cheaper choice
+whenever those two are not what is wanted.
+
 `--json` emits one object per line: `path`, `kind`, `score`, `start`, `end`
-(1-based, inclusive), `breadcrumb`, `text`, plus `checked` on task items. An
-edit reports `op`, `old`, `new` and `applied` instead. A refused edit is one
-object on stderr — `error` (`ambiguous` or `expect`), `message`, `total`,
-`expected` and the capped `matches` list — so a JSON caller parses the refusal
-with the reader it already has.
+(1-based, inclusive), `breadcrumb`, `text`, plus `checked` on task items and
+`truncated` under `--truncate`. An edit reports `op`, `old`, `new` and
+`applied` instead. A refused edit is one
+object on stderr — `error` (`ambiguous`, `expect`, or `nomatch` for a plan
+entry), `message`, `total`, `expected`, the capped `matches` list, and `entry`
+under `--apply` — so a JSON caller parses the refusal with the reader it
+already has.
 
 ```bash
 mdgrep "rollback" docs --json | jq -r '.path + ":" + (.start|tostring)'
@@ -250,10 +358,18 @@ mdgrep "rollback" docs --json | jq -r '.path + ":" + (.start|tostring)'
 Exit status follows grep: `0` matched, `1` did not, `2` error. An error prints
 the line that says what went wrong and points at `--help`.
 
+`--help` takes a topic, so remembering one flag does not cost the whole manual:
+
+```bash
+mdgrep --help editing   # matching, filters, selection, editing, output
+mdgrep --help anchor    # or any flag name
+```
+
 ## Development
 
 ```
 main.go              CLI: flags, file walking, worker pool
+apply.go             --apply: a plan of edits read as JSON, applied per file
 internal/mdoc        goldmark AST → line-addressable block tree, sections, anchors
 internal/match       regexp / literal / fuzzy matchers and highlight spans
 internal/search      block selection, anchor lookup, expansion, merging
