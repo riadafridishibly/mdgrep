@@ -5,7 +5,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -23,6 +22,7 @@ import (
 	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 	"github.com/riadafridishibly/mdgrep/internal/render"
+	"github.com/riadafridishibly/mdgrep/internal/report"
 	"github.com/riadafridishibly/mdgrep/internal/search"
 	"github.com/riadafridishibly/mdgrep/internal/walk"
 )
@@ -118,6 +118,15 @@ type optInt struct {
 }
 
 func (o *optInt) String() string { return strconv.Itoa(o.val) }
+
+// ptr is the count --expect asked for, or nil when it did not ask: the shape
+// a reader outside the flag package can take without knowing about flags.
+func (o optInt) ptr() *int {
+	if !o.set {
+		return nil
+	}
+	return &o.val
+}
 
 func (o *optInt) Set(v string) error {
 	n, err := strconv.Atoi(v)
@@ -370,7 +379,7 @@ func run() int {
 		emit(doc.Src, search.File(doc, matcher, c.opt))
 	}
 
-	results := make([]fileResult, len(files))
+	results := make([]report.File, len(files))
 	var wg sync.WaitGroup
 	jobs := make(chan int)
 	workers := min(runtime.NumCPU(), 8)
@@ -383,7 +392,7 @@ func run() int {
 					continue
 				}
 				doc := mdoc.Parse(files[i], data)
-				results[i] = fileResult{doc.Src, search.File(doc, matcher, c.opt)}
+				results[i] = report.File{Src: doc.Src, Res: search.File(doc, matcher, c.opt)}
 			}
 		})
 	}
@@ -400,23 +409,18 @@ func run() int {
 		// Each file already holds its results best first, so a file is worth
 		// as much as its best one.
 		sort.SliceStable(results, func(i, j int) bool {
-			return bestScore(results[i].res) > bestScore(results[j].res)
+			return report.BestScore(results[i].Res) > report.BestScore(results[j].Res)
 		})
 	}
 	for _, r := range results {
-		if r.src != nil {
-			emit(r.src, r.res)
+		if r.Src != nil {
+			emit(r.Src, r.Res)
 		}
 	}
 	if !found {
 		return 1
 	}
 	return 0
-}
-
-type fileResult struct {
-	src *mdoc.Source
-	res []search.Result
 }
 
 func newPrinter(out *bufio.Writer, c config, format render.Format) *render.Printer {
@@ -532,26 +536,26 @@ func readText(path string) (string, error) {
 
 // runEdits plans every file's changes before writing any of them, so a run
 // that cannot be carried out in full leaves nothing behind.
-func runEdits(out *bufio.Writer, p *render.Printer, results []fileResult, e edit.Options, c config) int {
+func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edit.Options, c config) int {
 	total := 0
 	for _, r := range results {
-		total += len(r.res)
+		total += len(r.Res)
 	}
-	if why, code := countGate(total, c.expect, c.multi, flagWords); code != 0 {
+	if why, code := report.Gate(total, c.expect.ptr(), c.multi, report.FlagWords); code != 0 {
 		// Nothing matching is the search's own answer, and stays as quiet
 		// here as it is everywhere else.
-		if why.kind != "nomatch" {
-			reportRefused(os.Stderr, results, total, why, p.Format == render.JSON)
+		if why.Kind != "nomatch" {
+			report.Refused(os.Stderr, results, total, why, p.Format == render.JSON)
 		}
 		return code
 	}
 
 	planned := make([][]edit.Change, len(results))
 	for i, r := range results {
-		if len(r.res) == 0 {
+		if len(r.Res) == 0 {
 			continue
 		}
-		changes, err := edit.Plan(r.src, r.res, e)
+		changes, err := edit.Plan(r.Src, r.Res, e)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 			return 2
@@ -570,7 +574,7 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []fileResult, e edit
 		if len(changes) == 0 {
 			continue
 		}
-		src := results[i].src
+		src := results[i].Src
 		if !c.dryRun && changed(changes) {
 			if err := edit.Write(src.Path, edit.Apply(src, changes)); err != nil {
 				fmt.Fprintf(os.Stderr, "mdgrep: %s: %v\n", src.Path, err)
@@ -592,158 +596,6 @@ func changed(changes []edit.Change) bool {
 		}
 	}
 	return false
-}
-
-// gateWords spells the two ways out of a refusal. A plan entry cannot pass a
-// flag, so it is pointed at the keys it can set instead.
-type gateWords struct{ expect, narrow string }
-
-var (
-	flagWords = gateWords{"--expect", "narrow the search or pass --multi"}
-	planWords = gateWords{`"expect"`, `narrow "match" or set "multi": true`}
-)
-
-// countGate decides whether an edit may go ahead on the number of nodes the
-// search found. --expect states the count outright; without it a lone match is
-// the only unambiguous instruction, and --multi waives that.
-func countGate(total int, expect optInt, multi bool, w gateWords) (reason, int) {
-	switch {
-	case expect.set && total != expect.val:
-		return reason{
-			kind:     "expect",
-			text:     fmt.Sprintf("%s %d, but %d matched", w.expect, expect.val, total),
-			expected: expect.val,
-		}, 2
-	case expect.set:
-		return reason{}, 0
-	case total == 0:
-		return reason{kind: "nomatch", text: "nothing matched"}, 1
-	case total > 1 && !multi:
-		return reason{
-			kind: "ambiguous",
-			text: fmt.Sprintf("%d matches; %s", total, w.narrow),
-		}, 2
-	}
-	return reason{}, 0
-}
-
-// reason is why an edit was refused: a kind an --json reader can branch on, a
-// sentence for everyone else, and the count --expect asked for when that is
-// what went wrong.
-type reason struct {
-	kind     string
-	text     string
-	expected int
-	// entry is which entry of an --apply plan was refused, 1-based, and zero
-	// when the refusal is a single edit's own.
-	entry int
-	// path is the file the refusal is about, when it is about a file rather
-	// than an entry: one that cannot be written.
-	path string
-	// written names the files a run left changed before it stopped. A plan
-	// applies whole or not at all, so this is empty except in the one case
-	// that promise cannot be kept: a rename failing part way through.
-	written []string
-	// entries is how many entries a plan refused, on the record that closes
-	// a refused run.
-	entries int
-}
-
-// entryPrefix says which entry of a plan a refusal belongs to, since a plan
-// reports as many refusals as it has entries that cannot be carried out.
-func entryPrefix(n int) string {
-	if n == 0 {
-		return ""
-	}
-	return fmt.Sprintf("entry %d: ", n)
-}
-
-// shownMatches caps how many hits a refusal lists. The list is there to make
-// the next attempt narrower, and the whole point of a refusal is that there
-// were too many to act on.
-const shownMatches = 10
-
-// reportRefused shows what the edit would have hit, so the next attempt can
-// narrow the search rather than guess at it.
-func reportRefused(w io.Writer, results []fileResult, total int, why reason, asJSON bool) {
-	if asJSON {
-		reportRefusedJSON(w, results, total, why)
-		return
-	}
-	fmt.Fprintf(w, "mdgrep: %s%s\n", entryPrefix(why.entry), why.text)
-	n := 0
-	for _, r := range results {
-		for _, res := range r.res {
-			if n == shownMatches {
-				fmt.Fprintf(w, "  … and %d more\n", total-shownMatches)
-				return
-			}
-			fmt.Fprintf(w, "  %s:%d: %s\n", r.src.Path, res.Start+1,
-				strings.TrimSpace(r.src.Line(res.Start)))
-			n++
-		}
-	}
-}
-
-// validUTF8 stands in for what a JSON encoder would do to a line of bytes that
-// is not text, but does it here, so the object says the same thing the encoder
-// would have written and a reader comparing it against the file knows why.
-func validUTF8(s string) string { return strings.ToValidUTF8(s, "\uFFFD") }
-
-type jsonMatch struct {
-	Path string `json:"path"`
-	Line int    `json:"line"`
-	Text string `json:"text"`
-}
-
-type jsonRefusal struct {
-	Error    string      `json:"error"`
-	Message  string      `json:"message"`
-	Entry    int         `json:"entry,omitempty"`
-	Path     string      `json:"path,omitempty"`
-	Entries  int         `json:"entries,omitempty"`
-	Written  []string    `json:"written,omitempty"`
-	Total    int         `json:"total"`
-	Expected int         `json:"expected,omitempty"`
-	Matches  []jsonMatch `json:"matches"`
-}
-
-// reportRefusedJSON says the same thing as one object, so a caller that asked
-// for --json parses the refusal with the reader it already has rather than
-// reading English back out of stderr.
-func reportRefusedJSON(w io.Writer, results []fileResult, total int, why reason) {
-	out := jsonRefusal{
-		Error:    why.kind,
-		Message:  why.text,
-		Entry:    why.entry,
-		Path:     why.path,
-		Entries:  why.entries,
-		Written:  why.written,
-		Total:    total,
-		Expected: why.expected,
-		Matches:  []jsonMatch{},
-	}
-	for _, r := range results {
-		for _, res := range r.res {
-			if len(out.Matches) == shownMatches {
-				json.NewEncoder(w).Encode(out)
-				return
-			}
-			out.Matches = append(out.Matches, jsonMatch{
-				Path: r.src.Path,
-				Line: res.Start + 1,
-				Text: validUTF8(strings.TrimSpace(r.src.Line(res.Start))),
-			})
-		}
-	}
-	json.NewEncoder(w).Encode(out)
-}
-
-func bestScore(res []search.Result) float64 {
-	if len(res) == 0 {
-		return 0
-	}
-	return res[0].Score
 }
 
 // buildAnchor turns every pattern into a heading anchor to look for, under

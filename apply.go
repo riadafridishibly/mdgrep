@@ -16,6 +16,7 @@ import (
 	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 	"github.com/riadafridishibly/mdgrep/internal/render"
+	"github.com/riadafridishibly/mdgrep/internal/report"
 	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
@@ -113,19 +114,19 @@ func runApply(c config, fs *flag.FlagSet, format render.Format) int {
 		planned[path] = append(planned[path], changes...)
 	}
 	if refused > 0 {
-		refuse(asJSON, reason{
-			kind:    "refused",
-			text:    fmt.Sprintf("%d of %d entries refused; nothing was written", refused, len(entries)),
-			entries: refused,
+		refuse(asJSON, report.Reason{
+			Kind:    "refused",
+			Text:    fmt.Sprintf("%d of %d entries refused; nothing was written", refused, len(entries)),
+			Entries: refused,
 		})
 		return 2
 	}
 	for _, path := range cache.order {
 		if err := orderChanges(planned[path]); err != nil {
-			refuse(asJSON, reason{
-				kind: "conflict",
-				text: fmt.Sprintf("%s: %v", path, err),
-				path: path,
+			refuse(asJSON, report.Reason{
+				Kind: "conflict",
+				Text: fmt.Sprintf("%s: %v", path, err),
+				Path: path,
 			})
 			return 2
 		}
@@ -179,10 +180,10 @@ func stageAll(cache *docCache, planned map[string][]planChange, asJSON bool) err
 		s, err := edit.Stage(path, edit.Apply(cache.docs[path].Src, changes))
 		if err != nil {
 			discard()
-			refuse(asJSON, reason{
-				kind: "write",
-				text: fmt.Sprintf("%s: %v; nothing was written", path, err),
-				path: path,
+			refuse(asJSON, report.Reason{
+				Kind: "write",
+				Text: fmt.Sprintf("%s: %v; nothing was written", path, err),
+				Path: path,
 			})
 			return err
 		}
@@ -191,11 +192,11 @@ func stageAll(cache *docCache, planned map[string][]planChange, asJSON bool) err
 	for i, s := range staged {
 		if err := s.Commit(); err != nil {
 			discard()
-			refuse(asJSON, reason{
-				kind:    "write",
-				text:    fmt.Sprintf("%s: %v; %s", paths[i], err, wroteSoFar(paths[:i])),
-				path:    paths[i],
-				written: paths[:i],
+			refuse(asJSON, report.Reason{
+				Kind:    "write",
+				Text:    fmt.Sprintf("%s: %v; %s", paths[i], err, wroteSoFar(paths[:i])),
+				Path:    paths[i],
+				Written: paths[:i],
 			})
 			return err
 		}
@@ -206,8 +207,8 @@ func stageAll(cache *docCache, planned map[string][]planChange, asJSON bool) err
 // refuse reports a refusal that has no matches to show -- a malformed entry, a
 // file that cannot be read or written, two entries over one node -- through the
 // same reader a caller uses for the refusals that do.
-func refuse(asJSON bool, why reason) {
-	reportRefused(os.Stderr, nil, 0, why, asJSON)
+func refuse(asJSON bool, why report.Reason) {
+	report.Refused(os.Stderr, nil, 0, why, asJSON)
 }
 
 // wroteSoFar says which files a failed rename left changed, since a plan that
@@ -290,7 +291,7 @@ func changesOf(changes []planChange) []edit.Change {
 // out at all.
 func planOne(n int, e planEntry, cache *docCache, asJSON bool) ([]planChange, string, bool) {
 	fail := func(kind string, err error) ([]planChange, string, bool) {
-		refuse(asJSON, reason{kind: kind, text: err.Error(), entry: n})
+		refuse(asJSON, report.Reason{Kind: kind, Text: err.Error(), Entry: n})
 		return nil, "", false
 	}
 	opt, ed, matcher, err := planSearch(e)
@@ -302,13 +303,9 @@ func planOne(n int, e planEntry, cache *docCache, asJSON bool) ([]planChange, st
 		return fail("file", err)
 	}
 	res := search.File(doc, matcher, opt)
-	expect := optInt{}
-	if e.Expect != nil {
-		expect = optInt{val: *e.Expect, set: true}
-	}
-	if why, code := countGate(len(res), expect, e.Multi, planWords); code != 0 {
-		why.entry = n
-		reportRefused(os.Stderr, []fileResult{{doc.Src, res}}, len(res), why, asJSON)
+	if why, code := report.Gate(len(res), e.Expect, e.Multi, report.PlanWords); code != 0 {
+		why.Entry = n
+		report.Refused(os.Stderr, []report.File{{Src: doc.Src, Res: res}}, len(res), why, asJSON)
 		return nil, "", false
 	}
 	changes, err := edit.Plan(doc.Src, res, ed)

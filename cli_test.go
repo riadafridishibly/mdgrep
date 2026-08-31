@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/riadafridishibly/mdgrep/internal/help"
+	"github.com/riadafridishibly/mdgrep/internal/report"
 )
 
 // capture runs the command the way main() would and hands back what each
@@ -171,7 +172,7 @@ func TestRefusalJSONGoesToStderr(t *testing.T) {
 	if stdout != "" {
 		t.Errorf("stdout should be empty when nothing was edited:\n%s", stdout)
 	}
-	var got jsonRefusal
+	var got report.Refusal
 	if err := json.Unmarshal([]byte(stderr), &got); err != nil {
 		t.Fatalf("stderr is not one JSON object: %v\n%s", err, stderr)
 	}

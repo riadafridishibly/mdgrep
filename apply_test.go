@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/riadafridishibly/mdgrep/internal/report"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,7 +125,7 @@ func TestApplyRefusalJSONCarriesTheEntryNumber(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
-	var got jsonRefusal
+	var got report.Refusal
 	line, _, _ := strings.Cut(stderr, "\n")
 	if err := json.Unmarshal([]byte(line), &got); err != nil {
 		t.Fatalf("stderr is not JSON: %v\n%s", err, stderr)
