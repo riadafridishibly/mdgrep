@@ -110,12 +110,29 @@ func TestApplyKindItemDoesNotEditAParagraph(t *testing.T) {
 
 // --- B. Wrong output ---------------------------------------------------------
 
-// An outline is a list of headings. Widening a result moves its Start off the
-// heading and on to whatever the widening pulled in; the line to print is the
-// heading's own, which is HitStart.
-func TestOutlinePrintsTheHeadingNotTheWidenedStart(t *testing.T) {
+// An outline is one line per heading. A widened result no longer begins on
+// the heading that line is meant to be, so the two cannot be combined -- and
+// saying so beats printing a paragraph where a heading belongs.
+func TestOutlineRefusesTheFlagsThatWidenAResult(t *testing.T) {
 	path := doc(t, widened)
-	stdout, stderr, code := capture(t, "--outline", "-B", "1", path)
+	for _, args := range [][]string{
+		{"-B", "1"}, {"-A", "1"}, {"-C", "1"},
+		{"--lines", "2"}, {"--expand", "1"}, {"--section"}, {"--section-body"},
+	} {
+		stdout, stderr, code := capture(t, append([]string{"--outline", path}, args...)...)
+		if code != 2 {
+			t.Errorf("%v: exit = %d, want 2:\n%s", args, code, stdout)
+		}
+		if !strings.Contains(stderr, "--outline") {
+			t.Errorf("%v: want an error naming --outline:\n%s", args, stderr)
+		}
+	}
+}
+
+// Whatever else it says, an outline says only headings.
+func TestOutlinePrintsOnlyHeadings(t *testing.T) {
+	path := doc(t, widened)
+	stdout, stderr, code := capture(t, "--outline", path)
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -131,15 +148,16 @@ func TestOutlinePrintsTheHeadingNotTheWidenedStart(t *testing.T) {
 	}
 }
 
-// mergeOverlapping takes Kind from the higher-scoring result; Level has to
-// travel with it, or the outline indents a heading by a level that belongs to
-// a different node.
+// The indent is the heading's own level, so headings on consecutive lines --
+// which are adjacent enough to be merged into one region -- must still each
+// be printed at their own depth.
 func TestOutlineIndentsByTheLevelOfTheHeadingItPrints(t *testing.T) {
 	path := doc(t, levels)
-	stdout, stderr, code := capture(t, "--outline", "--lines", "1", path)
+	stdout, stderr, code := capture(t, "--outline", path)
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
+	seen := 0
 	for line := range strings.SplitSeq(stdout, "\n") {
 		bar := strings.Index(line, "│")
 		if bar < 0 {
@@ -151,12 +169,16 @@ func TestOutlineIndentsByTheLevelOfTheHeadingItPrints(t *testing.T) {
 		if !strings.HasPrefix(text, "#") {
 			continue
 		}
+		seen++
 		level := len(text) - len(strings.TrimLeft(text, "#"))
 		got, want := len(body)-len(text), 2*(level-1)
 		if got != want {
 			t.Errorf("%q is indented %d spaces, want %d for a level-%d heading:\n%s",
 				text, got, want, level, stdout)
 		}
+	}
+	if seen != 4 {
+		t.Errorf("outlined %d of the 4 headings:\n%s", seen, stdout)
 	}
 }
 

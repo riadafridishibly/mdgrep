@@ -353,11 +353,13 @@ func mergeOverlapping(rs []Result, distinct bool) []Result {
 		if r.End > last.End {
 			last.End = r.End
 		}
-		if r.Score > last.Score {
-			last.Score = r.Score
-			last.Kind = r.Kind
-			last.Task, last.Checked = r.Task, r.Checked
-		}
+		// A merged region is ranked by the best thing in it, but it is still
+		// described by the node it begins on. Taking Kind from one hit while
+		// HitStart, Level and Breadcrumb stayed with another left the region
+		// saying it was a heading whose trail and first line belonged to a
+		// paragraph somewhere else -- and the trail then had a real ancestor
+		// stripped from it as though it were the heading's own name.
+		last.Score = max(last.Score, r.Score)
 		if r.HitEnd > last.HitEnd {
 			last.HitEnd = r.HitEnd
 		}

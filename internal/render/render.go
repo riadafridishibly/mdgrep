@@ -208,15 +208,17 @@ func (p *Printer) printOutline(src *mdoc.Source, results []search.Result) {
 
 	last := 0
 	for _, r := range results {
-		last = max(last, r.Start+1)
+		last = max(last, r.HitStart+1)
 	}
 	width := len(strconv.Itoa(last))
 	for _, r := range results {
+		// HitStart, not Start: the line to print is the heading's own, and
+		// Start is wherever the region around it happens to begin.
 		indent := strings.Repeat("  ", max(r.Level-1, 0))
-		text := strings.TrimSpace(src.Line(r.Start))
+		text := strings.TrimSpace(src.Line(r.HitStart))
 		if p.LineNumbers {
 			fmt.Fprintf(p.W, "  %s %s %s%s\n",
-				p.paint(green, fmt.Sprintf("%*d", width, r.Start+1)),
+				p.paint(green, fmt.Sprintf("%*d", width, r.HitStart+1)),
 				p.paint(dim, "│"), indent, text)
 		} else {
 			fmt.Fprintf(p.W, "  %s%s\n", indent, text)

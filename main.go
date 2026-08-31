@@ -356,7 +356,15 @@ func run() int {
 		return 2
 	}
 	if c.help {
-		text, err := help(fs.Arg(0))
+		// A topic is only a topic when it is the only thing left on the line.
+		// Appending --help to a command already half typed is how the manual
+		// is usually reached, and the pattern and paths still standing there
+		// are what the caller wanted help about, not the help they wanted.
+		topic := ""
+		if fs.NArg() == 1 {
+			topic = fs.Arg(0)
+		}
+		text, err := help(topic)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 			return 2
@@ -382,11 +390,17 @@ func run() int {
 	if c.apply.set {
 		return runApply(c, fs, format)
 	}
-	// --outline is a question about structure, so it fills in the search a
-	// caller would otherwise spell out: every heading, matched by nothing in
-	// particular. Either half can still be overridden.
-	if c.outline && c.kinds == "" {
-		c.kinds = "heading"
+	if c.outline {
+		if err := outlineFlags(fs); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, hint)
+			return 2
+		}
+		// --outline is a question about structure, so it fills in the search a
+		// caller would otherwise spell out: every heading, matched by nothing
+		// in particular. Either half can still be overridden.
+		if c.kinds == "" {
+			c.kinds = "heading"
+		}
 	}
 	kinds, err := parseKinds(c.kinds)
 	if err != nil {
@@ -1031,6 +1045,39 @@ func separator(o optString) string {
 		return "--"
 	}
 	return o.val
+}
+
+// widens are the flags that make a result cover more than the node that
+// matched.
+var widens = map[string]bool{
+	"B": true, "before": true, "A": true, "after": true, "C": true, "context": true,
+	"lines": true, "expand": true, "section": true, "section-body": true,
+}
+
+// outlineFlags rejects the flags that widen a result. An outline is one line
+// per heading, and a widened result no longer begins on the heading that line
+// is meant to be -- so rather than print a body line where a heading belongs,
+// or silently drop the widening, the run says the two cannot be combined.
+func outlineFlags(fs *flag.FlagSet) error {
+	var extra []string
+	fs.Visit(func(f *flag.Flag) {
+		if widens[f.Name] {
+			extra = append(extra, dashed(f.Name))
+		}
+	})
+	if len(extra) > 0 {
+		return fmt.Errorf("--outline is one line per heading, so there is nothing for %s to widen",
+			strings.Join(extra, ", "))
+	}
+	return nil
+}
+
+// dashed spells a flag the way the caller would have typed it.
+func dashed(name string) string {
+	if len(name) == 1 {
+		return "-" + name
+	}
+	return "--" + name
 }
 
 func parseFormat(spec string, jsonFlag, outline bool) (render.Format, error) {
