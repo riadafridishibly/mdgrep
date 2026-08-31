@@ -42,6 +42,10 @@ const (
 	// empty is a heading with nothing under it: its body covers no line at
 	// all, which is the region that has no span to print.
 	empty = "# Top\n\n## Empty\n## Next\n\nbody\n"
+
+	// paired holds two paragraphs under one heading, so two hits arrive with
+	// the same trail and the trail has a chance to be printed twice.
+	paired = "# Top\n\n## Consequences\n\nalpha one\n\nalpha two\n"
 )
 
 // --- A. Data loss and silent wrong writes -----------------------------------
@@ -73,7 +77,7 @@ func TestApplyLeavesNoFileWrittenWhenAnotherCannotBe(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(sealed, 0o755) })
 
-	p := plan(t,
+	p := planFile(t,
 		`{"path":`+quote(good)+`,"match":"one","op":"check"}`,
 		`{"path":`+quote(bad)+`,"match":"two","op":"check"}`,
 	)
@@ -110,7 +114,7 @@ func TestKindItemSelectsOnlyItems(t *testing.T) {
 // scoped to bullets must not rewrite prose.
 func TestApplyKindItemDoesNotEditAParagraph(t *testing.T) {
 	path := doc(t, mixed)
-	p := plan(t, `{"path":`+quote(path)+`,"match":"Some paragraph","kind":"item","op":"replace","text":"REWRITTEN"}`)
+	p := planFile(t, `{"path":`+quote(path)+`,"match":"Some paragraph","kind":"item","op":"replace","text":"REWRITTEN"}`)
 	stdout, _, code := capture(t, "--apply", p, "--dry-run")
 	if code == 0 {
 		t.Errorf("an entry scoped to \"item\" matched a paragraph:\n%s", stdout)
@@ -272,7 +276,7 @@ func TestTruncateKeepsTheMatchedNode(t *testing.T) {
 // arrives as prose is one the caller cannot see at all.
 func TestApplyRefusalIsAlwaysJSONWhenAskedFor(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope.md")
-	p := plan(t, `{"path":`+quote(missing)+`,"match":"x","op":"check"}`)
+	p := planFile(t, `{"path":`+quote(missing)+`,"match":"x","op":"check"}`)
 	_, stderr, code := capture(t, "--apply", p, "--json")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
@@ -303,7 +307,7 @@ func TestApplyRefusalIsAlwaysJSONWhenAskedFor(t *testing.T) {
 // one whose end precedes its start is unreadable by any parser of that format.
 func TestCompactInsertionSpanIsReadable(t *testing.T) {
 	path := doc(t, widened)
-	p := plan(t, `{"path":`+quote(path)+`,"match":"Beta paragraph","op":"append","text":"appended para"}`)
+	p := planFile(t, `{"path":`+quote(path)+`,"match":"Beta paragraph","op":"append","text":"appended para"}`)
 	stdout, stderr, code := capture(t, "--apply", p, "--format", "compact", "--dry-run")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
@@ -404,33 +408,201 @@ func TestEmptySectionBodyHasNoBackwardsSpan(t *testing.T) {
 
 // --- D. Latent and cosmetic ---------------------------------------------------
 
-// A section title is judged by its first character. Reading one byte of a
-// multi-byte character judges a byte that is not a character at all: 0xC3, the
-// lead byte of every C-with-cedilla and every U-with-diaeresis, is 'Ã' on its
-// own, which is uppercase.
-func TestIsHelpTitleReadsAWholeRune(t *testing.T) {
-	tests := []struct {
-		line string
-		want bool
-	}{
-		{"Filters", true},
-		{"filters", false},
-		{"", false},
-		{"Output formats", false}, // a space is not a letter
-		{"über", false},           // lower case, whatever its encoding
+// The trail above a result is there to say where the result sits. Two results
+// that sit in the same place say it once: repeating an eleven-word trail for
+// every adjacent hit costs more than the trail is worth.
+func TestTrailIsNotRepeatedForAdjacentResults(t *testing.T) {
+	path := doc(t, paired)
+	stdout, stderr, code := capture(t, "alpha", path)
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
-	for _, tt := range tests {
-		if got := isHelpTitle(tt.line); got != tt.want {
-			t.Errorf("isHelpTitle(%q) = %v, want %v", tt.line, got, tt.want)
+	if n := strings.Count(stdout, "Top › Consequences"); n != 1 {
+		t.Errorf("the trail is printed %d times, want 1:\n%s", n, stdout)
+	}
+	for _, want := range []string{"alpha one", "alpha two"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("want %q in the output:\n%s", want, stdout)
 		}
 	}
 }
 
-// A doc comment belongs to the function below it. This one drifted onto its
-// neighbour, so godoc describes separator as the thing parseFormat does.
+// A heading result carries the heading itself, so the trail ending with that
+// same heading says it twice. The trail is built once, so every format gets
+// the shorter one -- not just the plain output the saving was measured on.
+func TestMachineFormatsDropTheRedundantTrail(t *testing.T) {
+	path := doc(t, "# Notes\n\n## Setup\n\nbody\n")
+
+	stdout, stderr, code := capture(t, "^## Setup", path, "--json")
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	var got struct {
+		Breadcrumb []string `json:"breadcrumb"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("%v: %s", err, stdout)
+	}
+	if len(got.Breadcrumb) != 1 || got.Breadcrumb[0] != "Notes" {
+		t.Errorf("breadcrumb = %v, want [Notes]: the heading names itself", got.Breadcrumb)
+	}
+
+	stdout, stderr, code = capture(t, "^## Setup", path, "--set-text", "New", "--dry-run")
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	if strings.Contains(stdout, "Notes › Setup") {
+		t.Errorf("the edit prints the trail down to the heading it is about to print:\n%s", stdout)
+	}
+}
+
+// A compact record is read by splitting on tabs. A count of held-back lines
+// spelled in English inside the text field cannot be told apart from a
+// document that says the same words, so it gets a field of its own.
+func TestCompactSaysHowMuchItTruncated(t *testing.T) {
+	path := doc(t, "# Doc\n\nalpha\nbeta\ngamma\ndelta\nepsilon\n")
+	stdout, stderr, code := capture(t, "alpha", path, "--format", "compact", "--truncate", "2")
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	record := strings.Split(strings.TrimSpace(stdout), "\n")[1]
+	fields := strings.Split(record, "\t")
+	if len(fields) != 5 {
+		t.Fatalf("want 5 fields, got %d: %q", len(fields), record)
+	}
+	if fields[3] != "0" || fields[4] != "3" {
+		t.Errorf("before, after = %q, %q, want 0, 3: %q", fields[3], fields[4], record)
+	}
+	if strings.Contains(fields[2], "…") {
+		t.Errorf("the notice is still inside the text: %q", record)
+	}
+}
+
+// The span is the node's and the text is the window --truncate kept, so one
+// count of the lines held back leaves a reader unable to say which line the
+// text starts on. Held back on each side, start plus before is that line.
+func TestCompactPlacesTheTruncatedWindow(t *testing.T) {
+	path := doc(t, "# Doc\n\nalpha\n\nbeta\n\ngamma\n\ndelta\n")
+	stdout, stderr, code := capture(t,
+		"delta", path, "-B", "2", "--format", "compact", "--truncate", "2")
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	record := strings.Split(strings.TrimSpace(stdout), "\n")[1]
+	fields := strings.Split(record, "\t")
+	if len(fields) != 5 {
+		t.Fatalf("want 5 fields, got %d: %q", len(fields), record)
+	}
+	if fields[0] != "5-9" {
+		t.Errorf("span = %q, want the region's 5-9: %q", fields[0], record)
+	}
+	if fields[2] != `\ndelta` {
+		t.Errorf("text = %q, want the last two lines of it: %q", fields[2], record)
+	}
+	// 5 (the span's start) plus 3 held back before is line 8, where the text
+	// begins. Their sum, 3, would have said the same for a window anywhere in
+	// the region.
+	if fields[3] != "3" || fields[4] != "0" {
+		t.Errorf("before, after = %q, %q, want 3, 0: %q", fields[3], fields[4], record)
+	}
+}
+
+// compact is documented as the format for a program, so the reason a run
+// refused has to arrive in a shape that program can read. A caller that has to
+// match a regular expression against English is not being told anything.
+func TestCompactRefusalIsRecords(t *testing.T) {
+	path := doc(t, "# Doc\n\nalpha one\n\nalpha two\n")
+	_, stderr, code := capture(t, "alpha", path, "--replace", "x", "--dry-run", "--format", "compact")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	fields := strings.Split(lines[0], "\t")
+	if len(fields) != 8 || fields[0] != "error" {
+		t.Fatalf("want an 8-field error record, got %q", lines[0])
+	}
+	if fields[1] != "ambiguous" {
+		t.Errorf("kind = %q, want ambiguous", fields[1])
+	}
+	if fields[3] != "2" {
+		t.Errorf("total = %q, want 2", fields[3])
+	}
+	if n := strings.Count(stderr, "\nmatch\t"); n != 2 {
+		t.Errorf("want a match record per hit, got %d:\n%s", n, stderr)
+	}
+	if strings.Contains(stderr, "mdgrep:") {
+		t.Errorf("a compact refusal should carry no prose:\n%s", stderr)
+	}
+}
+
+// An insertion covers no line, which is spelled End < Start. Every format has
+// to collapse that to the line it lands beside rather than hand a reader a
+// range running backwards.
+func TestEditJSONInsertionSpanIsReadable(t *testing.T) {
+	path := doc(t, "# Notes\n\n## Setup\n\nbody\n")
+	for _, op := range []string{"--append", "--prepend"} {
+		stdout, stderr, code := capture(t, "^## Setup", path, op, "x", "--dry-run", "--json")
+		if code != 0 {
+			t.Fatalf("%s: exit = %d (%s)", op, code, stderr)
+		}
+		var got struct {
+			Start int `json:"start"`
+			End   int `json:"end"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+			t.Fatalf("%s: %v: %s", op, err, stdout)
+		}
+		if got.End < got.Start {
+			t.Errorf("%s: span %d-%d runs backwards", op, got.Start, got.End)
+		}
+	}
+}
+
+// A doc comment belongs to the function below it, and moving a function has
+// to move its comment. Left behind, the comment describes a function the
+// package no longer holds; attached to the wrong one, godoc publishes it as
+// the description of that one. Both read as documentation and neither is.
 func TestDocCommentsNameTheirOwnFunction(t *testing.T) {
+	dirs, err := filepath.Glob("internal/*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	fset := token.NewFileSet()
-	paths, err := filepath.Glob("*.go")
+	pkgs := map[string][]*ast.File{}
+	declared := map[string]map[string]bool{}
+	// A function moved out of one package is usually still declared in
+	// another, so the comment left where it was is checked against every
+	// package's names rather than only its own.
+	anywhere := map[string]bool{}
+	for _, dir := range append([]string{"."}, dirs...) {
+		files := parsePackage(t, fset, dir)
+		if len(files) == 0 {
+			continue
+		}
+		pkgs[dir] = files
+		names := map[string]bool{}
+		for _, f := range files {
+			for _, decl := range f.Decls {
+				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
+					names[fn.Name.Name] = true
+					anywhere[fn.Name.Name] = true
+				}
+			}
+		}
+		declared[dir] = names
+	}
+	for dir, files := range pkgs {
+		checkDocComments(t, fset, files, declared[dir])
+		checkStrandedComments(t, fset, files, anywhere)
+	}
+}
+
+// parsePackage reads one directory's files with their comments, which is the
+// unit both checks work in: a name is only a name a comment could be
+// describing if some package declares it.
+func parsePackage(t *testing.T, fset *token.FileSet, dir string) []*ast.File {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,18 +614,14 @@ func TestDocCommentsNameTheirOwnFunction(t *testing.T) {
 		}
 		files = append(files, f)
 	}
+	return files
+}
 
-	// Only a name this package actually declares counts, so a comment opening
-	// with some other capitalised word is left alone.
-	declared := map[string]bool{}
-	for _, f := range files {
-		for _, decl := range f.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
-				declared[fn.Name.Name] = true
-			}
-		}
-	}
-
+// checkDocComments catches the comment that drifted onto its neighbour: only
+// a name the package itself declares counts, so a comment opening with some
+// other capitalised word is left alone.
+func checkDocComments(t *testing.T, fset *token.FileSet, files []*ast.File, declared map[string]bool) {
+	t.Helper()
 	for _, f := range files {
 		for _, decl := range f.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
@@ -464,6 +632,46 @@ func TestDocCommentsNameTheirOwnFunction(t *testing.T) {
 			if first != fn.Name.Name && declared[first] {
 				t.Errorf("%s: %s's doc comment opens by describing %q",
 					fset.Position(fn.Pos()), fn.Name.Name, first)
+			}
+		}
+	}
+}
+
+// checkStrandedComments catches the other half, which the first check cannot
+// see: a comment separated from its function by a blank line, or left at the
+// end of a file the function has gone from, is nobody's Doc at all. godoc
+// prints neither it nor a description of what follows it.
+func checkStrandedComments(t *testing.T, fset *token.FileSet, files []*ast.File, anywhere map[string]bool) {
+	t.Helper()
+	for _, f := range files {
+		attached := map[*ast.CommentGroup]bool{f.Doc: true}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch d := n.(type) {
+			case *ast.FuncDecl:
+				attached[d.Doc] = true
+			case *ast.GenDecl:
+				attached[d.Doc] = true
+			case *ast.TypeSpec:
+				attached[d.Doc] = true
+			case *ast.ValueSpec:
+				attached[d.Doc] = true
+			case *ast.Field:
+				attached[d.Doc] = true
+			}
+			return true
+		})
+		for _, group := range f.Comments {
+			pos := fset.Position(group.Pos())
+			// Column 1 is what a doc comment shares with the stranded one: a
+			// comment trailing a line of code, or indented inside a body, is
+			// describing the code beside it and is not a Doc gone missing.
+			if attached[group] || pos.Column != 1 {
+				continue
+			}
+			first, _, _ := strings.Cut(strings.TrimSpace(group.Text()), " ")
+			if anywhere[first] {
+				t.Errorf("%s: a comment describing %s is attached to nothing",
+					pos, first)
 			}
 		}
 	}
@@ -488,4 +696,140 @@ func atoi(t *testing.T, s string) int {
 		t.Fatalf("span holds %q, which is not a line number", s)
 	}
 	return n
+}
+
+// --- E. Flags read and dropped ------------------------------------------------
+
+// A flag that names a threshold nothing scores against, or a convention
+// nothing tries, was read and dropped: the run searched some other way and
+// said nothing. Silence is the one answer the caller did not ask for, so each
+// of these now refuses. The paired run is the point -- the refusal must be the
+// combination, not the flag.
+func TestFlagsThatWouldBeDroppedAreRefused(t *testing.T) {
+	path := doc(t, sample)
+	tests := []struct {
+		name    string
+		refused []string
+		says    string
+		allowed []string
+	}{
+		{
+			"min-score without fuzzy",
+			[]string{"--min-score", "0.9", "installer", path},
+			"--min-score",
+			[]string{"--fuzzy", "--min-score", "0.9", "installer", path},
+		},
+		{
+			"anchor-style without anchor",
+			[]string{"--anchor-style", "gh", "installer", path},
+			"--anchor-style",
+			[]string{"--anchor", "--anchor-style", "gh", "#install", path},
+		},
+		{
+			"ignore-case with anchor",
+			[]string{"--anchor", "-i", "#install", path},
+			"--anchor selects a heading",
+			[]string{"--anchor", "#install", path},
+		},
+		{
+			"case-sensitive with anchor",
+			[]string{"--anchor", "-s", "#install", path},
+			"--anchor selects a heading",
+			[]string{"--anchor", "#install", path},
+		},
+		{
+			"smart-case with anchor",
+			[]string{"--anchor", "-S", "#install", path},
+			"--anchor selects a heading",
+			[]string{"--anchor", "#install", path},
+		},
+		{
+			"ignore-case against case-sensitive",
+			[]string{"-i", "-s", "installer", path},
+			"-i, -s and -S",
+			[]string{"-i", "installer", path},
+		},
+		{
+			"smart-case against ignore-case",
+			[]string{"-S", "-i", "installer", path},
+			"-i, -s and -S",
+			[]string{"-S", "installer", path},
+		},
+		{
+			"smart-case against case-sensitive",
+			[]string{"-S", "-s", "installer", path},
+			"-i, -s and -S",
+			[]string{"-s", "installer", path},
+		},
+		{
+			"checked against unchecked",
+			[]string{"--checked", "--unchecked", "", path},
+			"--checked and --unchecked",
+			[]string{"--task", "", path},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stderr, code := capture(t, tt.refused...)
+			if code != 2 {
+				t.Errorf("exit = %d, want 2: the run went ahead without the flag", code)
+			}
+			if !strings.Contains(stderr, tt.says) {
+				t.Errorf("stderr does not name %q:\n%s", tt.says, stderr)
+			}
+			if _, stderr, code := capture(t, tt.allowed...); code == 2 {
+				t.Errorf("the combination was the defect, but %v is refused too:\n%s",
+					tt.allowed, stderr)
+			}
+		})
+	}
+}
+
+// --truncate was the only count that rejected a negative. The rest read one
+// and carried on as though the flag had been left off, which is a different
+// search reported as the one that was asked for. A short spelling has to
+// answer under the name the manual documents it by.
+func TestNegativeCountsAreRefused(t *testing.T) {
+	path := doc(t, sample)
+	for _, tt := range []struct{ flag, spelling string }{
+		{"--expand", "--expand"},
+		{"-B", "--before"},
+		{"-A", "--after"},
+		{"-C", "--context"},
+		{"--lines", "--lines"},
+		{"-m", "--max-count"},
+		{"--truncate", "--truncate"},
+	} {
+		t.Run(tt.flag, func(t *testing.T) {
+			_, stderr, code := capture(t, "installer", path, tt.flag, "-1")
+			if code != 2 {
+				t.Errorf("%s -1: exit = %d, want 2", tt.flag, code)
+			}
+			if !strings.Contains(stderr, tt.spelling) {
+				t.Errorf("%s -1 does not answer as %q:\n%s", tt.flag, tt.spelling, stderr)
+			}
+			if _, _, code := capture(t, "installer", path, tt.flag, "1"); code == 2 {
+				t.Errorf("%s 1 is refused as well", tt.flag)
+			}
+		})
+	}
+}
+
+// --min-score is documented as running from 0 to 1, and took anything.
+func TestMinScoreOutsideItsRangeIsRefused(t *testing.T) {
+	path := doc(t, sample)
+	for _, score := range []string{"-1", "5", "1.0001"} {
+		_, stderr, code := capture(t, "--fuzzy", "--min-score", score, "installer", path)
+		if code != 2 {
+			t.Errorf("--min-score %s: exit = %d, want 2", score, code)
+		}
+		if !strings.Contains(stderr, "0 to 1") {
+			t.Errorf("--min-score %s does not say what the range is:\n%s", score, stderr)
+		}
+	}
+	for _, score := range []string{"0", "0.5", "1"} {
+		if _, stderr, code := capture(t, "--fuzzy", "--min-score", score, "installer", path); code == 2 {
+			t.Errorf("--min-score %s is in range and was refused:\n%s", score, stderr)
+		}
+	}
 }

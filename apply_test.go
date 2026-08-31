@@ -3,14 +3,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/riadafridishibly/mdgrep/internal/report"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// plan writes a plan file for one test and returns its path.
-func plan(t *testing.T, entries ...string) string {
+// planFile writes a plan file for one test and returns its path.
+func planFile(t *testing.T, entries ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "plan.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(entries, "\n")+"\n"), 0o644); err != nil {
@@ -50,7 +51,7 @@ Call the binary.
 
 func TestApplyRunsEveryEntryInOnePass(t *testing.T) {
 	path := doc(t, tasks)
-	p := plan(t,
+	p := planFile(t,
 		`{"path":"`+path+`","match":"ship the docs","op":"check"}`,
 		`{"path":"`+path+`","match":"^## Setup","op":"set-text","text":"Install"}`,
 		`{"path":"`+path+`","match":"ship the tests","op":"check"}`,
@@ -83,7 +84,7 @@ func TestApplyReadsThePlanFromStdin(t *testing.T) {
 // whole of it: half a plan applied is worse than none of it.
 func TestApplyRefusesTheWholePlanForOneBadEntry(t *testing.T) {
 	path := doc(t, tasks)
-	p := plan(t,
+	p := planFile(t,
 		`{"path":"`+path+`","match":"ship the docs","op":"check"}`,
 		`{"path":"`+path+`","match":"ship","op":"check"}`,
 	)
@@ -104,7 +105,7 @@ func TestApplyRefusesTheWholePlanForOneBadEntry(t *testing.T) {
 
 func TestApplyRefusesAnEntryThatMatchesNothing(t *testing.T) {
 	path := doc(t, tasks)
-	p := plan(t, `{"path":"`+path+`","match":"ship the moon","op":"check"}`)
+	p := planFile(t, `{"path":"`+path+`","match":"ship the moon","op":"check"}`)
 	_, stderr, code := capture(t, "--apply", p)
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
@@ -116,7 +117,7 @@ func TestApplyRefusesAnEntryThatMatchesNothing(t *testing.T) {
 
 func TestApplyRefusalJSONCarriesTheEntryNumber(t *testing.T) {
 	path := doc(t, tasks)
-	p := plan(t,
+	p := planFile(t,
 		`{"path":"`+path+`","match":"ship the docs","op":"check"}`,
 		`{"path":"`+path+`","match":"ship","op":"check"}`,
 	)
@@ -124,7 +125,7 @@ func TestApplyRefusalJSONCarriesTheEntryNumber(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
-	var got jsonRefusal
+	var got report.Refusal
 	line, _, _ := strings.Cut(stderr, "\n")
 	if err := json.Unmarshal([]byte(line), &got); err != nil {
 		t.Fatalf("stderr is not JSON: %v\n%s", err, stderr)
@@ -136,7 +137,7 @@ func TestApplyRefusalJSONCarriesTheEntryNumber(t *testing.T) {
 
 // A misspelled key would otherwise be a silently different edit.
 func TestApplyRefusesAnUnknownKey(t *testing.T) {
-	p := plan(t, `{"path":"x.md","matches":"ship","op":"check"}`)
+	p := planFile(t, `{"path":"x.md","matches":"ship","op":"check"}`)
 	_, stderr, code := capture(t, "--apply", p)
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
@@ -159,11 +160,12 @@ func TestApplyChecksWhatAnEntryAsksFor(t *testing.T) {
 		{"text an op cannot use", `{"path":"x.md","match":"a","op":"check","text":"b"}`, `takes no "text"`},
 		{"missing text", `{"path":"x.md","match":"a","op":"replace"}`, `wants "text"`},
 		{"expect below one", `{"path":"x.md","match":"a","op":"check","expect":0}`, `above zero`},
+		{"negative expand", `{"path":"x.md","match":"a","op":"check","expand":-1}`, "cannot be negative"},
 		{"section on a node edit", `{"path":"x.md","match":"a","op":"check","section":true}`, "has nothing to widen"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, stderr, code := capture(t, "--apply", plan(t, tt.entry))
+			_, stderr, code := capture(t, "--apply", planFile(t, tt.entry))
 			if code != 2 {
 				t.Fatalf("exit = %d, want 2", code)
 			}
@@ -214,7 +216,7 @@ func TestApplyRefusesTwoEntriesOverTheSameLines(t *testing.T) {
 			for i, e := range tt.entries {
 				entries[i] = fmt.Sprintf(e, path)
 			}
-			_, stderr, code := capture(t, "--apply", plan(t, entries...))
+			_, stderr, code := capture(t, "--apply", planFile(t, entries...))
 			if code != 2 {
 				t.Fatalf("exit = %d, want 2", code)
 			}
@@ -234,7 +236,7 @@ func TestApplyRefusesTwoEntriesOverTheSameLines(t *testing.T) {
 // something other than what it says.
 func TestApplyCannotMatchWhatAnotherEntryWrites(t *testing.T) {
 	path := doc(t, tasks)
-	p := plan(t,
+	p := planFile(t,
 		`{"path":"`+path+`","match":"^## Usage","op":"set-text","text":"Running"}`,
 		`{"path":"`+path+`","match":"^## Running","op":"append","text":"see below"}`,
 	)
@@ -255,7 +257,7 @@ func TestApplyCannotMatchWhatAnotherEntryWrites(t *testing.T) {
 // move what a later entry rewrites.
 func TestApplyKeepsLaterEntriesInPlaceWhenAnEarlierOneShiftsTheFile(t *testing.T) {
 	path := doc(t, tasks)
-	p := plan(t,
+	p := planFile(t,
 		`{"path":"`+path+`","match":"^# Guide","op":"append","text":"one\ntwo\nthree"}`,
 		`{"path":"`+path+`","match":"Call the binary","op":"set-text","text":"Run the binary."}`,
 		`{"path":"`+path+`","match":"ship the tests","op":"check"}`,
@@ -288,7 +290,7 @@ Run the binary.
 // away, so both land, in the order the plan wrote them.
 func TestApplyTakesTwoInsertionsAtTheSamePoint(t *testing.T) {
 	path := doc(t, "# Guide\n\nFirst para.\n\nSecond para.\n")
-	p := plan(t,
+	p := planFile(t,
 		`{"path":"`+path+`","match":"First para","op":"append","text":"after first"}`,
 		`{"path":"`+path+`","match":"Second para","op":"prepend","text":"before second"}`,
 	)
@@ -304,7 +306,7 @@ func TestApplyTakesTwoInsertionsAtTheSamePoint(t *testing.T) {
 
 func TestApplyTakesTheKeysThatStandInForFlags(t *testing.T) {
 	path := doc(t, tasks)
-	p := plan(t, `{"path":"`+path+`","match":"ship","op":"check","multi":true,"expect":2,"kind":"item"}`)
+	p := planFile(t, `{"path":"`+path+`","match":"ship","op":"check","multi":true,"expect":2,"kind":"item"}`)
 	_, stderr, code := capture(t, "--apply", p)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
@@ -316,7 +318,7 @@ func TestApplyTakesTheKeysThatStandInForFlags(t *testing.T) {
 
 func TestApplyMatchesLiterallyWhenAskedTo(t *testing.T) {
 	path := doc(t, "- [ ] ship v1.0 (final)\n- [ ] ship v1x0 final\n")
-	p := plan(t, `{"path":"`+path+`","match":"v1.0 (final)","op":"check","fixed":true}`)
+	p := planFile(t, `{"path":"`+path+`","match":"v1.0 (final)","op":"check","fixed":true}`)
 	_, stderr, code := capture(t, "--apply", p)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
@@ -328,7 +330,7 @@ func TestApplyMatchesLiterallyWhenAskedTo(t *testing.T) {
 
 func TestApplyDryRunWritesNothing(t *testing.T) {
 	path := doc(t, tasks)
-	p := plan(t, `{"path":"`+path+`","match":"ship the docs","op":"check"}`)
+	p := planFile(t, `{"path":"`+path+`","match":"ship the docs","op":"check"}`)
 	stdout, stderr, code := capture(t, "--apply", p, "--dry-run", "--format", "compact")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
@@ -344,7 +346,7 @@ func TestApplyDryRunWritesNothing(t *testing.T) {
 // The plan says what to search for and what to do about it, so a flag that
 // would have said either is a misunderstanding rather than an extra.
 func TestApplyRefusesTheFlagsItSupersedes(t *testing.T) {
-	p := plan(t, `{"path":"x.md","match":"a","op":"check"}`)
+	p := planFile(t, `{"path":"x.md","match":"a","op":"check"}`)
 	tests := []struct {
 		name string
 		args []string
@@ -368,7 +370,7 @@ func TestApplyRefusesTheFlagsItSupersedes(t *testing.T) {
 }
 
 func TestApplyWantsObjectsRatherThanAnArray(t *testing.T) {
-	p := plan(t, `[{"path":"x.md","match":"a","op":"check"}]`)
+	p := planFile(t, `[{"path":"x.md","match":"a","op":"check"}]`)
 	_, stderr, code := capture(t, "--apply", p)
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
@@ -394,7 +396,7 @@ func TestApplyRefusesAnEmptyPlan(t *testing.T) {
 
 func TestApplyReportsAFileItCannotRead(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "gone.md")
-	p := plan(t, `{"path":"`+missing+`","match":"a","op":"check"}`)
+	p := planFile(t, `{"path":"`+missing+`","match":"a","op":"check"}`)
 	_, stderr, code := capture(t, "--apply", p)
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
@@ -412,7 +414,7 @@ func TestApplyTakesOneFileNamedTwoWaysAsOneFile(t *testing.T) {
 	alias := filepath.Dir(path) + "/./" + filepath.Base(path)
 
 	t.Run("both edits land", func(t *testing.T) {
-		p := plan(t,
+		p := planFile(t,
 			`{"path":"`+path+`","match":"ship the docs","op":"check"}`,
 			`{"path":"`+alias+`","match":"ship the tests","op":"check"}`,
 		)
@@ -429,7 +431,7 @@ func TestApplyTakesOneFileNamedTwoWaysAsOneFile(t *testing.T) {
 		if err := os.WriteFile(path, []byte(tasks), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		p := plan(t,
+		p := planFile(t,
 			`{"path":"`+path+`","match":"ship the docs","op":"check"}`,
 			`{"path":"`+alias+`","match":"ship the docs","op":"uncheck"}`,
 		)
@@ -457,7 +459,7 @@ func TestApplyGathersEverySpellingOfOnePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	alias := filepath.Join(dir, ".", "notes.md")
-	p := plan(t,
+	p := planFile(t,
 		fmt.Sprintf(`{"path":%q,"match":"ship the docs","op":"check"}`, path),
 		fmt.Sprintf(`{"path":%q,"match":"ship the tests","op":"check"}`, alias),
 		fmt.Sprintf(`{"path":%q,"match":"^## Setup","op":"set-text","text":"Install"}`, alias),

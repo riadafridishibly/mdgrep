@@ -1,4 +1,4 @@
-package main
+package walk
 
 import (
 	"fmt"
@@ -31,9 +31,12 @@ func plant(t *testing.T, files ...string) {
 
 func collected(t *testing.T, paths []string, hidden, noIgnore bool) []string {
 	t.Helper()
-	files, stdin, err := collectFiles(paths, markdown, hidden, noIgnore)
+	files, stdin, unread, err := Files(paths, markdown, hidden, noIgnore)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(unread) > 0 {
+		t.Fatalf("the walk could not read %v", unread)
 	}
 	if stdin {
 		t.Fatal("the walk asked for stdin")
@@ -88,6 +91,25 @@ func TestWalkReportsAFileOnce(t *testing.T) {
 		[]string{"docs/a.md", "docs/b.md", "top.md"})
 }
 
+// A walk keys what it has found on a cleaned path, so a file named in any
+// other spelling of itself has to be cleaned before it is asked about --
+// otherwise it is searched a second time, which shows up as two hits on one
+// node, a count gate that refuses a single match, and an edit planned twice
+// against the same original.
+func TestWalkReportsAFileOnceHoweverItIsSpelled(t *testing.T) {
+	plant(t, "docs/a.md", "top.md")
+	spellings := []string{"./top.md", "docs//a.md", "docs/../docs/a.md", "./docs/./a.md"}
+	same(t, collected(t, append([]string{"."}, spellings...), false, false),
+		[]string{"docs/a.md", "top.md"})
+}
+
+// The spelling the caller used is the one reported back, so a file named
+// before the walk that would also find it keeps the name it was asked for.
+func TestWalkKeepsTheSpellingItWasGiven(t *testing.T) {
+	plant(t, "top.md")
+	same(t, collected(t, []string{"./top.md", "."}, false, false), []string{"./top.md"})
+}
+
 // Build output and caches are most of the files under a repository and none of
 // the ones worth reading, and a name that is not markdown is not worth opening.
 func TestWalkSkipsWhatItIsNotThereFor(t *testing.T) {
@@ -138,4 +160,34 @@ func TestWalkTakesAnUncleanRoot(t *testing.T) {
 			t.Fatalf("root %q: got %v, want one keep.md", root, got)
 		}
 	}
+}
+
+// A directory the walk cannot read is a hole in the search rather than an
+// empty one, so it comes back named. The rest of the tree is still collected:
+// the files that could be read are worth reporting whatever the caller decides
+// to do about the ones that could not.
+func TestUnreadableDirectoryIsReportedNotDropped(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode says")
+	}
+	plant(t, "top.md", "closed/hidden.md")
+	if err := os.Chmod("closed", 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod("closed", 0o755) })
+	if _, err := os.ReadDir("closed"); err == nil {
+		t.Skip("the filesystem does not enforce directory modes")
+	}
+
+	files, _, unread, err := Files([]string{"."}, markdown, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 {
+		t.Fatalf("unread = %v, want the one directory that could not be read", unread)
+	}
+	if !strings.Contains(unread[0].Error(), "closed") {
+		t.Errorf("unread = %v, want it to name closed", unread[0])
+	}
+	same(t, files, []string{"top.md"})
 }

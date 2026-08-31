@@ -316,3 +316,15 @@ func isFence(line string) bool {
 	t := strings.TrimSpace(line)
 	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
 }
+
+// Changed reports whether a plan would alter the file at all, so a run that
+// amounts to nothing can skip the write rather than rewrite a file with its
+// own contents.
+func Changed(changes []Change) bool {
+	for _, c := range changes {
+		if !c.NoOp {
+			return true
+		}
+	}
+	return false
+}

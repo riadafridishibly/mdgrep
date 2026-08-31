@@ -106,7 +106,7 @@ func File(doc *mdoc.Doc, m match.Matcher, opt Options) []Result {
 			HitEnd:     sel.End,
 			Task:       sel.Task,
 			Checked:    sel.Checked,
-			Breadcrumb: doc.Breadcrumb(sel.Start),
+			Breadcrumb: trail(doc, sel, start, end),
 		})
 	}
 	if len(out) == 0 {
@@ -226,12 +226,8 @@ func promote(b *mdoc.Block, opt Options) (*mdoc.Block, bool) {
 	if insideItem(b) {
 		b = b.Parent
 	}
-	// The filter is applied here rather than to the block that carried the
-	// text, because the lift above is the whole reason a bullet's children
-	// were scored. A paragraph that is nobody's bullet did not become one, and
-	// a caller who asked for items is not shown it. Expand climbs afterwards,
-	// so what it widens to is not filtered again: --kind says what matches,
-	// not what a match is widened to.
+	// --kind says what matches, not what a match is widened to, so the filter
+	// sees the lifted block and Expand climbs past it unfiltered.
 	if opt.Kinds != nil && !opt.Kinds[b.Kind] {
 		return nil, false
 	}
@@ -316,6 +312,19 @@ func trimBlankEnds(src *mdoc.Source, start, end int) (int, int) {
 		end--
 	}
 	return start, end
+}
+
+// trail is the heading trail that names a result. A region holding the
+// heading's own line already says what the trail's last element says, so the
+// trail stops at the parent; a --section-body region leaves that line out, and
+// there the whole trail is what names the hit.
+func trail(doc *mdoc.Doc, sel *mdoc.Block, start, end int) []string {
+	crumb := doc.Breadcrumb(sel.Start)
+	holdsHeading := sel.Kind == mdoc.KindHeading && start <= sel.Start && sel.Start <= end
+	if holdsHeading && len(crumb) > 0 {
+		return crumb[:len(crumb)-1]
+	}
+	return crumb
 }
 
 func clamp(start, end, numLines int) (int, int) {

@@ -1,4 +1,4 @@
-package main
+package report
 
 import (
 	"bytes"
@@ -9,24 +9,25 @@ import (
 
 	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/render"
 	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
-func expecting(n int) optInt { return optInt{val: n, set: true} }
+func expecting(n int) *int { return &n }
 
-func TestCountGate(t *testing.T) {
+func TestGate(t *testing.T) {
 	tests := []struct {
 		name   string
 		total  int
-		expect optInt
+		expect *int
 		multi  bool
 		kind   string
 		code   int
 	}{
-		{"one match is the whole instruction", 1, optInt{}, false, "", 0},
-		{"nothing matched", 0, optInt{}, false, "nomatch", 1},
-		{"two without --multi", 2, optInt{}, false, "ambiguous", 2},
-		{"two with --multi", 2, optInt{}, true, "", 0},
+		{"one match is the whole instruction", 1, nil, false, "", 0},
+		{"nothing matched", 0, nil, false, "nomatch", 1},
+		{"two without --multi", 2, nil, false, "ambiguous", 2},
+		{"two with --multi", 2, nil, true, "", 0},
 		{"the count that was expected", 3, expecting(3), false, "", 0},
 		{"expecting more than matched", 2, expecting(3), false, "expect", 2},
 		{"expecting fewer than matched", 9, expecting(3), false, "expect", 2},
@@ -35,19 +36,19 @@ func TestCountGate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			why, code := countGate(tt.total, tt.expect, tt.multi, flagWords)
-			if why.kind != tt.kind || code != tt.code {
-				t.Errorf("got (%q, %d), want (%q, %d)", why.kind, code, tt.kind, tt.code)
+			why, code := Gate(tt.total, tt.expect, tt.multi, FlagWords)
+			if why.Kind != tt.kind || code != tt.code {
+				t.Errorf("got (%q, %d), want (%q, %d)", why.Kind, code, tt.kind, tt.code)
 			}
-			if code != 0 && tt.kind != "nomatch" && why.text == "" {
+			if code != 0 && tt.kind != "nomatch" && why.Text == "" {
 				t.Error("a refusal a caller can read should say why")
 			}
 		})
 	}
 }
 
-// found searches src and returns it in the shape runEdits reports on.
-func found(t *testing.T, src, pat string) ([]fileResult, int) {
+// found searches src and returns it in the shape a refusal reports on.
+func found(t *testing.T, src, pat string) ([]File, int) {
 	t.Helper()
 	m, err := match.New(pat, match.Options{Mode: match.Substring})
 	if err != nil {
@@ -55,7 +56,7 @@ func found(t *testing.T, src, pat string) ([]fileResult, int) {
 	}
 	doc := mdoc.Parse("d.md", []byte(src))
 	res := search.File(doc, m, search.Options{Distinct: true})
-	return []fileResult{{doc.Src, res}}, len(res)
+	return []File{{doc.Src, res}}, len(res)
 }
 
 // manyItems is a list long enough to run past the cap a refusal lists.
@@ -68,17 +69,17 @@ func manyItems(n int) string {
 	return b.String()
 }
 
-func TestReportRefusedText(t *testing.T) {
+func TestRefusedText(t *testing.T) {
 	results, total := found(t, "# H\n\n- alpha needle\n- beta needle\n", "needle")
 	if total != 2 {
 		t.Fatalf("total = %d, want 2", total)
 	}
-	why, code := countGate(total, optInt{}, false, flagWords)
+	why, code := Gate(total, nil, false, FlagWords)
 	if code != 2 {
 		t.Fatalf("code = %d, want 2", code)
 	}
 	var buf bytes.Buffer
-	reportRefused(&buf, results, total, why, false)
+	Refused(&buf, results, total, why, render.Plain)
 	out := buf.String()
 	for _, want := range []string{"2 matches", "--multi", "d.md:3", "alpha needle", "d.md:4", "beta needle"} {
 		if !strings.Contains(out, want) {
@@ -87,14 +88,14 @@ func TestReportRefusedText(t *testing.T) {
 	}
 }
 
-func TestReportRefusedTextCaps(t *testing.T) {
+func TestRefusedTextCaps(t *testing.T) {
 	results, total := found(t, manyItems(25), "needle")
 	if total != 25 {
 		t.Fatalf("total = %d, want 25", total)
 	}
 	var buf bytes.Buffer
-	why, _ := countGate(total, optInt{}, false, flagWords)
-	reportRefused(&buf, results, total, why, false)
+	why, _ := Gate(total, nil, false, FlagWords)
+	Refused(&buf, results, total, why, render.Plain)
 	if n := strings.Count(buf.String(), "d.md:"); n != shownMatches {
 		t.Errorf("listed %d matches, want %d", n, shownMatches)
 	}
@@ -105,9 +106,9 @@ func TestReportRefusedTextCaps(t *testing.T) {
 
 // decodeRefusal reads back what --json wrote, and insists it was the single
 // object a caller would parse rather than a stream or a line of English.
-func decodeRefusal(t *testing.T, b []byte) jsonRefusal {
+func decodeRefusal(t *testing.T, b []byte) Refusal {
 	t.Helper()
-	var out jsonRefusal
+	var out Refusal
 	dec := json.NewDecoder(bytes.NewReader(b))
 	if err := dec.Decode(&out); err != nil {
 		t.Fatalf("decode %q: %v", b, err)
@@ -118,11 +119,11 @@ func decodeRefusal(t *testing.T, b []byte) jsonRefusal {
 	return out
 }
 
-func TestReportRefusedJSON(t *testing.T) {
+func TestRefusedJSON(t *testing.T) {
 	results, total := found(t, "# H\n\n- alpha needle\n- beta needle\n", "needle")
-	why, _ := countGate(total, optInt{}, false, flagWords)
+	why, _ := Gate(total, nil, false, FlagWords)
 	var buf bytes.Buffer
-	reportRefused(&buf, results, total, why, true)
+	Refused(&buf, results, total, why, render.JSON)
 
 	got := decodeRefusal(t, buf.Bytes())
 	if got.Error != "ambiguous" {
@@ -134,7 +135,7 @@ func TestReportRefusedJSON(t *testing.T) {
 	if got.Expected != 0 {
 		t.Errorf("expected = %d, want it left out when --expect was not given", got.Expected)
 	}
-	want := []jsonMatch{
+	want := []Match{
 		{Path: "d.md", Line: 3, Text: "- alpha needle"},
 		{Path: "d.md", Line: 4, Text: "- beta needle"},
 	}
@@ -145,15 +146,15 @@ func TestReportRefusedJSON(t *testing.T) {
 	}
 }
 
-func TestReportRefusedJSONExpect(t *testing.T) {
+func TestRefusedJSONExpect(t *testing.T) {
 	results, total := found(t, "# H\n\n- alpha needle\n- beta needle\n", "needle")
 	expect := expecting(5)
-	why, code := countGate(total, expect, false, flagWords)
+	why, code := Gate(total, expect, false, FlagWords)
 	if code != 2 {
 		t.Fatalf("code = %d, want 2", code)
 	}
 	var buf bytes.Buffer
-	reportRefused(&buf, results, total, why, true)
+	Refused(&buf, results, total, why, render.JSON)
 
 	got := decodeRefusal(t, buf.Bytes())
 	if got.Error != "expect" {
@@ -167,13 +168,13 @@ func TestReportRefusedJSONExpect(t *testing.T) {
 	}
 }
 
-// TestReportRefusedJSONNoMatches covers the shape an empty list takes: the
+// TestRefusedJSONNoMatches covers the shape an empty list takes: the
 // field is still an array, so a caller can range over it without a nil check.
-func TestReportRefusedJSONNoMatches(t *testing.T) {
+func TestRefusedJSONNoMatches(t *testing.T) {
 	expect := expecting(1)
-	why, _ := countGate(0, expect, false, flagWords)
+	why, _ := Gate(0, expect, false, FlagWords)
 	var buf bytes.Buffer
-	reportRefused(&buf, nil, 0, why, true)
+	Refused(&buf, nil, 0, why, render.JSON)
 
 	if !bytes.Contains(buf.Bytes(), []byte(`"matches":[]`)) {
 		t.Errorf("want an empty array, got %s", buf.Bytes())
@@ -183,11 +184,11 @@ func TestReportRefusedJSONNoMatches(t *testing.T) {
 	}
 }
 
-func TestReportRefusedJSONCaps(t *testing.T) {
+func TestRefusedJSONCaps(t *testing.T) {
 	results, total := found(t, manyItems(25), "needle")
-	why, _ := countGate(total, optInt{}, false, flagWords)
+	why, _ := Gate(total, nil, false, FlagWords)
 	var buf bytes.Buffer
-	reportRefused(&buf, results, total, why, true)
+	Refused(&buf, results, total, why, render.JSON)
 
 	got := decodeRefusal(t, buf.Bytes())
 	if len(got.Matches) != shownMatches {

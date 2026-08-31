@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -74,10 +75,10 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	}
 	switch p.Format {
 	case JSON:
-		p.printJSON(src, results)
+		p.printJSON(src, results, m)
 		return
 	case Compact:
-		p.printCompact(src, results)
+		p.printCompact(src, results, m)
 		return
 	case Outline:
 		p.printOutline(src, results)
@@ -94,14 +95,16 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 		last = max(last, r.End+1)
 	}
 	width := len(strconv.Itoa(last))
+	var shown []string
 	for i, r := range results {
 		if i > 0 && p.Separator != "" {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, p.Separator))
 		}
-		if crumb := p.crumb(r); p.Breadcrumb && len(crumb) > 0 {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(crumb)))
+		if p.Breadcrumb && len(r.Breadcrumb) > 0 && !slices.Equal(r.Breadcrumb, shown) {
+			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
 		}
-		first, last, before, after := p.window(r)
+		shown = r.Breadcrumb
+		first, last, before, after := p.window(src, r, m)
 		if before > 0 {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(before)))
 		}
@@ -124,32 +127,42 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	}
 }
 
-// crumb is the trail to print above a result. A heading result prints that
-// heading on the very next line and the trail ends with it, so the last
-// element would say the same thing twice; the trail stops at the parent
-// instead. A --section-body result keeps the whole trail, because there the
-// heading line itself is never printed.
-func (p *Printer) crumb(r search.Result) []string {
-	if r.Kind == mdoc.KindHeading && len(r.Breadcrumb) > 0 &&
-		r.Start <= r.HitStart && r.HitStart <= r.End {
-		return r.Breadcrumb[:len(r.Breadcrumb)-1]
-	}
-	return r.Breadcrumb
-}
-
-// window applies Truncate to one result. The cap is a budget of lines, and the
-// matched line is what the caller asked for, so the window keeps the hit and
-// spends what is left on the context above it before the context below.
-func (p *Printer) window(r search.Result) (first, last, before, after int) {
+// window applies Truncate to one result. The cap is a budget of lines and the
+// matched line is the one thing the caller asked for, so the window starts at
+// the top of the region and slides down only as far as it must to hold that
+// line, spending what is left of the budget below it. before is therefore
+// what was skipped to reach the hit, not context kept above it.
+func (p *Printer) window(src *mdoc.Source, r search.Result, m match.Matcher) (first, last, before, after int) {
 	if p.Truncate <= 0 || r.End-r.Start+1 <= p.Truncate {
 		return r.Start, r.End, 0, 0
 	}
+	hit := hitLine(src, r, m)
 	first = r.Start
-	if r.HitStart > first+p.Truncate-1 {
-		first = min(r.HitStart, r.End-p.Truncate+1)
+	if hit > first+p.Truncate-1 {
+		first = min(hit, r.End-p.Truncate+1)
 	}
 	last = min(first+p.Truncate-1, r.End)
 	return first, last, first - r.Start, r.End - last
+}
+
+// hitLine is the line the window has to keep. A block is scored whole -- the
+// matcher reads the raw text of the fence or the table, not its lines -- so
+// HitStart is where the block begins and says nothing about where in it the
+// match is. Truncating from HitStart cuts a long block down to its opening
+// lines and drops the very line that was searched for. Spans finds that line
+// the same way the highlight does; a matcher with nothing to point at leaves
+// the block's first line, which is what an anchor search selects a heading by
+// and what a fuzzy score spread over several lines comes to anyway.
+func hitLine(src *mdoc.Source, r search.Result, m match.Matcher) int {
+	if m == nil {
+		return r.HitStart
+	}
+	for n := r.HitStart; n <= r.HitEnd && n < src.NumLines(); n++ {
+		if len(m.Spans(src.Line(n))) > 0 {
+			return n
+		}
+	}
+	return r.HitStart
 }
 
 func elision(cut int) string {
@@ -185,25 +198,27 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 
 // printCompact writes the path once and then one record per result:
 //
-//	start[-end] <TAB> kind <TAB> text
+//	start[-end] <TAB> kind <TAB> text <TAB> before <TAB> after
 //
 // The text is escaped so a record is always one line, which is the whole point
 // of the format — a reader splits on newline and then on tab, and a path is
 // the line that has no tab in it. The path is escaped for the same reason: a
 // filename may hold a tab or a newline, and the format has to survive one.
-func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
+//
+// before and after are how many lines --truncate held back on each side, so
+// the count is read as a number rather than out of an English notice inside
+// the text, which a document that says the same thing would be
+// indistinguishable from. They are two fields and not their sum because the
+// span is the node's and the text is the window: a reader adds before to
+// start to find the line the text begins on, which one total cannot say.
+func (p *Printer) printCompact(src *mdoc.Source, results []search.Result, m match.Matcher) {
 	p.wroteAny = true
-	fmt.Fprintln(p.W, escape(src.Path))
+	fmt.Fprintln(p.W, Escape(src.Path))
 	for _, r := range results {
-		first, last, before, after := p.window(r)
+		first, last, before, after := p.window(src, r, m)
 		text := strings.Join(src.Lines(first, last), "\n")
-		if before > 0 {
-			text = elision(before) + "\n" + text
-		}
-		if after > 0 {
-			text += "\n" + elision(after)
-		}
-		fmt.Fprintf(p.W, "%s\t%s\t%s\n", lineSpan(r.Start, r.End), r.Kind, escape(text))
+		fmt.Fprintf(p.W, "%s\t%s\t%s\t%d\t%d\n",
+			lineSpan(r.Start, r.End), r.Kind, Escape(text), before, after)
 	}
 }
 
@@ -251,7 +266,9 @@ func lineSpan(start, end int) string {
 
 var escaper = strings.NewReplacer("\\", "\\\\", "\n", "\\n", "\r", "\\r", "\t", "\\t")
 
-func escape(s string) string { return escaper.Replace(s) }
+// Escape puts a string into one field of a compact record, so a value holding
+// a tab or a newline cannot be read as the end of the field or the record.
+func Escape(s string) string { return escaper.Replace(s) }
 
 type jsonResult struct {
 	Path       string   `json:"path"`
@@ -262,13 +279,16 @@ type jsonResult struct {
 	Checked    *bool    `json:"checked,omitempty"`
 	Breadcrumb []string `json:"breadcrumb,omitempty"`
 	Text       string   `json:"text"`
-	// Truncated counts the lines --truncate held back, so a reader can tell a
-	// short node from a capped one without measuring the text against start
-	// and end.
-	Truncated int `json:"truncated,omitempty"`
+	// TruncatedBefore and TruncatedAfter count the lines --truncate held back
+	// on each side, so a reader can tell a short node from a capped one
+	// without measuring the text against start and end -- and, since start is
+	// the node's and text is the window, can place the window by adding
+	// TruncatedBefore to start.
+	TruncatedBefore int `json:"truncated_before,omitempty"`
+	TruncatedAfter  int `json:"truncated_after,omitempty"`
 }
 
-func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
+func (p *Printer) printJSON(src *mdoc.Source, results []search.Result, m match.Matcher) {
 	enc := json.NewEncoder(p.W)
 	for _, r := range results {
 		p.wroteAny = true
@@ -277,17 +297,18 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 		if r.Task {
 			checked = &r.Checked
 		}
-		first, last, before, after := p.window(r)
+		first, last, before, after := p.window(src, r, m)
 		enc.Encode(jsonResult{
-			Path:       r.Path,
-			Kind:       string(r.Kind),
-			Score:      r.Score,
-			Start:      r.Start + 1,
-			End:        max(r.End, r.Start) + 1,
-			Checked:    checked,
-			Breadcrumb: r.Breadcrumb,
-			Text:       strings.Join(src.Lines(first, last), "\n"),
-			Truncated:  before + after,
+			Path:            r.Path,
+			Kind:            string(r.Kind),
+			Score:           r.Score,
+			Start:           r.Start + 1,
+			End:             max(r.End, r.Start) + 1,
+			Checked:         checked,
+			Breadcrumb:      r.Breadcrumb,
+			Text:            strings.Join(src.Lines(first, last), "\n"),
+			TruncatedBefore: before,
+			TruncatedAfter:  after,
 		})
 	}
 }

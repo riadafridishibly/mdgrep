@@ -7,6 +7,9 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/riadafridishibly/mdgrep/internal/help"
+	"github.com/riadafridishibly/mdgrep/internal/report"
 )
 
 // capture runs the command the way main() would and hands back what each
@@ -89,7 +92,7 @@ func TestErrorsAreShort(t *testing.T) {
 			if !strings.Contains(stderr, tt.says) {
 				t.Errorf("stderr does not say %q:\n%s", tt.says, stderr)
 			}
-			if !strings.Contains(stderr, hint) {
+			if !strings.Contains(stderr, help.Hint) {
 				t.Errorf("stderr does not point at --help:\n%s", stderr)
 			}
 			if strings.Contains(stderr, "Selection") {
@@ -169,7 +172,7 @@ func TestRefusalJSONGoesToStderr(t *testing.T) {
 	if stdout != "" {
 		t.Errorf("stdout should be empty when nothing was edited:\n%s", stdout)
 	}
-	var got jsonRefusal
+	var got report.Refusal
 	if err := json.Unmarshal([]byte(stderr), &got); err != nil {
 		t.Fatalf("stderr is not one JSON object: %v\n%s", err, stderr)
 	}
@@ -230,8 +233,8 @@ func TestCompactKeepsOneRecordPerLine(t *testing.T) {
 		t.Errorf("the path line should have no tab in it: %q", lines[0])
 	}
 	fields := strings.Split(lines[1], "\t")
-	if len(fields) != 3 {
-		t.Fatalf("want 3 tab-separated fields, got %d: %q", len(fields), lines[1])
+	if len(fields) != 5 {
+		t.Fatalf("want 5 tab-separated fields, got %d: %q", len(fields), lines[1])
 	}
 	if fields[0] != "3-5" {
 		t.Errorf("span = %q, want 3-5", fields[0])
@@ -338,6 +341,16 @@ func TestHelpTopicNarrowsTheManual(t *testing.T) {
 		{"anchor", "--anchor-style", "--expect"},      // found by flag name
 		{"format", "--format WHEN", "--anchor-style"}, // found by flag name too
 		{"output", "--json", "--expect"},
+		// --apply was thirteen lines of prose inside Editing's flag column,
+		// which is a section wearing a flag's clothes. It has one of its own,
+		// so Editing no longer carries it and "--help apply" finds Plans.
+		{"plans", "--apply", "--expect"},
+		{"apply", "--apply", "--dry-run"},
+		{"editing", "--dry-run", "--apply"},
+		// --uncheck and --toggle used to be named in --check's prose rather
+		// than in the flag column, where pickSection cannot see them.
+		{"uncheck", "--uncheck", "--apply"},
+		{"toggle", "--toggle", "--apply"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.topic, func(t *testing.T) {
@@ -354,8 +367,8 @@ func TestHelpTopicNarrowsTheManual(t *testing.T) {
 			if !strings.Contains(stdout, "usage: mdgrep") {
 				t.Errorf("topic %q does not say how to invoke the command", tt.topic)
 			}
-			if n := len(stdout); n >= len(usage) {
-				t.Errorf("topic %q printed %d bytes of a %d byte manual", tt.topic, n, len(usage))
+			if n := len(stdout); n >= len(help.Usage) {
+				t.Errorf("topic %q printed %d bytes of a %d byte manual", tt.topic, n, len(help.Usage))
 			}
 		})
 	}
@@ -466,6 +479,39 @@ func TestTruncateCapsOneResult(t *testing.T) {
 	}
 }
 
+// A block is scored whole, so a match deep inside a long fence used to be cut
+// away by the very flag meant to make it readable: the window began at the
+// fence and printed its opening lines. It slides down to hold the hit.
+func TestTruncateKeepsTheMatchedLine(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "five", path, "--truncate", "3")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "five") {
+		t.Errorf("truncated away the line that matched:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "\u2026 +4 lines") {
+		t.Errorf("want the count of what was skipped to reach it:\n%s", stdout)
+	}
+
+	// The machine formats report the same two counts, and start plus before
+	// is the line the text begins on.
+	stdout, _, code = capture(t, "five", path, "--truncate", "3", "--format", "compact")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	fields := strings.Split(strings.Split(stdout, "\n")[1], "\t")
+	if len(fields) != 5 || fields[3] != "4" || fields[4] != "0" {
+		t.Errorf("fields = %q, want 5 ending in 4, 0:\n%s", fields, stdout)
+	}
+	// The window fills its budget rather than starting flush at the hit, so
+	// the text runs from start+before -- "four" -- and holds the match.
+	if !strings.HasPrefix(fields[2], "four") || !strings.Contains(fields[2], "five") {
+		t.Errorf("text = %q, want it to run from line 11 and hold the match", fields[2])
+	}
+}
+
 func TestTruncateSaysOneLineOnce(t *testing.T) {
 	path := doc(t, long)
 	stdout, _, code := capture(t, "one", path, "--truncate", "6")
@@ -501,8 +547,12 @@ func TestTruncateStaysParseable(t *testing.T) {
 	if lines := strings.Count(strings.TrimSpace(stdout), "\n"); lines != 1 {
 		t.Errorf("want a path line and one record, got %d newlines:\n%s", lines, stdout)
 	}
-	if !strings.Contains(stdout, `\n… +4 lines`) {
-		t.Errorf("want the elision escaped into the record:\n%s", stdout)
+	if strings.Contains(stdout, "…") {
+		t.Errorf("the count belongs in its own field, not in the text:\n%s", stdout)
+	}
+	fields := strings.Split(strings.Split(strings.TrimSpace(stdout), "\n")[1], "\t")
+	if len(fields) != 5 || fields[3] != "0" || fields[4] != "4" {
+		t.Errorf("truncated fields = %q, want 5 fields ending in 0, 4:\n%s", fields, stdout)
 	}
 
 	stdout, _, code = capture(t, "one", path, "--truncate", "3", "--json")
@@ -510,14 +560,15 @@ func TestTruncateStaysParseable(t *testing.T) {
 		t.Fatalf("exit = %d", code)
 	}
 	var got struct {
-		Text      string `json:"text"`
-		Truncated int    `json:"truncated"`
+		Text   string `json:"text"`
+		Before int    `json:"truncated_before"`
+		After  int    `json:"truncated_after"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
 		t.Fatalf("json: %v\n%s", err, stdout)
 	}
-	if got.Truncated != 4 {
-		t.Errorf("truncated = %d, want 4", got.Truncated)
+	if got.Before != 0 || got.After != 4 {
+		t.Errorf("truncated_before, truncated_after = %d, %d, want 0, 4", got.Before, got.After)
 	}
 	if strings.Contains(got.Text, "…") {
 		t.Errorf("json text carries a display marker: %q", got.Text)
@@ -677,6 +728,80 @@ func TestOutlineKeepsHeadingsThatFollowOneAnother(t *testing.T) {
 	for _, want := range []string{"# Top", "## A", "## B"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("outline drops %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// --help is documented as taking a topic, and took one only as a trailing
+// positional: "--help=editing" answered "invalid boolean value" for -help.
+// OptTopic reports IsBoolFlag, so both spellings reach the same manual.
+func TestHelpTakesItsTopicAsAnArgument(t *testing.T) {
+	for _, spelling := range []string{"--help=editing", "-h=editing"} {
+		stdout, stderr, code := capture(t, spelling)
+		if code != 0 {
+			t.Fatalf("%s: exit = %d (%s)", spelling, code, stderr)
+		}
+		if !strings.Contains(stdout, "--expect") {
+			t.Errorf("%s did not print Editing:\n%s", spelling, stdout)
+		}
+		if len(stdout) >= len(help.Usage) {
+			t.Errorf("%s printed the whole manual rather than one part", spelling)
+		}
+	}
+}
+
+// The bare flag still stands alone, and still lets a pattern already typed
+// stand: neither may be read as the name of a topic.
+func TestBareHelpIsUnchangedByTheTopicArgument(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"installer", "--help"}} {
+		stdout, stderr, code := capture(t, args...)
+		if code != 0 {
+			t.Fatalf("%v: exit = %d (%s)", args, code, stderr)
+		}
+		if len(stdout) != len(help.Usage) {
+			t.Errorf("%v printed %d bytes of a %d byte manual", args, len(stdout), len(help.Usage))
+		}
+	}
+}
+
+// A topic the manual does not have has to say so whichever way it was asked
+// for, rather than printing the whole manual and calling it an answer.
+func TestUnknownTopicAsAnArgumentIsRefused(t *testing.T) {
+	stdout, stderr, code := capture(t, "--help=wombat")
+	if code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, `no help topic "wombat"`) {
+		t.Errorf("stderr does not name the topic:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "usage: mdgrep") {
+		t.Errorf("a refused topic printed the manual anyway:\n%s", stdout)
+	}
+}
+
+// TestMinScoreRejectsNaN covers the one value that passed the range check by
+// failing every comparison in it, and then matched nothing for the same
+// reason -- an empty result that reads like an answer about the document.
+func TestMinScoreRejectsNaN(t *testing.T) {
+	path := doc(t, sample)
+	for _, arg := range []string{"nan", "NaN"} {
+		_, stderr, code := capture(t, "--fuzzy", "--min-score", arg, "instaler", path)
+		if code != 2 {
+			t.Fatalf("--min-score %s: code %d, want 2", arg, code)
+		}
+		if !strings.Contains(stderr, "a fuzzy score runs from 0 to 1") {
+			t.Fatalf("--min-score %s: %q", arg, stderr)
+		}
+	}
+}
+
+// TestMinScoreKeepsItsRange is the other half: the ends of the scale are still
+// values, not typos.
+func TestMinScoreKeepsItsRange(t *testing.T) {
+	path := doc(t, sample)
+	for _, arg := range []string{"0", "0.5", "1"} {
+		if _, stderr, code := capture(t, "--fuzzy", "--min-score", arg, "installer", path); code != 0 {
+			t.Fatalf("--min-score %s: code %d\n%s", arg, code, stderr)
 		}
 	}
 }

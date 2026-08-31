@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"os"
@@ -39,21 +39,21 @@ func TestTextFromFile(t *testing.T) {
 	const body = "first line\n\n- second\n- third\n"
 	tests := []struct {
 		name string
-		set  func(*config, string)
+		set  func(*Config, string)
 		want edit.Op
 	}{
-		{"replace-from", func(c *config, p string) { c.replFrom.Set(p) }, edit.OpReplace},
-		{"set-text-from", func(c *config, p string) { c.setFrom.Set(p) }, edit.OpSetText},
-		{"append-from", func(c *config, p string) { c.appFrom.Set(p) }, edit.OpAppend},
-		{"prepend-from", func(c *config, p string) { c.preFrom.Set(p) }, edit.OpPrepend},
+		{"replace-from", func(c *Config, p string) { c.ReplFrom.Set(p) }, edit.OpReplace},
+		{"set-text-from", func(c *Config, p string) { c.SetFrom.Set(p) }, edit.OpSetText},
+		{"append-from", func(c *Config, p string) { c.AppFrom.Set(p) }, edit.OpAppend},
+		{"prepend-from", func(c *Config, p string) { c.PreFrom.Set(p) }, edit.OpPrepend},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var c config
+			var c Config
 			tt.set(&c, writeFile(t, "body.md", body))
-			e, err := buildEdit(&c)
+			e, err := c.Edit()
 			if err != nil {
-				t.Fatalf("buildEdit: %v", err)
+				t.Fatalf("Edit: %v", err)
 			}
 			if e.Op != tt.want {
 				t.Errorf("op = %v, want %v", e.Op, tt.want)
@@ -68,11 +68,11 @@ func TestTextFromFile(t *testing.T) {
 func TestTextFromStdin(t *testing.T) {
 	const body = "piped\nlines\n"
 	asStdin(t, body)
-	var c config
-	c.appFrom.Set("-")
-	e, err := buildEdit(&c)
+	var c Config
+	c.AppFrom.Set("-")
+	e, err := c.Edit()
 	if err != nil {
-		t.Fatalf("buildEdit: %v", err)
+		t.Fatalf("Edit: %v", err)
 	}
 	if e.Op != edit.OpAppend || e.Text != body {
 		t.Errorf("got %v %q, want append %q", e.Op, e.Text, body)
@@ -80,9 +80,9 @@ func TestTextFromStdin(t *testing.T) {
 }
 
 func TestTextFromMissingFile(t *testing.T) {
-	var c config
-	c.preFrom.Set(filepath.Join(t.TempDir(), "absent.md"))
-	if _, err := buildEdit(&c); err == nil {
+	var c Config
+	c.PreFrom.Set(filepath.Join(t.TempDir(), "absent.md"))
+	if _, err := c.Edit(); err == nil {
 		t.Fatal("a --prepend-from that cannot be read should fail the run")
 	}
 }
@@ -92,18 +92,18 @@ func TestTextFromMissingFile(t *testing.T) {
 func TestInlineAndFromClash(t *testing.T) {
 	tests := []struct {
 		name string
-		set  func(*config, string)
+		set  func(*Config, string)
 	}{
-		{"replace", func(c *config, p string) { c.replace.Set("x"); c.replFrom.Set(p) }},
-		{"set-text", func(c *config, p string) { c.setText.Set("x"); c.setFrom.Set(p) }},
-		{"append", func(c *config, p string) { c.appendTo.Set("x"); c.appFrom.Set(p) }},
-		{"prepend", func(c *config, p string) { c.prependTo.Set("x"); c.preFrom.Set(p) }},
+		{"replace", func(c *Config, p string) { c.Replace.Set("x"); c.ReplFrom.Set(p) }},
+		{"set-text", func(c *Config, p string) { c.SetText.Set("x"); c.SetFrom.Set(p) }},
+		{"append", func(c *Config, p string) { c.AppendTo.Set("x"); c.AppFrom.Set(p) }},
+		{"prepend", func(c *Config, p string) { c.PrependTo.Set("x"); c.PreFrom.Set(p) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var c config
+			var c Config
 			tt.set(&c, writeFile(t, "body.md", "text"))
-			_, err := buildEdit(&c)
+			_, err := c.Edit()
 			if err == nil {
 				t.Fatalf("--%s with --%s-from should be refused", tt.name, tt.name)
 			}
@@ -118,41 +118,41 @@ func TestInlineAndFromClash(t *testing.T) {
 // way round the one-edit-at-a-time rule.
 func TestTwoEditsFromDifferentFlags(t *testing.T) {
 	path := writeFile(t, "body.md", "text")
-	var c config
-	c.appFrom.Set(path)
-	c.preFrom.Set(path)
-	if _, err := buildEdit(&c); err == nil {
+	var c Config
+	c.AppFrom.Set(path)
+	c.PreFrom.Set(path)
+	if _, err := c.Edit(); err == nil {
 		t.Fatal("--append-from and --prepend-from are two edits and should be refused")
 	}
 }
 
 func TestExpectNeedsAnEdit(t *testing.T) {
-	var c config
-	c.expect.Set("2")
-	if _, err := buildEdit(&c); err == nil {
+	var c Config
+	c.Expect.Set("2")
+	if _, err := c.Edit(); err == nil {
 		t.Fatal("--expect without an edit should be refused")
 	}
 }
 
 func TestExpectWantsAPositiveCount(t *testing.T) {
 	for _, n := range []string{"0", "-1"} {
-		var c config
-		c.del = true
-		c.expect.Set(n)
-		if _, err := buildEdit(&c); err == nil {
+		var c Config
+		c.Del = true
+		c.Expect.Set(n)
+		if _, err := c.Edit(); err == nil {
 			t.Errorf("--expect %s should be refused", n)
 		}
 	}
-	var c config
-	c.del = true
-	c.expect.Set("3")
-	if _, err := buildEdit(&c); err != nil {
+	var c Config
+	c.Del = true
+	c.Expect.Set("3")
+	if _, err := c.Edit(); err != nil {
 		t.Errorf("--expect 3 with an edit: %v", err)
 	}
 }
 
 func TestExpectNotANumber(t *testing.T) {
-	var o optInt
+	var o OptInt
 	if err := o.Set("many"); err == nil {
 		t.Fatal("--expect many should be refused")
 	}

@@ -320,17 +320,21 @@ docs/pruning.md
 ### Machine-readable output
 
 `--format compact` prints the path once per file and then one tab-separated
-record per result — the line span, the kind, and the text with its newlines
-escaped, so a record is always one line and the path is the line with no tab
-in it:
+record per result — the line span, the kind, the text with its newlines
+escaped, and how many lines `--truncate` held back before and after it — so a
+record is always one line and the path is the line with no tab in it:
 
 ```
 $ mdgrep "" pruning.md --format compact
 pruning.md
-1	heading	# Pruning
-3	heading	## Winter Pruning
-5-6	paragraph	Cut back the leader\nbefore the sap rises.
+1	heading	# Pruning	0	0
+3	heading	## Winter Pruning	0	0
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0
 ```
+
+The span is the node's and the text is the window `--truncate` kept, so the
+two counts are what places one in the other: the text begins on the span's
+start plus the lines held back before it.
 
 One record is one node. Two hits that touch — neighbouring checkboxes, headings
 with nothing between them — are printed as a single passage in plain output,
@@ -344,12 +348,23 @@ whenever those two are not what is wanted.
 
 `--json` emits one object per line: `path`, `kind`, `score`, `start`, `end`
 (1-based, inclusive), `breadcrumb`, `text`, plus `checked` on task items and
-`truncated` under `--truncate`. An edit reports `op`, `old`, `new` and
-`applied` instead. A refused edit is one
+`truncated_before` and `truncated_after` under `--truncate`. An edit reports
+`op`, `old`, `new` and `applied` instead. A refused edit is one
 object on stderr — `error` (`ambiguous`, `expect`, or `nomatch` for a plan
 entry), `message`, `total`, `expected`, the capped `matches` list, and `entry`
 under `--apply` — so a JSON caller parses the refusal with the reader it
 already has.
+
+A refusal is written in the format the results were asked for, so `compact`
+gets records rather than prose on stderr: an `error` record carrying the kind,
+entry, total, expected count, entries refused, path and message, then a `match`
+record per listed hit and a `written` record per file a failed run left changed.
+
+```
+error	ambiguous	1	2	0	0		2 matches; narrow "match" or set "multi": true
+match	notes.md	3	- [ ] thin the fruit
+match	notes.md	9	- [ ] thin the hedge
+```
 
 ```bash
 mdgrep "rollback" docs --json | jq -r '.path + ":" + (.start|tostring)'
@@ -361,20 +376,26 @@ the line that says what went wrong and points at `--help`.
 `--help` takes a topic, so remembering one flag does not cost the whole manual:
 
 ```bash
-mdgrep --help editing   # matching, filters, selection, editing, output
+mdgrep --help editing   # matching, filters, selection, editing, plans, output
+mdgrep --help=editing   # the same, as one word
 mdgrep --help anchor    # or any flag name
 ```
 
 ## Development
 
 ```
-main.go              CLI: flags, file walking, worker pool
-apply.go             --apply: a plan of edits read as JSON, applied per file
+main.go              a run end to end: parse, walk, search in a worker pool
+internal/cli         the flags, and the search, edit and output they describe
+internal/help        the manual, and the rules for printing one part of it
+internal/walk        the files a search reads: paths, extensions, stdin
+internal/ignore      .gitignore, .ignore, .git/info/exclude and the skip list
 internal/mdoc        goldmark AST → line-addressable block tree, sections, anchors
 internal/match       regexp / literal / fuzzy matchers and highlight spans
 internal/search      block selection, anchor lookup, expansion, merging
 internal/edit        planning and applying rewrites, atomic writes
-internal/render      terminal and JSON output
+internal/plan        --apply: a plan of edits read as JSON, applied per file
+internal/render      terminal, compact and JSON output
+internal/report      why a run was refused, in whichever format was asked for
 ```
 
 GFM is on, so tables, task lists, strikethrough and autolinks parse; front

@@ -291,3 +291,129 @@ func TestWriteFollowsASymlinkToTheFileItPointsAt(t *testing.T) {
 		t.Errorf("the file the link points at = %q", data)
 	}
 }
+
+// The promise a multi-file edit makes is that every file is written beside
+// itself before any is renamed into place, so the one that cannot be written
+// is found while the originals are all still intact.
+func TestCommitAllWritesNothingWhenOneFileCannotBeStaged(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a directory whatever its mode says")
+	}
+	dir := t.TempDir()
+	open := filepath.Join(dir, "open.md")
+	if err := os.WriteFile(open, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	closed := filepath.Join(dir, "closed")
+	if err := os.Mkdir(closed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shut := filepath.Join(closed, "shut.md")
+	if err := os.WriteFile(shut, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(closed, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(closed, 0o755) })
+	if f, err := os.CreateTemp(closed, "probe-*"); err == nil {
+		f.Close()
+		os.Remove(f.Name())
+		t.Skip("the filesystem does not enforce directory modes")
+	}
+
+	failed, written, err := CommitAll([]File{{open, "after\n"}, {shut, "after\n"}})
+	if err == nil {
+		t.Fatal("CommitAll = nil, want the write it could not make")
+	}
+	if failed != shut {
+		t.Errorf("failed = %q, want %q", failed, shut)
+	}
+	if len(written) != 0 {
+		t.Errorf("written = %v, want nothing", written)
+	}
+	if got, err := os.ReadFile(open); err != nil || string(got) != "before\n" {
+		t.Errorf("the writable file reads %q, want it untouched", got)
+	}
+	// The staged files go with it, rather than being left beside the
+	// documents for the next run to wonder about.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".mdgrep-") {
+			t.Errorf("a staged file was left behind: %s", e.Name())
+		}
+	}
+}
+
+// The other half: a run that can be carried out writes every file it named,
+// and says which ones it wrote.
+func TestCommitAllWritesEveryFile(t *testing.T) {
+	dir := t.TempDir()
+	var files []File
+	for _, name := range []string{"a.md", "b.md", "c.md"} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, File{path, "after\n"})
+	}
+	failed, written, err := CommitAll(files)
+	if err != nil {
+		t.Fatalf("CommitAll = %v, want it to write %q", err, failed)
+	}
+	if len(written) != len(files) {
+		t.Fatalf("written = %v, want all three", written)
+	}
+	for _, f := range files {
+		if got, err := os.ReadFile(f.Path); err != nil || string(got) != "after\n" {
+			t.Errorf("%s reads %q, want the new contents", f.Path, got)
+		}
+	}
+}
+
+// A rename that fails part way through has already put some files in place,
+// and the caller is owed the list: it is the one case the staging cannot make
+// go away. Renaming over a directory is a rename that fails after every file
+// has staged cleanly, which is exactly the window being tested.
+func TestCommitAllNamesTheFilesAMidRenameFailureLeftChanged(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "a.md")
+	if err := os.WriteFile(first, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	blocked := filepath.Join(dir, "b.md")
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	failed, written, err := CommitAll([]File{{first, "after\n"}, {blocked, "after\n"}})
+	if err == nil {
+		t.Fatal("CommitAll = nil, want the rename it could not make")
+	}
+	if failed != blocked {
+		t.Errorf("failed = %q, want %q", failed, blocked)
+	}
+	if len(written) != 1 || written[0] != first {
+		t.Errorf("written = %v, want just %q", written, first)
+	}
+	// The file that did land stays landed. Undoing it would need the contents
+	// it had before, which is a promise this does not make.
+	if got, _ := os.ReadFile(first); string(got) != "after\n" {
+		t.Errorf("%s reads %q, want the rename that succeeded to stand", first, got)
+	}
+	// Discarding runs over every staged file, the committed one included, and
+	// its temporary is already gone. That has to be harmless rather than a
+	// second failure, and it has to leave no staged file behind.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".mdgrep-") {
+			t.Errorf("a staged file was left behind: %s", e.Name())
+		}
+	}
+}
