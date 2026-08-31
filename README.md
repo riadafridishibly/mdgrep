@@ -407,14 +407,27 @@ go test ./...
 
 Every layer that converts between byte offsets, line numbers and rune indices
 has a fuzz target, since that is where the three have to agree. Seeds run as
-ordinary tests; to actually fuzz one:
+ordinary tests, so `go test ./...` covers the inputs already known. Looking for
+new ones is a separate run:
+
+```bash
+scripts/fuzz.sh        # every target, 30s each
+scripts/fuzz.sh 5m     # when there is a reason to look harder
+```
+
+The script finds the targets itself, so a new one is fuzzed by writing it. To
+sit on a single target instead:
 
 ```bash
 go test ./internal/mdoc   -run xxx -fuzz FuzzParse         -fuzztime 60s
 go test ./internal/match  -run xxx -fuzz FuzzMatch         -fuzztime 60s
 go test ./internal/edit   -run xxx -fuzz FuzzEditPipeline  -fuzztime 60s
 go test ./internal/search -run xxx -fuzz FuzzSearchOptions -fuzztime 60s
-go test .                 -run xxx -fuzz FuzzPermute       -fuzztime 60s
+go test ./internal/cli    -run xxx -fuzz FuzzPermute       -fuzztime 60s
 ```
 
 Failing inputs land in the package's `testdata/fuzz` as regression cases.
+
+CI runs gofmt, vet, build and `go test -race` on Linux and macOS. It does not
+fuzz: the seed corpus goes with every run, and an open-ended search is not
+something to wait on in front of a review.
