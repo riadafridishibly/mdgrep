@@ -341,6 +341,16 @@ func TestHelpTopicNarrowsTheManual(t *testing.T) {
 		{"anchor", "--anchor-style", "--expect"},      // found by flag name
 		{"format", "--format WHEN", "--anchor-style"}, // found by flag name too
 		{"output", "--json", "--expect"},
+		// --apply was thirteen lines of prose inside Editing's flag column,
+		// which is a section wearing a flag's clothes. It has one of its own,
+		// so Editing no longer carries it and "--help apply" finds Plans.
+		{"plans", "--apply", "--expect"},
+		{"apply", "--apply", "--dry-run"},
+		{"editing", "--dry-run", "--apply"},
+		// --uncheck and --toggle used to be named in --check's prose rather
+		// than in the flag column, where pickSection cannot see them.
+		{"uncheck", "--uncheck", "--apply"},
+		{"toggle", "--toggle", "--apply"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.topic, func(t *testing.T) {
@@ -685,5 +695,52 @@ func TestOutlineKeepsHeadingsThatFollowOneAnother(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("outline drops %q:\n%s", want, stdout)
 		}
+	}
+}
+
+// --help is documented as taking a topic, and took one only as a trailing
+// positional: "--help=editing" answered "invalid boolean value" for -help.
+// OptTopic reports IsBoolFlag, so both spellings reach the same manual.
+func TestHelpTakesItsTopicAsAnArgument(t *testing.T) {
+	for _, spelling := range []string{"--help=editing", "-h=editing"} {
+		stdout, stderr, code := capture(t, spelling)
+		if code != 0 {
+			t.Fatalf("%s: exit = %d (%s)", spelling, code, stderr)
+		}
+		if !strings.Contains(stdout, "--expect") {
+			t.Errorf("%s did not print Editing:\n%s", spelling, stdout)
+		}
+		if len(stdout) >= len(help.Usage) {
+			t.Errorf("%s printed the whole manual rather than one part", spelling)
+		}
+	}
+}
+
+// The bare flag still stands alone, and still lets a pattern already typed
+// stand: neither may be read as the name of a topic.
+func TestBareHelpIsUnchangedByTheTopicArgument(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"installer", "--help"}} {
+		stdout, stderr, code := capture(t, args...)
+		if code != 0 {
+			t.Fatalf("%v: exit = %d (%s)", args, code, stderr)
+		}
+		if len(stdout) != len(help.Usage) {
+			t.Errorf("%v printed %d bytes of a %d byte manual", args, len(stdout), len(help.Usage))
+		}
+	}
+}
+
+// A topic the manual does not have has to say so whichever way it was asked
+// for, rather than printing the whole manual and calling it an answer.
+func TestUnknownTopicAsAnArgumentIsRefused(t *testing.T) {
+	stdout, stderr, code := capture(t, "--help=wombat")
+	if code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, `no help topic "wombat"`) {
+		t.Errorf("stderr does not name the topic:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "usage: mdgrep") {
+		t.Errorf("a refused topic printed the manual anyway:\n%s", stdout)
 	}
 }

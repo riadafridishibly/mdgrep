@@ -605,3 +605,121 @@ func atoi(t *testing.T, s string) int {
 	}
 	return n
 }
+
+// --- E. Flags read and dropped ------------------------------------------------
+
+// A flag that names a threshold nothing scores against, or a convention
+// nothing tries, was read and dropped: the run searched some other way and
+// said nothing. Silence is the one answer the caller did not ask for, so each
+// of these now refuses. The paired run is the point -- the refusal must be the
+// combination, not the flag.
+func TestFlagsThatWouldBeDroppedAreRefused(t *testing.T) {
+	path := doc(t, sample)
+	tests := []struct {
+		name    string
+		refused []string
+		says    string
+		allowed []string
+	}{
+		{
+			"min-score without fuzzy",
+			[]string{"--min-score", "0.9", "installer", path},
+			"--min-score",
+			[]string{"--fuzzy", "--min-score", "0.9", "installer", path},
+		},
+		{
+			"anchor-style without anchor",
+			[]string{"--anchor-style", "gh", "installer", path},
+			"--anchor-style",
+			[]string{"--anchor", "--anchor-style", "gh", "#install", path},
+		},
+		{
+			"ignore-case against case-sensitive",
+			[]string{"-i", "-s", "installer", path},
+			"-i, -s and -S",
+			[]string{"-i", "installer", path},
+		},
+		{
+			"smart-case against ignore-case",
+			[]string{"-S", "-i", "installer", path},
+			"-i, -s and -S",
+			[]string{"-S", "installer", path},
+		},
+		{
+			"smart-case against case-sensitive",
+			[]string{"-S", "-s", "installer", path},
+			"-i, -s and -S",
+			[]string{"-s", "installer", path},
+		},
+		{
+			"checked against unchecked",
+			[]string{"--checked", "--unchecked", "", path},
+			"--checked and --unchecked",
+			[]string{"--task", "", path},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stderr, code := capture(t, tt.refused...)
+			if code != 2 {
+				t.Errorf("exit = %d, want 2: the run went ahead without the flag", code)
+			}
+			if !strings.Contains(stderr, tt.says) {
+				t.Errorf("stderr does not name %q:\n%s", tt.says, stderr)
+			}
+			if _, stderr, code := capture(t, tt.allowed...); code == 2 {
+				t.Errorf("the combination was the defect, but %v is refused too:\n%s",
+					tt.allowed, stderr)
+			}
+		})
+	}
+}
+
+// --truncate was the only count that rejected a negative. The rest read one
+// and carried on as though the flag had been left off, which is a different
+// search reported as the one that was asked for. A short spelling has to
+// answer under the name the manual documents it by.
+func TestNegativeCountsAreRefused(t *testing.T) {
+	path := doc(t, sample)
+	for _, tt := range []struct{ flag, spelling string }{
+		{"--expand", "--expand"},
+		{"-B", "--before"},
+		{"-A", "--after"},
+		{"-C", "--context"},
+		{"--lines", "--lines"},
+		{"-m", "--max-count"},
+		{"--truncate", "--truncate"},
+	} {
+		t.Run(tt.flag, func(t *testing.T) {
+			_, stderr, code := capture(t, "installer", path, tt.flag, "-1")
+			if code != 2 {
+				t.Errorf("%s -1: exit = %d, want 2", tt.flag, code)
+			}
+			if !strings.Contains(stderr, tt.spelling) {
+				t.Errorf("%s -1 does not answer as %q:\n%s", tt.flag, tt.spelling, stderr)
+			}
+			if _, _, code := capture(t, "installer", path, tt.flag, "1"); code == 2 {
+				t.Errorf("%s 1 is refused as well", tt.flag)
+			}
+		})
+	}
+}
+
+// --min-score is documented as running from 0 to 1, and took anything.
+func TestMinScoreOutsideItsRangeIsRefused(t *testing.T) {
+	path := doc(t, sample)
+	for _, score := range []string{"-1", "5", "1.0001"} {
+		_, stderr, code := capture(t, "--fuzzy", "--min-score", score, "installer", path)
+		if code != 2 {
+			t.Errorf("--min-score %s: exit = %d, want 2", score, code)
+		}
+		if !strings.Contains(stderr, "0 to 1") {
+			t.Errorf("--min-score %s does not say what the range is:\n%s", score, stderr)
+		}
+	}
+	for _, score := range []string{"0", "0.5", "1"} {
+		if _, stderr, code := capture(t, "--fuzzy", "--min-score", score, "installer", path); code == 2 {
+			t.Errorf("--min-score %s is in range and was refused:\n%s", score, stderr)
+		}
+	}
+}
