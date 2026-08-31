@@ -160,6 +160,7 @@ func TestApplyChecksWhatAnEntryAsksFor(t *testing.T) {
 		{"text an op cannot use", `{"path":"x.md","match":"a","op":"check","text":"b"}`, `takes no "text"`},
 		{"missing text", `{"path":"x.md","match":"a","op":"replace"}`, `wants "text"`},
 		{"expect below one", `{"path":"x.md","match":"a","op":"check","expect":0}`, `above zero`},
+		{"negative expand", `{"path":"x.md","match":"a","op":"check","expand":-1}`, "cannot be negative"},
 		{"section on a node edit", `{"path":"x.md","match":"a","op":"check","section":true}`, "has nothing to widen"},
 	}
 	for _, tt := range tests {

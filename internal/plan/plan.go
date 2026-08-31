@@ -304,6 +304,8 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 		return bad(`op %q writes no text of its own, so it takes no "text"`, e.Op)
 	case e.Expect != nil && *e.Expect < 1:
 		return bad(`"expect" states how many nodes the match should find, so it wants a count above zero`)
+	case e.Expand < 0:
+		return bad(`"expand" is how many levels to climb from the matched node, so it cannot be negative`)
 	case e.Op.Node() && (e.Section || e.Body):
 		return bad(`op %q edits the matched node, so "section" has nothing to widen; use "replace"`, e.Op)
 	}
