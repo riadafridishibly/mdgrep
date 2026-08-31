@@ -404,33 +404,24 @@ func TestEmptySectionBodyHasNoBackwardsSpan(t *testing.T) {
 
 // --- D. Latent and cosmetic ---------------------------------------------------
 
-// A section title is judged by its first character. Reading one byte of a
-// multi-byte character judges a byte that is not a character at all: 0xC3, the
-// lead byte of every C-with-cedilla and every U-with-diaeresis, is 'Ã' on its
-// own, which is uppercase.
-func TestIsHelpTitleReadsAWholeRune(t *testing.T) {
-	tests := []struct {
-		line string
-		want bool
-	}{
-		{"Filters", true},
-		{"filters", false},
-		{"", false},
-		{"Output formats", false}, // a space is not a letter
-		{"über", false},           // lower case, whatever its encoding
-	}
-	for _, tt := range tests {
-		if got := isHelpTitle(tt.line); got != tt.want {
-			t.Errorf("isHelpTitle(%q) = %v, want %v", tt.line, got, tt.want)
-		}
-	}
-}
-
 // A doc comment belongs to the function below it. This one drifted onto its
 // neighbour, so godoc describes separator as the thing parseFormat does.
 func TestDocCommentsNameTheirOwnFunction(t *testing.T) {
+	dirs, err := filepath.Glob("internal/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range append([]string{"."}, dirs...) {
+		checkDocComments(t, dir)
+	}
+}
+
+// checkDocComments reads one package at a time: a name is only a name the
+// comment could be describing if the package it sits in declares it.
+func checkDocComments(t *testing.T, dir string) {
+	t.Helper()
 	fset := token.NewFileSet()
-	paths, err := filepath.Glob("*.go")
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		t.Fatal(err)
 	}

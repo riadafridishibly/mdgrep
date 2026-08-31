@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/riadafridishibly/mdgrep/internal/edit"
+	"github.com/riadafridishibly/mdgrep/internal/help"
 	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 	"github.com/riadafridishibly/mdgrep/internal/render"
@@ -85,7 +86,7 @@ var applyKeeps = map[string]bool{
 // none of it.
 func runApply(c config, fs *flag.FlagSet, format render.Format) int {
 	if err := applyFlags(fs); err != nil {
-		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, hint)
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
 	}
 	text, err := readText(c.apply.val)

@@ -7,6 +7,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/riadafridishibly/mdgrep/internal/help"
 )
 
 // capture runs the command the way main() would and hands back what each
@@ -89,7 +91,7 @@ func TestErrorsAreShort(t *testing.T) {
 			if !strings.Contains(stderr, tt.says) {
 				t.Errorf("stderr does not say %q:\n%s", tt.says, stderr)
 			}
-			if !strings.Contains(stderr, hint) {
+			if !strings.Contains(stderr, help.Hint) {
 				t.Errorf("stderr does not point at --help:\n%s", stderr)
 			}
 			if strings.Contains(stderr, "Selection") {
@@ -354,8 +356,8 @@ func TestHelpTopicNarrowsTheManual(t *testing.T) {
 			if !strings.Contains(stdout, "usage: mdgrep") {
 				t.Errorf("topic %q does not say how to invoke the command", tt.topic)
 			}
-			if n := len(stdout); n >= len(usage) {
-				t.Errorf("topic %q printed %d bytes of a %d byte manual", tt.topic, n, len(usage))
+			if n := len(stdout); n >= len(help.Usage) {
+				t.Errorf("topic %q printed %d bytes of a %d byte manual", tt.topic, n, len(help.Usage))
 			}
 		})
 	}
