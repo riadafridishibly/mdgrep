@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
@@ -21,16 +22,19 @@ var skipDirs = map[string]bool{
 // Files reads paths in the order they were given and returns the markdown
 // under them, plus whether the caller should also read stdin: no paths at all
 // with something piped in, or "-" named among them.
-func Files(paths []string, exts map[string]bool, hidden, noIgnore bool) ([]string, bool, error) {
-	useStdin := false
+//
+// A directory the walk could not read comes back in unread rather than as an
+// error, because the rest of the tree is still worth searching. It is not
+// nothing, though: a search that could not look everywhere it was asked to
+// cannot answer "no matches" and mean it, so the caller is expected to say so.
+func Files(paths []string, exts map[string]bool, hidden, noIgnore bool) (files []string, useStdin bool, unread []error, err error) {
 	if len(paths) == 0 {
 		if stat, err := os.Stdin.Stat(); err == nil && stat.Mode()&os.ModeCharDevice == 0 {
-			return nil, true, nil
+			return nil, true, nil, nil
 		}
 		paths = []string{"."}
 	}
 
-	var files []string
 	seen := map[string]bool{}
 	c := collector{exts: exts, hidden: hidden, noIgnore: noIgnore, tokens: make(chan struct{}, walkers)}
 	for _, p := range paths {
@@ -40,7 +44,7 @@ func Files(paths []string, exts map[string]bool, hidden, noIgnore bool) ([]strin
 		}
 		info, err := os.Stat(p)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		if !info.IsDir() {
 			// The walk keys what it has found on a cleaned path, because
@@ -65,7 +69,11 @@ func Files(paths []string, exts map[string]bool, hidden, noIgnore bool) ([]strin
 		c.wg.Wait()
 		files = root.flatten(seen, files)
 	}
-	return files, useStdin, nil
+	// The walk reads directories on whatever goroutine has a token, so the
+	// order they failed in is not an order at all. Sorting gives a run that
+	// hits the same tree twice the same report both times.
+	slices.SortFunc(c.unread, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
+	return files, useStdin, c.unread, nil
 }
 
 // walkers bounds how many directories are being read at once. Four is where
@@ -87,6 +95,18 @@ type collector struct {
 	noIgnore bool
 	tokens   chan struct{}
 	wg       sync.WaitGroup
+
+	mu     sync.Mutex
+	unread []error
+}
+
+// fail records a directory the walk could not read. Every walker can reach it,
+// so the list is kept under a lock rather than per node: it is a handful of
+// entries on a bad run and none at all on a good one.
+func (c *collector) fail(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.unread = append(c.unread, err)
 }
 
 // node is one directory's share of the walk, in listing order: each child is
@@ -107,6 +127,7 @@ type node struct {
 func (c *collector) walk(dir string, f ignore.Frame, n *node) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		c.fail(err)
 		return
 	}
 	f = f.Enter(dir, entries)

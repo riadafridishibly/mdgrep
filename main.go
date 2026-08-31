@@ -144,10 +144,22 @@ func run() int {
 		return 2
 	}
 
-	files, useStdin, err := walk.Files(paths, c.Exts(), c.Hidden, c.NoIgnore)
+	files, useStdin, unread, err := walk.Files(paths, c.Exts(), c.Hidden, c.NoIgnore)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
+	}
+	for _, e := range unread {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", e)
+	}
+	// A directory that could not be read is a hole in the search, and the run
+	// says so however well the rest of it went: "no matches" over a tree only
+	// half looked at is an answer the caller would act on and should not.
+	done := func(code int) int {
+		if len(unread) > 0 {
+			return 2
+		}
+		return code
 	}
 	if ed.Op != edit.OpNone && useStdin {
 		fmt.Fprintln(os.Stderr, "mdgrep: an edit needs files to write to, not stdin")
@@ -209,7 +221,7 @@ func run() int {
 	wg.Wait()
 
 	if ed.Op != edit.OpNone {
-		return runEdits(out, p, results, ed, c)
+		return done(runEdits(out, p, results, ed, c))
 	}
 	if c.Opt.Rank {
 		// Each file already holds its results best first, so a file is worth
@@ -224,9 +236,9 @@ func run() int {
 		}
 	}
 	if !found {
-		return 1
+		return done(1)
 	}
-	return 0
+	return done(0)
 }
 
 // runEdits plans every file's changes and stages every file beside itself

@@ -31,9 +31,12 @@ func plant(t *testing.T, files ...string) {
 
 func collected(t *testing.T, paths []string, hidden, noIgnore bool) []string {
 	t.Helper()
-	files, stdin, err := Files(paths, markdown, hidden, noIgnore)
+	files, stdin, unread, err := Files(paths, markdown, hidden, noIgnore)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(unread) > 0 {
+		t.Fatalf("the walk could not read %v", unread)
 	}
 	if stdin {
 		t.Fatal("the walk asked for stdin")
@@ -157,4 +160,34 @@ func TestWalkTakesAnUncleanRoot(t *testing.T) {
 			t.Fatalf("root %q: got %v, want one keep.md", root, got)
 		}
 	}
+}
+
+// A directory the walk cannot read is a hole in the search rather than an
+// empty one, so it comes back named. The rest of the tree is still collected:
+// the files that could be read are worth reporting whatever the caller decides
+// to do about the ones that could not.
+func TestUnreadableDirectoryIsReportedNotDropped(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode says")
+	}
+	plant(t, "top.md", "closed/hidden.md")
+	if err := os.Chmod("closed", 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod("closed", 0o755) })
+	if _, err := os.ReadDir("closed"); err == nil {
+		t.Skip("the filesystem does not enforce directory modes")
+	}
+
+	files, _, unread, err := Files([]string{"."}, markdown, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 {
+		t.Fatalf("unread = %v, want the one directory that could not be read", unread)
+	}
+	if !strings.Contains(unread[0].Error(), "closed") {
+		t.Errorf("unread = %v, want it to name closed", unread[0])
+	}
+	same(t, files, []string{"top.md"})
 }
