@@ -1,4 +1,4 @@
-package main
+package walk
 
 import (
 	"fmt"
@@ -31,7 +31,7 @@ func plant(t *testing.T, files ...string) {
 
 func collected(t *testing.T, paths []string, hidden, noIgnore bool) []string {
 	t.Helper()
-	files, stdin, err := collectFiles(paths, markdown, hidden, noIgnore)
+	files, stdin, err := Files(paths, markdown, hidden, noIgnore)
 	if err != nil {
 		t.Fatal(err)
 	}
