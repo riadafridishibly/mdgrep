@@ -19,6 +19,7 @@ import (
 	"github.com/riadafridishibly/mdgrep/internal/edit"
 	"github.com/riadafridishibly/mdgrep/internal/help"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/plan"
 	"github.com/riadafridishibly/mdgrep/internal/render"
 	"github.com/riadafridishibly/mdgrep/internal/report"
 	"github.com/riadafridishibly/mdgrep/internal/search"
@@ -84,7 +85,7 @@ func run() int {
 	// A plan is a whole run of its own: it names its files, its searches and
 	// its edits, so nothing below this point has anything left to work out.
 	if _, given := c.Apply.Value(); given {
-		return runApply(c, fs, format)
+		return plan.Run(c, fs, format)
 	}
 	if c.Outline {
 		if err := cli.OutlineFlags(fs); err != nil {
@@ -267,7 +268,7 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 			continue
 		}
 		src := results[i].Src
-		if !c.DryRun && changed(changes) {
+		if !c.DryRun && edit.Changed(changes) {
 			if err := edit.Write(src.Path, edit.Apply(src, changes)); err != nil {
 				fmt.Fprintf(os.Stderr, "mdgrep: %s: %v\n", src.Path, err)
 				return 2
@@ -279,15 +280,6 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 	}
 	out.Flush()
 	return 0
-}
-
-func changed(changes []edit.Change) bool {
-	for _, c := range changes {
-		if !c.NoOp {
-			return true
-		}
-	}
-	return false
 }
 
 // helpTopic is the word --help was asked about: the one still standing on the

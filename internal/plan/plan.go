@@ -1,4 +1,6 @@
-package main
+// Package plan carries out a plan of edits: a file of entries, each naming its
+// own file, search and edit, applied whole or not at all.
+package plan
 
 import (
 	"bufio"
@@ -82,11 +84,11 @@ var applyKeeps = map[string]bool{
 	"no-breadcrumb": true, "separator": true, "color": true,
 }
 
-// runApply carries out a plan of edits. Every entry is planned against the
+// Run carries out a plan of edits. Every entry is planned against the
 // files as they were read, and one that cannot be carried out refuses the whole
 // run: a plan is a single instruction, and half of one applied is worse than
 // none of it.
-func runApply(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
+func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 	if err := applyFlags(fs); err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
@@ -176,7 +178,7 @@ func stageAll(cache *docCache, planned map[string][]planChange, asJSON bool) err
 	}
 	for _, path := range cache.order {
 		changes := changesOf(planned[path])
-		if len(changes) == 0 || !changed(changes) {
+		if len(changes) == 0 || !edit.Changed(changes) {
 			continue
 		}
 		s, err := edit.Stage(path, edit.Apply(cache.docs[path].Src, changes))

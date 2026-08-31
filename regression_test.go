@@ -73,7 +73,7 @@ func TestApplyLeavesNoFileWrittenWhenAnotherCannotBe(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(sealed, 0o755) })
 
-	p := plan(t,
+	p := planFile(t,
 		`{"path":`+quote(good)+`,"match":"one","op":"check"}`,
 		`{"path":`+quote(bad)+`,"match":"two","op":"check"}`,
 	)
@@ -110,7 +110,7 @@ func TestKindItemSelectsOnlyItems(t *testing.T) {
 // scoped to bullets must not rewrite prose.
 func TestApplyKindItemDoesNotEditAParagraph(t *testing.T) {
 	path := doc(t, mixed)
-	p := plan(t, `{"path":`+quote(path)+`,"match":"Some paragraph","kind":"item","op":"replace","text":"REWRITTEN"}`)
+	p := planFile(t, `{"path":`+quote(path)+`,"match":"Some paragraph","kind":"item","op":"replace","text":"REWRITTEN"}`)
 	stdout, _, code := capture(t, "--apply", p, "--dry-run")
 	if code == 0 {
 		t.Errorf("an entry scoped to \"item\" matched a paragraph:\n%s", stdout)
@@ -272,7 +272,7 @@ func TestTruncateKeepsTheMatchedNode(t *testing.T) {
 // arrives as prose is one the caller cannot see at all.
 func TestApplyRefusalIsAlwaysJSONWhenAskedFor(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope.md")
-	p := plan(t, `{"path":`+quote(missing)+`,"match":"x","op":"check"}`)
+	p := planFile(t, `{"path":`+quote(missing)+`,"match":"x","op":"check"}`)
 	_, stderr, code := capture(t, "--apply", p, "--json")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
@@ -303,7 +303,7 @@ func TestApplyRefusalIsAlwaysJSONWhenAskedFor(t *testing.T) {
 // one whose end precedes its start is unreadable by any parser of that format.
 func TestCompactInsertionSpanIsReadable(t *testing.T) {
 	path := doc(t, widened)
-	p := plan(t, `{"path":`+quote(path)+`,"match":"Beta paragraph","op":"append","text":"appended para"}`)
+	p := planFile(t, `{"path":`+quote(path)+`,"match":"Beta paragraph","op":"append","text":"appended para"}`)
 	stdout, stderr, code := capture(t, "--apply", p, "--format", "compact", "--dry-run")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
