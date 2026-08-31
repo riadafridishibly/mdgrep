@@ -629,3 +629,54 @@ func TestOutlineTakesAPatternThroughDashE(t *testing.T) {
 		t.Errorf("outline ignored the pattern:\n%s", stdout)
 	}
 }
+
+// Neighbouring hits are run together so a person reads one passage. A machine
+// format is counted and iterated over, so there the nodes stay apart.
+const adjacent = `# Top
+
+## A
+## B
+
+- [ ] ship the docs
+- [ ] ship the tests
+`
+
+func TestMachineFormatsKeepNeighbouringHitsApart(t *testing.T) {
+	path := doc(t, adjacent)
+	stdout, _, code := capture(t, "", path, "--todo", "--format", "compact")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if got := strings.Count(stdout, "\titem\t"); got != 2 {
+		t.Errorf("compact records = %d, want 2:\n%s", got, stdout)
+	}
+	stdout, _, _ = capture(t, "", path, "-k", "heading", "--json")
+	if got := strings.Count(stdout, "\n"); got != 3 {
+		t.Errorf("JSON objects = %d, want 3:\n%s", got, stdout)
+	}
+}
+
+func TestPlainOutputStillReadsAsOnePassage(t *testing.T) {
+	stdout, _, _ := capture(t, "", doc(t, adjacent), "--todo", "--no-breadcrumb")
+	if strings.Contains(stdout, "--") {
+		t.Errorf("two adjacent items were parted:\n%s", stdout)
+	}
+}
+
+func TestCountTalliesNodesRatherThanPassages(t *testing.T) {
+	stdout, _, _ := capture(t, "", doc(t, adjacent), "--todo", "-c")
+	if !strings.HasSuffix(strings.TrimSpace(stdout), ":2") {
+		t.Errorf("count = %q, want 2 items", strings.TrimSpace(stdout))
+	}
+}
+
+// An outline prints the line each result starts on, so headings that follow one
+// another have to arrive as results of their own or the tree loses them.
+func TestOutlineKeepsHeadingsThatFollowOneAnother(t *testing.T) {
+	stdout, _, _ := capture(t, "--outline", doc(t, adjacent))
+	for _, want := range []string{"# Top", "## A", "## B"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("outline drops %q:\n%s", want, stdout)
+		}
+	}
+}

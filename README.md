@@ -286,6 +286,11 @@ pruning.md
 5-6	paragraph	Cut back the leader\nbefore the sap rises.
 ```
 
+One record is one node. Two hits that touch — neighbouring checkboxes, headings
+with nothing between them — are printed as a single passage in plain output,
+where the page reads as prose; the machine formats, `--outline` and `-c` keep
+them apart, so a record can be counted and a count is a count of nodes.
+
 An edit reports the span, the operation, `applied`/`dry`/`unchanged`, and the
 new text. Compact leaves out the breadcrumb and the score; it costs about a
 third of what `--json` costs on the same results, so it is the cheaper choice

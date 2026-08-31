@@ -142,7 +142,9 @@ Output
                         escaped so a record is always one line — which costs a
                         fraction of the same results as json. Neither machine
                         format is coloured, and compact leaves out the
-                        breadcrumb and the score; ask for json if you want them
+                        breadcrumb and the score; ask for json if you want them.
+                        One record is one node: two hits that touch are printed
+                        as one passage in plain output and kept apart here
       --json            one JSON object per result (same as --format json)
   -c, --count           print only the number of results per file
   -l, --files-with-matches
@@ -368,9 +370,11 @@ func run() int {
 	c.opt.Task = taskFilter(c)
 
 	ed, err := buildEdit(&c)
-	// An edit rewrites one node at a time, so neighbouring hits must not be
-	// folded into a single region the way printing folds them.
-	c.opt.Distinct = ed.Op != edit.OpNone
+	// Neighbouring hits are run together for a person reading the page as one
+	// passage, and kept apart for everyone else: an edit rewrites each node on
+	// its own, a machine format is counted and iterated over, an outline is one
+	// line per heading, and -c is a tally of nodes.
+	c.opt.Distinct = ed.Op != edit.OpNone || format != render.Plain || c.count
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
