@@ -4,6 +4,7 @@ package help
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -236,21 +237,46 @@ func pickSection(secs []section, topic string) (section, error) {
 
 // definesFlag reports whether a section documents --name, as opposed to merely
 // mentioning it in passing: a definition stands in the flag column, and the
-// prose that describes one flag is free to name others.
+// prose that describes one flag is free to name others. A flag whose entry
+// ends "(alias --todo)" defines that spelling too, since the alias is the only
+// place it is written down and looking it up is the reason anyone types it.
 func definesFlag(body, name string) bool {
 	for line := range strings.SplitSeq(body, "\n") {
 		if !strings.HasPrefix(line, "  ") {
 			continue
 		}
-		head, _, _ := strings.Cut(strings.TrimSpace(line), "  ")
+		head, rest, _ := strings.Cut(strings.TrimSpace(line), "  ")
 		for _, spelling := range strings.Split(head, ",") {
 			flag, _, _ := strings.Cut(strings.TrimSpace(spelling), " ")
 			if flag == "--"+name {
 				return true
 			}
 		}
+		if slices.Contains(aliases(rest), "--"+name) {
+			return true
+		}
 	}
 	return false
+}
+
+// aliases reads the spellings an entry names as its own, written "(alias --x)"
+// or "(aliases --x, --y)" at the end of the description.
+func aliases(desc string) []string {
+	_, rest, ok := strings.Cut(desc, "(alias")
+	if !ok {
+		return nil
+	}
+	list, _, ok := strings.Cut(strings.TrimPrefix(rest, "es"), ")")
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, s := range strings.Split(list, ",") {
+		if s = strings.TrimSpace(s); strings.HasPrefix(s, "--") {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func topics(secs []section) string {
