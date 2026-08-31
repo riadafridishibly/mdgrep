@@ -15,7 +15,7 @@ import (
 
 func expecting(n int) *int { return &n }
 
-func TestCountGate(t *testing.T) {
+func TestGate(t *testing.T) {
 	tests := []struct {
 		name   string
 		total  int
@@ -47,7 +47,7 @@ func TestCountGate(t *testing.T) {
 	}
 }
 
-// found searches src and returns it in the shape runEdits reports on.
+// found searches src and returns it in the shape a refusal reports on.
 func found(t *testing.T, src, pat string) ([]File, int) {
 	t.Helper()
 	m, err := match.New(pat, match.Options{Mode: match.Substring})
@@ -69,7 +69,7 @@ func manyItems(n int) string {
 	return b.String()
 }
 
-func TestReportRefusedText(t *testing.T) {
+func TestRefusedText(t *testing.T) {
 	results, total := found(t, "# H\n\n- alpha needle\n- beta needle\n", "needle")
 	if total != 2 {
 		t.Fatalf("total = %d, want 2", total)
@@ -88,7 +88,7 @@ func TestReportRefusedText(t *testing.T) {
 	}
 }
 
-func TestReportRefusedTextCaps(t *testing.T) {
+func TestRefusedTextCaps(t *testing.T) {
 	results, total := found(t, manyItems(25), "needle")
 	if total != 25 {
 		t.Fatalf("total = %d, want 25", total)
@@ -119,7 +119,7 @@ func decodeRefusal(t *testing.T, b []byte) Refusal {
 	return out
 }
 
-func TestReportRefusedJSON(t *testing.T) {
+func TestRefusedJSON(t *testing.T) {
 	results, total := found(t, "# H\n\n- alpha needle\n- beta needle\n", "needle")
 	why, _ := Gate(total, nil, false, FlagWords)
 	var buf bytes.Buffer
@@ -146,7 +146,7 @@ func TestReportRefusedJSON(t *testing.T) {
 	}
 }
 
-func TestReportRefusedJSONExpect(t *testing.T) {
+func TestRefusedJSONExpect(t *testing.T) {
 	results, total := found(t, "# H\n\n- alpha needle\n- beta needle\n", "needle")
 	expect := expecting(5)
 	why, code := Gate(total, expect, false, FlagWords)
@@ -168,9 +168,9 @@ func TestReportRefusedJSONExpect(t *testing.T) {
 	}
 }
 
-// TestReportRefusedJSONNoMatches covers the shape an empty list takes: the
+// TestRefusedJSONNoMatches covers the shape an empty list takes: the
 // field is still an array, so a caller can range over it without a nil check.
-func TestReportRefusedJSONNoMatches(t *testing.T) {
+func TestRefusedJSONNoMatches(t *testing.T) {
 	expect := expecting(1)
 	why, _ := Gate(0, expect, false, FlagWords)
 	var buf bytes.Buffer
@@ -184,7 +184,7 @@ func TestReportRefusedJSONNoMatches(t *testing.T) {
 	}
 }
 
-func TestReportRefusedJSONCaps(t *testing.T) {
+func TestRefusedJSONCaps(t *testing.T) {
 	results, total := found(t, manyItems(25), "needle")
 	why, _ := Gate(total, nil, false, FlagWords)
 	var buf bytes.Buffer

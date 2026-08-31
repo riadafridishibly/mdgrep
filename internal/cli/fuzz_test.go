@@ -112,8 +112,3 @@ func FuzzBuildEdit(f *testing.F) {
 		}
 	})
 }
-
-// FuzzRefusalJSON holds the machine-readable refusal to the promise a caller
-// parses it on: whatever the matched lines contain — quotes, control bytes,
-// half a code fence — stderr is one JSON object, and every line it reports is
-// the line the file actually has at that number.

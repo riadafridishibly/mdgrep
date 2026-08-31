@@ -461,8 +461,9 @@ func ReadText(path string) (string, error) {
 	return string(data), err
 }
 
-// runEdits plans every file's changes before writing any of them, so a run
-
+// buildAnchor reads --anchor-style before the pattern, so a run that names a
+// convention nothing has is refused by the name it gave rather than by the
+// heading it went on to miss.
 func (c *Config) buildAnchor() (*search.Anchor, error) {
 	styles, err := parseAnchorStyles(c.AnchorSty)
 	if err != nil {
@@ -543,7 +544,7 @@ func BuildMatcher(c *Config, mode match.Mode, smart bool) (match.Matcher, error)
 }
 
 // permute moves flags ahead of positional arguments so the pattern may be
-
+// written before its options, the way people actually type grep invocations.
 func permute(fs *flag.FlagSet, args []string) []string {
 	var flags, pos []string
 	terminated := false
@@ -603,11 +604,10 @@ var kindAliases = map[string]mdoc.Kind{
 }
 
 // TaskFilter folds the three checkbox flags into one filter. Asking for both
-// states is the same as asking for any checkbox item.
+// states at once is refused by Validate, which runs first, so the two are read
+// here as the opposite filters they are.
 func (c *Config) TaskFilter() search.TaskFilter {
 	switch {
-	case c.Checked && c.Unchecked:
-		return search.TaskAny
 	case c.Checked:
 		return search.TaskChecked
 	case c.Unchecked:
@@ -696,10 +696,10 @@ var formats = map[string]render.Format{
 	"plain": render.Plain, "compact": render.Compact, "json": render.JSON,
 }
 
-// helpTopic is the word --help was asked about: the one still standing on the
-// line, and standing after the flag. Appending --help to a command already
-// half typed is how the manual is usually reached, and the pattern typed
-
+// ParseKinds reads --kind's list into the set a search filters by. A name no
+// alias table has is refused rather than dropped, since a kind that filters
+// nothing out reads as a search over every kind -- which is what the caller
+// passed the flag to avoid.
 func ParseKinds(spec string) (map[mdoc.Kind]bool, error) {
 	if strings.TrimSpace(spec) == "" {
 		return nil, nil

@@ -12,6 +12,10 @@ import (
 	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
+// FuzzRefusalJSON holds the machine-readable refusal to the promise a caller
+// parses it on: whatever the matched lines contain — quotes, control bytes,
+// half a code fence — stderr is one JSON object, and every line it reports is
+// the line the file actually has at that number.
 func FuzzRefusalJSON(f *testing.F) {
 	seeds := []struct{ src, pat string }{
 		{"# a\n\n- one x\n- two x\n", "x"},

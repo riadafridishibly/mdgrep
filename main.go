@@ -286,8 +286,8 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 
 // helpTopic is the word --help was asked about: the one still standing on the
 // line, and standing after the flag. Appending --help to a command already
-// half typed is how the manual is usually reached, and the pattern typed
-// before it is what the caller wanted help about, not the help they wanted.
+// half typed is how the manual is usually reached, so a pattern already on the
+// line before the flag is part of that command, not the topic it asks about.
 func helpTopic(args []string, arg string) string {
 	for i, a := range args {
 		if !strings.HasPrefix(a, "-") {

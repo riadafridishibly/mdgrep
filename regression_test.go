@@ -408,8 +408,6 @@ func TestEmptySectionBodyHasNoBackwardsSpan(t *testing.T) {
 
 // --- D. Latent and cosmetic ---------------------------------------------------
 
-// A doc comment belongs to the function below it. This one drifted onto its
-// neighbour, so godoc describes separator as the thing parseFormat does.
 // The trail above a result is there to say where the result sits. Two results
 // that sit in the same place say it once: repeating an eleven-word trail for
 // every adjacent hit costs more than the trail is worth.
@@ -560,21 +558,50 @@ func TestEditJSONInsertionSpanIsReadable(t *testing.T) {
 	}
 }
 
+// A doc comment belongs to the function below it, and moving a function has
+// to move its comment. Left behind, the comment describes a function the
+// package no longer holds; attached to the wrong one, godoc publishes it as
+// the description of that one. Both read as documentation and neither is.
 func TestDocCommentsNameTheirOwnFunction(t *testing.T) {
 	dirs, err := filepath.Glob("internal/*")
 	if err != nil {
 		t.Fatal(err)
 	}
+	fset := token.NewFileSet()
+	pkgs := map[string][]*ast.File{}
+	declared := map[string]map[string]bool{}
+	// A function moved out of one package is usually still declared in
+	// another, so the comment left where it was is checked against every
+	// package's names rather than only its own.
+	anywhere := map[string]bool{}
 	for _, dir := range append([]string{"."}, dirs...) {
-		checkDocComments(t, dir)
+		files := parsePackage(t, fset, dir)
+		if len(files) == 0 {
+			continue
+		}
+		pkgs[dir] = files
+		names := map[string]bool{}
+		for _, f := range files {
+			for _, decl := range f.Decls {
+				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
+					names[fn.Name.Name] = true
+					anywhere[fn.Name.Name] = true
+				}
+			}
+		}
+		declared[dir] = names
+	}
+	for dir, files := range pkgs {
+		checkDocComments(t, fset, files, declared[dir])
+		checkStrandedComments(t, fset, files, anywhere)
 	}
 }
 
-// checkDocComments reads one package at a time: a name is only a name the
-// comment could be describing if the package it sits in declares it.
-func checkDocComments(t *testing.T, dir string) {
+// parsePackage reads one directory's files with their comments, which is the
+// unit both checks work in: a name is only a name a comment could be
+// describing if some package declares it.
+func parsePackage(t *testing.T, fset *token.FileSet, dir string) []*ast.File {
 	t.Helper()
-	fset := token.NewFileSet()
 	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -587,18 +614,14 @@ func checkDocComments(t *testing.T, dir string) {
 		}
 		files = append(files, f)
 	}
+	return files
+}
 
-	// Only a name this package actually declares counts, so a comment opening
-	// with some other capitalised word is left alone.
-	declared := map[string]bool{}
-	for _, f := range files {
-		for _, decl := range f.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
-				declared[fn.Name.Name] = true
-			}
-		}
-	}
-
+// checkDocComments catches the comment that drifted onto its neighbour: only
+// a name the package itself declares counts, so a comment opening with some
+// other capitalised word is left alone.
+func checkDocComments(t *testing.T, fset *token.FileSet, files []*ast.File, declared map[string]bool) {
+	t.Helper()
 	for _, f := range files {
 		for _, decl := range f.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
@@ -609,6 +632,46 @@ func checkDocComments(t *testing.T, dir string) {
 			if first != fn.Name.Name && declared[first] {
 				t.Errorf("%s: %s's doc comment opens by describing %q",
 					fset.Position(fn.Pos()), fn.Name.Name, first)
+			}
+		}
+	}
+}
+
+// checkStrandedComments catches the other half, which the first check cannot
+// see: a comment separated from its function by a blank line, or left at the
+// end of a file the function has gone from, is nobody's Doc at all. godoc
+// prints neither it nor a description of what follows it.
+func checkStrandedComments(t *testing.T, fset *token.FileSet, files []*ast.File, anywhere map[string]bool) {
+	t.Helper()
+	for _, f := range files {
+		attached := map[*ast.CommentGroup]bool{f.Doc: true}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch d := n.(type) {
+			case *ast.FuncDecl:
+				attached[d.Doc] = true
+			case *ast.GenDecl:
+				attached[d.Doc] = true
+			case *ast.TypeSpec:
+				attached[d.Doc] = true
+			case *ast.ValueSpec:
+				attached[d.Doc] = true
+			case *ast.Field:
+				attached[d.Doc] = true
+			}
+			return true
+		})
+		for _, group := range f.Comments {
+			pos := fset.Position(group.Pos())
+			// Column 1 is what a doc comment shares with the stranded one: a
+			// comment trailing a line of code, or indented inside a body, is
+			// describing the code beside it and is not a Doc gone missing.
+			if attached[group] || pos.Column != 1 {
+				continue
+			}
+			first, _, _ := strings.Cut(strings.TrimSpace(group.Text()), " ")
+			if anywhere[first] {
+				t.Errorf("%s: a comment describing %s is attached to nothing",
+					pos, first)
 			}
 		}
 	}
