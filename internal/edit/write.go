@@ -78,3 +78,38 @@ func Write(path, content string) error {
 	}
 	return s.Commit()
 }
+
+// File is one file's new contents, waiting to be written.
+type File struct {
+	Path    string
+	Content string
+}
+
+// CommitAll stages every file beside itself, then renames them all: staging is
+// where a write fails in practice, so nothing is renamed until all of it can
+// be. The renames are not one operation, so one failing part way through names
+// the files it already put in place, which is what written carries back.
+func CommitAll(files []File) (failed string, written []string, err error) {
+	staged := make([]*Staged, 0, len(files))
+	paths := make([]string, 0, len(files))
+	discard := func() {
+		for _, s := range staged {
+			s.Discard()
+		}
+	}
+	for _, f := range files {
+		s, err := Stage(f.Path, f.Content)
+		if err != nil {
+			discard()
+			return f.Path, nil, err
+		}
+		staged, paths = append(staged, s), append(paths, f.Path)
+	}
+	for i, s := range staged {
+		if err := s.Commit(); err != nil {
+			discard()
+			return paths[i], paths[:i], err
+		}
+	}
+	return "", paths, nil
+}

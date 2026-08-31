@@ -158,46 +158,28 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 	return 0
 }
 
-// stageAll writes every file the plan touches beside itself, then renames them
-// all: staging is where a write fails in practice, so nothing is renamed until
-// all of it can be. The renames are not one operation, so one failing part way
-// through names the files it already put in place.
+// stageAll writes every file the plan touches beside itself, then renames
+// them all, so a plan that cannot be carried out in full leaves nothing
+// behind. A rename that fails part way through has already put some files in
+// place, and the refusal names them.
 func stageAll(cache *docCache, planned map[string][]planChange, format render.Format) error {
-	var staged []*edit.Staged
-	var paths []string
-	discard := func() {
-		for _, s := range staged {
-			s.Discard()
-		}
-	}
+	var files []edit.File
 	for _, path := range cache.order {
 		changes := changesOf(planned[path])
 		if len(changes) == 0 || !edit.Changed(changes) {
 			continue
 		}
-		s, err := edit.Stage(path, edit.Apply(cache.docs[path].Src, changes))
-		if err != nil {
-			discard()
-			refuse(format, report.Reason{
-				Kind: "write",
-				Text: fmt.Sprintf("%s: %v; nothing was written", path, err),
-				Path: path,
-			})
-			return err
-		}
-		staged, paths = append(staged, s), append(paths, path)
+		files = append(files, edit.File{Path: path, Content: edit.Apply(cache.docs[path].Src, changes)})
 	}
-	for i, s := range staged {
-		if err := s.Commit(); err != nil {
-			discard()
-			refuse(format, report.Reason{
-				Kind:    "write",
-				Text:    fmt.Sprintf("%s: %v; %s", paths[i], err, wroteSoFar(paths[:i])),
-				Path:    paths[i],
-				Written: paths[:i],
-			})
-			return err
-		}
+	failed, written, err := edit.CommitAll(files)
+	if err != nil {
+		refuse(format, report.Reason{
+			Kind:    "write",
+			Text:    fmt.Sprintf("%s: %v; %s", failed, err, report.WroteSoFar(written)),
+			Path:    failed,
+			Written: written,
+		})
+		return err
 	}
 	return nil
 }
@@ -207,15 +189,6 @@ func stageAll(cache *docCache, planned map[string][]planChange, format render.Fo
 // same reader a caller uses for the refusals that do.
 func refuse(format render.Format, why report.Reason) {
 	report.Refused(os.Stderr, nil, 0, why, format)
-}
-
-// wroteSoFar says which files a failed rename left changed, since a plan that
-// promised all or nothing owes the caller the list when it cannot keep that.
-func wroteSoFar(written []string) string {
-	if len(written) == 0 {
-		return "nothing was written"
-	}
-	return "already written: " + strings.Join(written, ", ")
 }
 
 // applyFlags rejects the flags a plan supersedes, rather than accepting them

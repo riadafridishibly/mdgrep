@@ -214,3 +214,12 @@ func BestScore(res []search.Result) float64 {
 	}
 	return res[0].Score
 }
+
+// WroteSoFar says which files a failed rename left changed, since a run that
+// promised all or nothing owes the caller the list when it cannot keep that.
+func WroteSoFar(written []string) string {
+	if len(written) == 0 {
+		return "nothing was written"
+	}
+	return "already written: " + strings.Join(written, ", ")
+}

@@ -229,8 +229,9 @@ func run() int {
 	return 0
 }
 
-// runEdits plans every file's changes before writing any of them, so a run
-// that cannot be carried out in full leaves nothing behind.
+// runEdits plans every file's changes and stages every file beside itself
+// before renaming any of them into place, so a run that cannot be carried out
+// in full leaves nothing behind.
 func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edit.Options, c *cli.Config) int {
 	total := 0
 	for _, r := range results {
@@ -265,19 +266,28 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 		planned[i] = changes
 	}
 
-	for i, changes := range planned {
-		if len(changes) == 0 {
-			continue
-		}
-		src := results[i].Src
-		if !c.DryRun && edit.Changed(changes) {
-			if err := edit.Write(src.Path, edit.Apply(src, changes)); err != nil {
-				fmt.Fprintf(os.Stderr, "mdgrep: %s: %v\n", src.Path, err)
-				return 2
+	if !c.DryRun {
+		var files []edit.File
+		for i, changes := range planned {
+			if len(changes) == 0 || !edit.Changed(changes) {
+				continue
 			}
+			src := results[i].Src
+			files = append(files, edit.File{Path: src.Path, Content: edit.Apply(src, changes)})
 		}
-		if !c.Quiet {
-			p.PrintEdits(src, changes, c.DryRun)
+		if failed, written, err := edit.CommitAll(files); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %s: %v; %s\n", failed, err, report.WroteSoFar(written))
+			return 2
+		}
+	}
+	// Nothing is reported until every file is in place, so a report of an
+	// edit is a report of an edit that happened.
+	if !c.Quiet {
+		for i, changes := range planned {
+			if len(changes) == 0 {
+				continue
+			}
+			p.PrintEdits(results[i].Src, changes, c.DryRun)
 		}
 	}
 	out.Flush()
