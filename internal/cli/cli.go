@@ -347,7 +347,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s %d: a count of lines or nodes cannot be negative", n.flag, n.val)
 		}
 	}
-	if s, given := c.MinScore.Value(); given && (s < 0 || s > 1) {
+	// The test is written the long way round because every comparison against
+	// NaN is false: "s < 0 || s > 1" lets NaN through, and a NaN threshold is
+	// not a loose filter but one that scores nothing at all, since the score
+	// is kept with ">= min".
+	if s, given := c.MinScore.Value(); given && !(s >= 0 && s <= 1) {
 		return fmt.Errorf("--min-score %v: a fuzzy score runs from 0 to 1", s)
 	}
 	if c.Checked && c.Unchecked {

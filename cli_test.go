@@ -778,3 +778,30 @@ func TestUnknownTopicAsAnArgumentIsRefused(t *testing.T) {
 		t.Errorf("a refused topic printed the manual anyway:\n%s", stdout)
 	}
 }
+
+// TestMinScoreRejectsNaN covers the one value that passed the range check by
+// failing every comparison in it, and then matched nothing for the same
+// reason -- an empty result that reads like an answer about the document.
+func TestMinScoreRejectsNaN(t *testing.T) {
+	path := doc(t, sample)
+	for _, arg := range []string{"nan", "NaN"} {
+		_, stderr, code := capture(t, "--fuzzy", "--min-score", arg, "instaler", path)
+		if code != 2 {
+			t.Fatalf("--min-score %s: code %d, want 2", arg, code)
+		}
+		if !strings.Contains(stderr, "a fuzzy score runs from 0 to 1") {
+			t.Fatalf("--min-score %s: %q", arg, stderr)
+		}
+	}
+}
+
+// TestMinScoreKeepsItsRange is the other half: the ends of the scale are still
+// values, not typos.
+func TestMinScoreKeepsItsRange(t *testing.T) {
+	path := doc(t, sample)
+	for _, arg := range []string{"0", "0.5", "1"} {
+		if _, stderr, code := capture(t, "--fuzzy", "--min-score", arg, "installer", path); code != 0 {
+			t.Fatalf("--min-score %s: code %d\n%s", arg, code, stderr)
+		}
+	}
+}
