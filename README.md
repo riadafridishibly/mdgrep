@@ -212,7 +212,8 @@ printf -- '- [ ] verify checksum\n- [ ] sign the tarball\n' |
 ```
 
 Files are written atomically, through a temporary file renamed over the
-original. A checkbox that already reads the way you asked is reported unchanged
+original; a symlinked path is followed first, so what changes is the document
+the link points at rather than the link. A checkbox that already reads the way you asked is reported unchanged
 and left alone. `-A`, `-B`, `-C`, `--lines`, `-c`, `-l` and `-m` are refused
 with an edit.
 

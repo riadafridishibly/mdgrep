@@ -9,6 +9,12 @@ import (
 // directory, so an interrupted run leaves the original in place rather than a
 // half-written document.
 func Write(path, content string) error {
+	// A file reached through a symlink is still that file. Renaming over the
+	// link would leave the document it points at untouched and put a regular
+	// file where the link was, so the edit is written where it was read from.
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
