@@ -43,8 +43,13 @@ func Files(paths []string, exts map[string]bool, hidden, noIgnore bool) ([]strin
 			return nil, false, err
 		}
 		if !info.IsDir() {
-			if !seen[p] {
-				seen[p] = true
+			// The walk keys what it has found on a cleaned path, because
+			// filepath.Join cleans on the way in. A file named outright is
+			// keyed the same way, or "./top.md" and the "top.md" a walk of "."
+			// already reported are two strings for one file, and it is
+			// searched twice. The list keeps the spelling the caller used.
+			if key := filepath.Clean(p); !seen[key] {
+				seen[key] = true
 				files = append(files, p)
 			}
 			continue

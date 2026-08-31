@@ -88,6 +88,25 @@ func TestWalkReportsAFileOnce(t *testing.T) {
 		[]string{"docs/a.md", "docs/b.md", "top.md"})
 }
 
+// A walk keys what it has found on a cleaned path, so a file named in any
+// other spelling of itself has to be cleaned before it is asked about --
+// otherwise it is searched a second time, which shows up as two hits on one
+// node, a count gate that refuses a single match, and an edit planned twice
+// against the same original.
+func TestWalkReportsAFileOnceHoweverItIsSpelled(t *testing.T) {
+	plant(t, "docs/a.md", "top.md")
+	spellings := []string{"./top.md", "docs//a.md", "docs/../docs/a.md", "./docs/./a.md"}
+	same(t, collected(t, append([]string{"."}, spellings...), false, false),
+		[]string{"docs/a.md", "top.md"})
+}
+
+// The spelling the caller used is the one reported back, so a file named
+// before the walk that would also find it keeps the name it was asked for.
+func TestWalkKeepsTheSpellingItWasGiven(t *testing.T) {
+	plant(t, "top.md")
+	same(t, collected(t, []string{"./top.md", "."}, false, false), []string{"./top.md"})
+}
+
 // Build output and caches are most of the files under a repository and none of
 // the ones worth reading, and a name that is not markdown is not worth opening.
 func TestWalkSkipsWhatItIsNotThereFor(t *testing.T) {
