@@ -83,10 +83,10 @@ Editing
       --expect N        edit only if exactly N nodes matched, else fail
       --dry-run         show the edit, write nothing
 
-An edit rewrites what the same flags would have printed: narrow the search to
-one node, then say what to do with it. --check and --set-text act on the
-matched node; --replace, --delete, --append and --prepend act on the region
---section and --expand widen it to. Every file is written in one atomic go.
+An edit rewrites what the same flags would have printed. --check and
+--set-text act on the matched node; --replace, --delete, --append and
+--prepend act on the region --section and --expand widen it to. Each file is
+written in one atomic go.
 
 Plans
       --apply FILE      carry out a plan of edits read from FILE ("-" is
@@ -99,10 +99,10 @@ Plans
 
 An entry takes "path", "match" and "op", plus "text" for the edits that write
 one. "kind", "fixed", "expand", "section", "section-body", "expect" and
-"multi" say per entry what the flags of those names say here, and the plan
-carries its own search, so it takes no PATTERN and no PATH. Every entry is
-planned against the files as read, so none can match what another writes, and
-the plan applies whole or not at all.
+"multi" mean per entry what the flags of those names mean here. A plan carries
+its own search, so it takes no PATTERN and no PATH. Entries are planned
+against the files as read, so none can match what another writes, and the plan
+applies whole or not at all.
 
 Pipelines
       --then            narrow what the search before it selected: everything
@@ -113,56 +113,39 @@ Pipelines
       --stream          hand one region per result to the next mdgrep rather
                         than printing them; same as --format stream
 
-  $ mdgrep "^## Release" --section docs \
-      --then -k list --then --todo --check --multi
-  $ mdgrep --exec '"^## Release" --section \
-      | -k list | --todo --check --multi' docs
+  $ mdgrep "^## Release" --section docs --then -k list --then --todo --check
+  $ mdgrep --exec '"^## Release" --section | -k list | --todo --check' docs
+  $ mdgrep "^## Release" --section docs --stream | mdgrep "" --todo --check
 
-Each stage of a pipeline is a whole mdgrep command line of its own, so it takes
-the Matching, Filters and Selection flags and reads them as this manual says
-it does. Only the first stage names files, so a word on a later one is its
-pattern and a stage that writes none selects by its filters alone; only the
-last stage prints or writes, and it is the one the Output and Editing flags
-belong to. The word itself is read before the flags are, the way a shell reads
-a pipe before the commands around it.
+A stage is a whole mdgrep line and takes the Matching, Filters and Selection
+flags. Only the first names files, so a word on a later stage is its pattern;
+only the last prints or writes, and takes the Output and Editing flags. A flag
+that would change nothing where it stands is refused by name. --then and
+--exec are read before the flags; a bare -- ends them, so a file named --then
+stays a path.
 
---exec spells the whole pipeline in one string, for a query kept in a variable,
-a config file or a script. It is split into words the way a shell splits a
-line -- single quotes literal throughout, double quotes literal but for a
-backslash before a quote or a backslash, "" a word in its own right, and a
-backslash at the end of a line joining it to the next -- and a bare "|"
-divides one stage from the next. The quoting is mdgrep's own here, which is
-what keeps the pipe character usable in a pattern: "^(alpha|beta)" is one word
-and never a separator, and a quoted "|" is a word too. Only paths may
-stand beside --exec, and they go to the stage that walks them, so one query
-can be pointed at whichever files the caller means.
+--exec splits like a shell -- single quotes literal, double quotes literal but
+for a backslash before a quote or a backslash, "" a word, a trailing backslash
+joining two lines -- and only a bare "|" separates, so "^(alpha|beta)" is one
+word. Only paths may stand beside it; they go to the first stage.
 
-A pipeline can cross processes instead, which is what --stream is for:
+--stream sends the regions a stage selected, not its text: a header line, then
+one JSON object per result with "path", "start" and "end", 1-based inclusive.
+The next stage reopens the file, so line numbers, breadcrumbs and paths
+survive and the last stage can edit. Markdown on stdin is still markdown --
+the header tells the two apart -- and --stream over stdin is refused, having
+no file to name. A stage reading a stream takes no PATH ("-" spells "read
+stdin") and no --ext, --hidden or --no-ignore; a stream takes no edit and none
+of the flags that decorate a page.
 
-  $ mdgrep "^## Release" --section docs --stream \
-      | mdgrep "" -k list --stream \
-      | mdgrep "" --todo --check --multi
+Narrowing is by containment, judged on the node a stage selects: one the
+region holds whole is a candidate, one straddling it is not, and a climb
+(--todo to the task a sub-bullet hangs under, --expand up the tree) selects
+nothing where it would leave the region. --section widens the other way and
+may reach past it.
 
-A stream is a header line and then one JSON object per result: "path",
-"start" and "end", 1-based and inclusive, and nothing about the text. The
-stage reading it opens each file again and searches only inside those lines,
-so a line number is still the line's own, a breadcrumb is still the whole
-trail, and the last stage of a pipeline holds real paths and can edit them.
-Narrowing goes by containment: a node lying inside a region is a candidate and
-a node straddling one is not. It is the node the stage selects that has to
-fit, so a climb counts as well as a match -- --todo reporting the task a
-sub-bullet hangs under, or --expand climbing the tree, selects nothing where
-the climb would leave the region. --section widens the other way and may still
-reach back out past it. A stream names its own files, so a stage reading one
-takes no PATH, and no --ext, --hidden or --no-ignore either: a PATH means
-stdin goes unread, the way grep reads one, and "-" is the explicit spelling of
-"read stdin". Markdown on stdin is still read as markdown, since the header is
-what tells the two apart; a stream cannot be made from stdin, having no file
-to name the stage after it. A stream is a stage in the middle, so it takes no
-edit and none of the flags that decorate a printed page. The two spellings
-describe the same pipeline, one with a process boundary in it and one without,
-and they answer alike -- and --then, holding every stage in one process, says
-which of them narrowed to nothing.
+The three spellings answer alike. --then holds every stage in one process and
+says which narrowed to nothing; a stream can be saved and replayed.
 
 Output
   -n, --line-number     number the printed lines (the default)
@@ -193,13 +176,13 @@ Output
                         "mdgrep --help anchor"
   -V, --version         print the version and exit
 
-compact is one tab-separated record per result — "start[-end] kind text
-before after", newlines escaped — under the path, for a fraction of what json
-costs. before and after are the lines --truncate held back on each side, and
-the span is the node's, so the text starts at start plus before. json adds the
-breadcrumb and the score. Both keep two touching nodes apart where plain runs
-them into one passage, and both report a refusal in their own shape. Colour is
-off when stdout is not a terminal, NO_COLOR is set or TERM=dumb.
+compact is one tab-separated record per result under the path — "start[-end]
+kind text before after", newlines escaped — for a fraction of what json costs.
+before and after are the lines --truncate held back on each side; the span is
+the node's, so the text starts at start plus before. json adds the breadcrumb
+and the score. Both keep touching nodes apart where plain runs them into one
+passage, and both report a refusal in their own shape. Colour is off when
+stdout is not a terminal, NO_COLOR is set or TERM=dumb.
 
 A short flag takes its value attached or apart: -C2 and -C 2 are the same.
 Everything after -- is a PATTERN or a PATH, dashes and all.
