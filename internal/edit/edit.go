@@ -272,17 +272,47 @@ func Apply(src *mdoc.Source, changes []Change) string {
 			continue
 		}
 		sb.WriteString(text[prev:lo])
+		// Every line but the last takes the file's own ending. The last takes
+		// back exactly what Source.Line trimmed off it, which is how a file
+		// that ended without a newline keeps ending without one, and how a
+		// last line ending in carriage returns keeps them: Line strips those
+		// as an ending, and nothing else here would ever write one back.
+		last := trimmedEnding(src, text, lo, hi, c.End)
+		if lo == hi {
+			// An insertion replaces no line, so it has no ending of its own to
+			// take back. It parts from whatever follows instead, and adds
+			// nothing at the end of a file that ends without one.
+			last = ""
+			if hi < len(text) || trailing {
+				last = eol
+			}
+		}
 		for i, line := range c.New {
 			sb.WriteString(line)
-			// A file that ended without a newline keeps ending without one.
-			if i < len(c.New)-1 || hi < len(text) || trailing {
+			if i < len(c.New)-1 {
 				sb.WriteString(eol)
+			} else {
+				sb.WriteString(last)
 			}
 		}
 		prev = hi
 	}
 	sb.WriteString(text[prev:])
 	return sb.String()
+}
+
+// trimmedEnding is what Source.Line trimmed from the last line of a replaced
+// range: the run of carriage returns and newlines it ends on. Reading it from
+// that line alone rather than from the whole range is what keeps a range of
+// blank lines from collecting the endings of the lines above it, each of which
+// its own entry in New already accounts for.
+func trimmedEnding(src *mdoc.Source, text string, lo, hi, end int) string {
+	last, _ := src.ByteRange(end, end)
+	if last < lo || last > hi {
+		last = lo
+	}
+	seg := text[last:hi]
+	return seg[len(strings.TrimRight(seg, "\r\n")):]
 }
 
 func lines(text string) []string {

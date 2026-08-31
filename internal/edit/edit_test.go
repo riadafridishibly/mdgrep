@@ -417,3 +417,71 @@ func TestCommitAllNamesTheFilesAMidRenameFailureLeftChanged(t *testing.T) {
 		}
 	}
 }
+
+// Source.Line strips a trailing carriage return as if it were a line ending,
+// and Apply used to write every ending back as "\n" or "\r\n". A last line
+// ending in a lone carriage return therefore lost it, and lost it even when
+// the edit was a no-op: mdgrep rewrote a file to say it had changed nothing.
+func TestApplyKeepsTheLineEndingTheFileHad(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"lone carriage return at the end", "* [ ] e\r", "* [x] e\r"},
+		{"carriage return and newline", "* [ ] e\r\n", "* [x] e\r\n"},
+		{"newline", "* [ ] e\n", "* [x] e\n"},
+		{"no ending at all", "* [ ] e", "* [x] e"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := mdoc.Parse("f.md", []byte(tt.src))
+			m, err := match.New("e", match.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := search.File(doc, m, search.Options{Task: search.TaskAny})
+			changes, err := Plan(doc.Src, res, Options{Op: OpCheck})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := Apply(doc.Src, changes); got != tt.want {
+				t.Errorf("Apply = %q, want %q", got, tt.want)
+			}
+
+			// The same file with nothing to do keeps every byte, which is the
+			// promise an edit that reports no change is making.
+			noop, err := Plan(doc.Src, res, Options{Op: OpUncheck})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := Apply(doc.Src, noop); got != tt.src {
+				t.Errorf("a no-op rewrote %q as %q", tt.src, got)
+			}
+		})
+	}
+}
+
+// Source.Line trims the whole run of carriage returns and newlines a line ends
+// on, so that is what has to go back: restoring a single ending dropped the
+// rest, and did it on a no-op, where the file was reported unchanged.
+func TestApplyKeepsRepeatedCarriageReturns(t *testing.T) {
+	for _, src := range []string{"* [ ]\r\r", "* [ ] e\r\r\n", "* [ ] e\r\r\r"} {
+		doc := mdoc.Parse("f.md", []byte(src))
+		m, err := match.New(" ", match.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := search.File(doc, m, search.Options{Task: search.TaskAny})
+		changes, err := Plan(doc.Src, res, Options{Op: OpUncheck})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !allNoOp(changes) {
+			t.Fatalf("%q: unchecking an unticked item is not a no-op", src)
+		}
+		if got := Apply(doc.Src, changes); got != src {
+			t.Errorf("a no-op rewrote %q as %q", src, got)
+		}
+	}
+}
