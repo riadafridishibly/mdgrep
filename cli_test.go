@@ -233,8 +233,8 @@ func TestCompactKeepsOneRecordPerLine(t *testing.T) {
 		t.Errorf("the path line should have no tab in it: %q", lines[0])
 	}
 	fields := strings.Split(lines[1], "\t")
-	if len(fields) != 3 {
-		t.Fatalf("want 3 tab-separated fields, got %d: %q", len(fields), lines[1])
+	if len(fields) != 4 {
+		t.Fatalf("want 4 tab-separated fields, got %d: %q", len(fields), lines[1])
 	}
 	if fields[0] != "3-5" {
 		t.Errorf("span = %q, want 3-5", fields[0])
@@ -504,8 +504,12 @@ func TestTruncateStaysParseable(t *testing.T) {
 	if lines := strings.Count(strings.TrimSpace(stdout), "\n"); lines != 1 {
 		t.Errorf("want a path line and one record, got %d newlines:\n%s", lines, stdout)
 	}
-	if !strings.Contains(stdout, `\n… +4 lines`) {
-		t.Errorf("want the elision escaped into the record:\n%s", stdout)
+	if strings.Contains(stdout, "…") {
+		t.Errorf("the count belongs in its own field, not in the text:\n%s", stdout)
+	}
+	fields := strings.Split(strings.Split(strings.TrimSpace(stdout), "\n")[1], "\t")
+	if len(fields) != 4 || fields[3] != "4" {
+		t.Errorf("truncated field = %q, want 4 fields ending in 4:\n%s", fields, stdout)
 	}
 
 	stdout, _, code = capture(t, "one", path, "--truncate", "3", "--json")

@@ -8,6 +8,7 @@ import (
 
 	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/render"
 	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
@@ -43,7 +44,7 @@ func FuzzRefusalJSON(f *testing.F) {
 				continue
 			}
 			var buf bytes.Buffer
-			Refused(&buf, results, total, why, true)
+			Refused(&buf, results, total, why, render.JSON)
 
 			var got Refusal
 			dec := json.NewDecoder(&buf)

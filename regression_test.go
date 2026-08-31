@@ -42,6 +42,10 @@ const (
 	// empty is a heading with nothing under it: its body covers no line at
 	// all, which is the region that has no span to print.
 	empty = "# Top\n\n## Empty\n## Next\n\nbody\n"
+
+	// paired holds two paragraphs under one heading, so two hits arrive with
+	// the same trail and the trail has a chance to be printed twice.
+	paired = "# Top\n\n## Consequences\n\nalpha one\n\nalpha two\n"
 )
 
 // --- A. Data loss and silent wrong writes -----------------------------------
@@ -406,6 +410,127 @@ func TestEmptySectionBodyHasNoBackwardsSpan(t *testing.T) {
 
 // A doc comment belongs to the function below it. This one drifted onto its
 // neighbour, so godoc describes separator as the thing parseFormat does.
+// The trail above a result is there to say where the result sits. Two results
+// that sit in the same place say it once: repeating an eleven-word trail for
+// every adjacent hit costs more than the trail is worth.
+func TestTrailIsNotRepeatedForAdjacentResults(t *testing.T) {
+	path := doc(t, paired)
+	stdout, stderr, code := capture(t, "alpha", path)
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	if n := strings.Count(stdout, "Top › Consequences"); n != 1 {
+		t.Errorf("the trail is printed %d times, want 1:\n%s", n, stdout)
+	}
+	for _, want := range []string{"alpha one", "alpha two"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("want %q in the output:\n%s", want, stdout)
+		}
+	}
+}
+
+// A heading result carries the heading itself, so the trail ending with that
+// same heading says it twice. The trail is built once, so every format gets
+// the shorter one -- not just the plain output the saving was measured on.
+func TestMachineFormatsDropTheRedundantTrail(t *testing.T) {
+	path := doc(t, "# Notes\n\n## Setup\n\nbody\n")
+
+	stdout, stderr, code := capture(t, "^## Setup", path, "--json")
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	var got struct {
+		Breadcrumb []string `json:"breadcrumb"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("%v: %s", err, stdout)
+	}
+	if len(got.Breadcrumb) != 1 || got.Breadcrumb[0] != "Notes" {
+		t.Errorf("breadcrumb = %v, want [Notes]: the heading names itself", got.Breadcrumb)
+	}
+
+	stdout, stderr, code = capture(t, "^## Setup", path, "--set-text", "New", "--dry-run")
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	if strings.Contains(stdout, "Notes › Setup") {
+		t.Errorf("the edit prints the trail down to the heading it is about to print:\n%s", stdout)
+	}
+}
+
+// A compact record is read by splitting on tabs. A count of held-back lines
+// spelled in English inside the text field cannot be told apart from a
+// document that says the same words, so it gets a field of its own.
+func TestCompactSaysHowMuchItTruncated(t *testing.T) {
+	path := doc(t, "# Doc\n\nalpha\nbeta\ngamma\ndelta\nepsilon\n")
+	stdout, stderr, code := capture(t, "alpha", path, "--format", "compact", "--truncate", "2")
+	if code != 0 {
+		t.Fatalf("exit = %d (%s)", code, stderr)
+	}
+	record := strings.Split(strings.TrimSpace(stdout), "\n")[1]
+	fields := strings.Split(record, "\t")
+	if len(fields) != 4 {
+		t.Fatalf("want 4 fields, got %d: %q", len(fields), record)
+	}
+	if fields[3] != "3" {
+		t.Errorf("truncated = %q, want 3: %q", fields[3], record)
+	}
+	if strings.Contains(fields[2], "…") {
+		t.Errorf("the notice is still inside the text: %q", record)
+	}
+}
+
+// compact is documented as the format for a program, so the reason a run
+// refused has to arrive in a shape that program can read. A caller that has to
+// match a regular expression against English is not being told anything.
+func TestCompactRefusalIsRecords(t *testing.T) {
+	path := doc(t, "# Doc\n\nalpha one\n\nalpha two\n")
+	_, stderr, code := capture(t, "alpha", path, "--replace", "x", "--dry-run", "--format", "compact")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	fields := strings.Split(lines[0], "\t")
+	if len(fields) != 8 || fields[0] != "error" {
+		t.Fatalf("want an 8-field error record, got %q", lines[0])
+	}
+	if fields[1] != "ambiguous" {
+		t.Errorf("kind = %q, want ambiguous", fields[1])
+	}
+	if fields[3] != "2" {
+		t.Errorf("total = %q, want 2", fields[3])
+	}
+	if n := strings.Count(stderr, "\nmatch\t"); n != 2 {
+		t.Errorf("want a match record per hit, got %d:\n%s", n, stderr)
+	}
+	if strings.Contains(stderr, "mdgrep:") {
+		t.Errorf("a compact refusal should carry no prose:\n%s", stderr)
+	}
+}
+
+// An insertion covers no line, which is spelled End < Start. Every format has
+// to collapse that to the line it lands beside rather than hand a reader a
+// range running backwards.
+func TestEditJSONInsertionSpanIsReadable(t *testing.T) {
+	path := doc(t, "# Notes\n\n## Setup\n\nbody\n")
+	for _, op := range []string{"--append", "--prepend"} {
+		stdout, stderr, code := capture(t, "^## Setup", path, op, "x", "--dry-run", "--json")
+		if code != 0 {
+			t.Fatalf("%s: exit = %d (%s)", op, code, stderr)
+		}
+		var got struct {
+			Start int `json:"start"`
+			End   int `json:"end"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+			t.Fatalf("%s: %v: %s", op, err, stdout)
+		}
+		if got.End < got.Start {
+			t.Errorf("%s: span %d-%d runs backwards", op, got.Start, got.End)
+		}
+	}
+}
+
 func TestDocCommentsNameTheirOwnFunction(t *testing.T) {
 	dirs, err := filepath.Glob("internal/*")
 	if err != nil {

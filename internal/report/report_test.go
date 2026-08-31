@@ -9,6 +9,7 @@ import (
 
 	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/render"
 	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
@@ -78,7 +79,7 @@ func TestReportRefusedText(t *testing.T) {
 		t.Fatalf("code = %d, want 2", code)
 	}
 	var buf bytes.Buffer
-	Refused(&buf, results, total, why, false)
+	Refused(&buf, results, total, why, render.Plain)
 	out := buf.String()
 	for _, want := range []string{"2 matches", "--multi", "d.md:3", "alpha needle", "d.md:4", "beta needle"} {
 		if !strings.Contains(out, want) {
@@ -94,7 +95,7 @@ func TestReportRefusedTextCaps(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	why, _ := Gate(total, nil, false, FlagWords)
-	Refused(&buf, results, total, why, false)
+	Refused(&buf, results, total, why, render.Plain)
 	if n := strings.Count(buf.String(), "d.md:"); n != shownMatches {
 		t.Errorf("listed %d matches, want %d", n, shownMatches)
 	}
@@ -122,7 +123,7 @@ func TestReportRefusedJSON(t *testing.T) {
 	results, total := found(t, "# H\n\n- alpha needle\n- beta needle\n", "needle")
 	why, _ := Gate(total, nil, false, FlagWords)
 	var buf bytes.Buffer
-	Refused(&buf, results, total, why, true)
+	Refused(&buf, results, total, why, render.JSON)
 
 	got := decodeRefusal(t, buf.Bytes())
 	if got.Error != "ambiguous" {
@@ -153,7 +154,7 @@ func TestReportRefusedJSONExpect(t *testing.T) {
 		t.Fatalf("code = %d, want 2", code)
 	}
 	var buf bytes.Buffer
-	Refused(&buf, results, total, why, true)
+	Refused(&buf, results, total, why, render.JSON)
 
 	got := decodeRefusal(t, buf.Bytes())
 	if got.Error != "expect" {
@@ -173,7 +174,7 @@ func TestReportRefusedJSONNoMatches(t *testing.T) {
 	expect := expecting(1)
 	why, _ := Gate(0, expect, false, FlagWords)
 	var buf bytes.Buffer
-	Refused(&buf, nil, 0, why, true)
+	Refused(&buf, nil, 0, why, render.JSON)
 
 	if !bytes.Contains(buf.Bytes(), []byte(`"matches":[]`)) {
 		t.Errorf("want an empty array, got %s", buf.Bytes())
@@ -187,7 +188,7 @@ func TestReportRefusedJSONCaps(t *testing.T) {
 	results, total := found(t, manyItems(25), "needle")
 	why, _ := Gate(total, nil, false, FlagWords)
 	var buf bytes.Buffer
-	Refused(&buf, results, total, why, true)
+	Refused(&buf, results, total, why, render.JSON)
 
 	got := decodeRefusal(t, buf.Bytes())
 	if len(got.Matches) != shownMatches {
