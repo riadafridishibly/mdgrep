@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -94,13 +95,15 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 		last = max(last, r.End+1)
 	}
 	width := len(strconv.Itoa(last))
+	var shown []string
 	for i, r := range results {
 		if i > 0 && p.Separator != "" {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, p.Separator))
 		}
-		if crumb := p.crumb(r); p.Breadcrumb && len(crumb) > 0 {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(crumb)))
+		if p.Breadcrumb && len(r.Breadcrumb) > 0 && !slices.Equal(r.Breadcrumb, shown) {
+			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
 		}
+		shown = r.Breadcrumb
 		first, last, before, after := p.window(r)
 		if before > 0 {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(before)))
@@ -122,19 +125,6 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(after)))
 		}
 	}
-}
-
-// crumb is the trail to print above a result. A heading result prints that
-// heading on the very next line and the trail ends with it, so the last
-// element would say the same thing twice; the trail stops at the parent
-// instead. A --section-body result keeps the whole trail, because there the
-// heading line itself is never printed.
-func (p *Printer) crumb(r search.Result) []string {
-	if r.Kind == mdoc.KindHeading && len(r.Breadcrumb) > 0 &&
-		r.Start <= r.HitStart && r.HitStart <= r.End {
-		return r.Breadcrumb[:len(r.Breadcrumb)-1]
-	}
-	return r.Breadcrumb
 }
 
 // window applies Truncate to one result. The cap is a budget of lines, and the
@@ -185,25 +175,24 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 
 // printCompact writes the path once and then one record per result:
 //
-//	start[-end] <TAB> kind <TAB> text
+//	start[-end] <TAB> kind <TAB> text <TAB> truncated
 //
 // The text is escaped so a record is always one line, which is the whole point
 // of the format — a reader splits on newline and then on tab, and a path is
 // the line that has no tab in it. The path is escaped for the same reason: a
 // filename may hold a tab or a newline, and the format has to survive one.
+//
+// truncated is how many lines --truncate held back, so the count is read as a
+// number rather than out of an English notice inside the text, which a
+// document that says the same thing would be indistinguishable from.
 func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
 	p.wroteAny = true
-	fmt.Fprintln(p.W, escape(src.Path))
+	fmt.Fprintln(p.W, Escape(src.Path))
 	for _, r := range results {
 		first, last, before, after := p.window(r)
 		text := strings.Join(src.Lines(first, last), "\n")
-		if before > 0 {
-			text = elision(before) + "\n" + text
-		}
-		if after > 0 {
-			text += "\n" + elision(after)
-		}
-		fmt.Fprintf(p.W, "%s\t%s\t%s\n", lineSpan(r.Start, r.End), r.Kind, escape(text))
+		fmt.Fprintf(p.W, "%s\t%s\t%s\t%d\n",
+			lineSpan(r.Start, r.End), r.Kind, Escape(text), before+after)
 	}
 }
 
@@ -251,7 +240,9 @@ func lineSpan(start, end int) string {
 
 var escaper = strings.NewReplacer("\\", "\\\\", "\n", "\\n", "\r", "\\r", "\t", "\\t")
 
-func escape(s string) string { return escaper.Replace(s) }
+// Escape puts a string into one field of a compact record, so a value holding
+// a tab or a newline cannot be read as the end of the field or the record.
+func Escape(s string) string { return escaper.Replace(s) }
 
 type jsonResult struct {
 	Path       string   `json:"path"`

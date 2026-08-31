@@ -3,6 +3,7 @@ package render
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -42,13 +43,15 @@ func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) 
 	// Lines the edit adds or removes shift everything after them, so the new
 	// side is numbered against a running offset rather than the old file.
 	offset := 0
+	var shown []string
 	for i, c := range changes {
 		if i > 0 && p.Separator != "" {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, p.Separator))
 		}
-		if p.Breadcrumb && len(c.Breadcrumb) > 0 {
+		if p.Breadcrumb && len(c.Breadcrumb) > 0 && !slices.Equal(c.Breadcrumb, shown) {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(c.Breadcrumb)))
 		}
+		shown = c.Breadcrumb
 		if c.NoOp {
 			for n, line := range c.Old {
 				p.editLine(dim, "=", c.Start+n, width, line)
@@ -87,11 +90,11 @@ func (p *Printer) editLine(color, mark string, num, width int, line string) {
 // run against it — and "new" is empty for a deletion.
 func (p *Printer) printEditCompact(src *mdoc.Source, changes []edit.Change, dry bool) {
 	p.wroteAny = true
-	fmt.Fprintln(p.W, escape(src.Path))
+	fmt.Fprintln(p.W, Escape(src.Path))
 	for _, c := range changes {
 		fmt.Fprintf(p.W, "%s\t%s\t%s\t%s\n",
 			lineSpan(c.Start, c.End), c.Op,
-			editStatus(c.NoOp, dry), escape(strings.Join(c.New, "\n")))
+			editStatus(c.NoOp, dry), Escape(strings.Join(c.New, "\n")))
 	}
 }
 
@@ -124,7 +127,7 @@ func (p *Printer) printEditJSON(changes []edit.Change, dry bool) {
 			Path:       c.Path,
 			Op:         string(c.Op),
 			Start:      c.Start + 1,
-			End:        c.End + 1,
+			End:        max(c.End, c.Start) + 1,
 			Old:        c.Old,
 			New:        c.New,
 			Applied:    !dry && !c.NoOp,

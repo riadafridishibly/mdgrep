@@ -238,7 +238,7 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 		// Nothing matching is the search's own answer, and stays as quiet
 		// here as it is everywhere else.
 		if why.Kind != "nomatch" {
-			report.Refused(os.Stderr, results, total, why, p.Format == render.JSON)
+			report.Refused(os.Stderr, results, total, why, p.Format)
 		}
 		return code
 	}

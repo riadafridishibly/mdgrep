@@ -42,14 +42,16 @@ one node, the guard against a hit inside a 400-line fence. `-l` names files,
 `-c` counts, `-m N` caps per file, `-q` answers in the exit status alone.
 
 **Parse with `--format compact`**: the path once per file, then tab-separated
-`start[-end] kind text` with newlines escaped — in the path too — so a record
-is one line and a path is the line with no tab. An insertion is a point rather
-than a span, so `append` and `prepend` record the single line they land on.
+`start[-end] kind text truncated` with newlines escaped — in the path too — so
+a record is one line and a path is the line with no tab. The last field is how
+many lines `--truncate` held back, `0` when nothing was. An insertion is a
+point rather than a span, so `append` and `prepend` record the single line they
+land on.
 
 ```
 pruning.md
-1	heading	# Pruning
-5-6	paragraph	Cut back the leader\nbefore the sap rises.
+1	heading	# Pruning	0
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	0
 ```
 
 An edit records `start[-end] op applied|dry|unchanged new`. `--json` adds the

@@ -105,12 +105,11 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 		return 2
 	}
 
-	asJSON := format == render.JSON
 	cache := newDocCache()
 	planned := map[string][]planChange{}
 	refused := 0
 	for i, e := range entries {
-		changes, path, ok := planOne(i+1, e, cache, asJSON)
+		changes, path, ok := planOne(i+1, e, cache, format)
 		if !ok {
 			refused++
 			continue
@@ -118,7 +117,7 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 		planned[path] = append(planned[path], changes...)
 	}
 	if refused > 0 {
-		refuse(asJSON, report.Reason{
+		refuse(format, report.Reason{
 			Kind:    "refused",
 			Text:    fmt.Sprintf("%d of %d entries refused; nothing was written", refused, len(entries)),
 			Entries: refused,
@@ -127,7 +126,7 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 	}
 	for _, path := range cache.order {
 		if err := orderChanges(planned[path]); err != nil {
-			refuse(asJSON, report.Reason{
+			refuse(format, report.Reason{
 				Kind: "conflict",
 				Text: fmt.Sprintf("%s: %v", path, err),
 				Path: path,
@@ -140,7 +139,7 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 	// itself first and only renamed into place once all of them are there.
 	// A file that cannot be written is then found before any has been.
 	if !c.DryRun {
-		if err := stageAll(cache, planned, asJSON); err != nil {
+		if err := stageAll(cache, planned, format); err != nil {
 			return 2
 		}
 	}
@@ -159,16 +158,11 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 	return 0
 }
 
-// stageAll writes the new contents of every file the plan touches, then
-// renames them all. Staging is where a write fails in practice -- a directory
-// that cannot be written to, a full disk -- and nothing is renamed until every
-// file has cleared it.
-//
-// The renames themselves are not one operation and cannot be made one, so a
-// failure part way through is reported for what it is: the files already in
-// place are named, because a caller that is told only "refused" would go on
-// believing its plan never ran.
-func stageAll(cache *docCache, planned map[string][]planChange, asJSON bool) error {
+// stageAll writes every file the plan touches beside itself, then renames them
+// all: staging is where a write fails in practice, so nothing is renamed until
+// all of it can be. The renames are not one operation, so one failing part way
+// through names the files it already put in place.
+func stageAll(cache *docCache, planned map[string][]planChange, format render.Format) error {
 	var staged []*edit.Staged
 	var paths []string
 	discard := func() {
@@ -184,7 +178,7 @@ func stageAll(cache *docCache, planned map[string][]planChange, asJSON bool) err
 		s, err := edit.Stage(path, edit.Apply(cache.docs[path].Src, changes))
 		if err != nil {
 			discard()
-			refuse(asJSON, report.Reason{
+			refuse(format, report.Reason{
 				Kind: "write",
 				Text: fmt.Sprintf("%s: %v; nothing was written", path, err),
 				Path: path,
@@ -196,7 +190,7 @@ func stageAll(cache *docCache, planned map[string][]planChange, asJSON bool) err
 	for i, s := range staged {
 		if err := s.Commit(); err != nil {
 			discard()
-			refuse(asJSON, report.Reason{
+			refuse(format, report.Reason{
 				Kind:    "write",
 				Text:    fmt.Sprintf("%s: %v; %s", paths[i], err, wroteSoFar(paths[:i])),
 				Path:    paths[i],
@@ -211,8 +205,8 @@ func stageAll(cache *docCache, planned map[string][]planChange, asJSON bool) err
 // refuse reports a refusal that has no matches to show -- a malformed entry, a
 // file that cannot be read or written, two entries over one node -- through the
 // same reader a caller uses for the refusals that do.
-func refuse(asJSON bool, why report.Reason) {
-	report.Refused(os.Stderr, nil, 0, why, asJSON)
+func refuse(format render.Format, why report.Reason) {
+	report.Refused(os.Stderr, nil, 0, why, format)
 }
 
 // wroteSoFar says which files a failed rename left changed, since a plan that
@@ -281,9 +275,9 @@ func changesOf(changes []planChange) []edit.Change {
 // planOne turns one entry into the changes it asks for, reporting a refusal the
 // way a single edit reports one and answering whether the entry can be carried
 // out at all.
-func planOne(n int, e planEntry, cache *docCache, asJSON bool) ([]planChange, string, bool) {
+func planOne(n int, e planEntry, cache *docCache, format render.Format) ([]planChange, string, bool) {
 	fail := func(kind string, err error) ([]planChange, string, bool) {
-		refuse(asJSON, report.Reason{Kind: kind, Text: err.Error(), Entry: n})
+		refuse(format, report.Reason{Kind: kind, Text: err.Error(), Entry: n})
 		return nil, "", false
 	}
 	opt, ed, matcher, err := planSearch(e)
@@ -297,7 +291,7 @@ func planOne(n int, e planEntry, cache *docCache, asJSON bool) ([]planChange, st
 	res := search.File(doc, matcher, opt)
 	if why, code := report.Gate(len(res), e.Expect, e.Multi, report.PlanWords); code != 0 {
 		why.Entry = n
-		report.Refused(os.Stderr, []report.File{{Src: doc.Src, Res: res}}, len(res), why, asJSON)
+		report.Refused(os.Stderr, []report.File{{Src: doc.Src, Res: res}}, len(res), why, format)
 		return nil, "", false
 	}
 	changes, err := edit.Plan(doc.Src, res, ed)
@@ -385,13 +379,21 @@ func orderChanges(changes []planChange) error {
 		}
 		return changes[i].End < changes[j].End
 	})
-	end := -1
-	for i, c := range changes {
-		if c.Start <= end {
+	if len(changes) == 0 {
+		return nil
+	}
+	// The reach is the furthest line anything so far rewrites, and holder is
+	// the entry that reaches it -- which is not always the entry before, since
+	// one long change can cover several short ones.
+	reach, holder := changes[0].End, 0
+	for i, c := range changes[1:] {
+		if c.Start <= reach {
 			return fmt.Errorf("entry %d edits %s, which entry %d already rewrites",
-				c.entry, span(c.Change), changes[i-1].entry)
+				c.entry, span(c.Change), changes[holder].entry)
 		}
-		end = max(end, c.End)
+		if c.End > reach {
+			reach, holder = c.End, i+1
+		}
 	}
 	return nil
 }
@@ -413,31 +415,42 @@ type docCache struct {
 	order []string
 	// alias maps a spelling that reached a file already held under another
 	// name to that name, so the second entry to use it costs a map lookup
-	// rather than another stat and another walk of order.
+	// rather than another stat.
 	alias map[string]string
+	// sameSize groups the names held so far by what two spellings of one file
+	// must agree on, so a new spelling is compared against the few files that
+	// could be it rather than against every file the plan has touched.
+	sameSize map[fileID][]string
 }
+
+// fileID is the part of a file's identity a map can be keyed on. It does not
+// decide identity -- os.SameFile does that -- it only says which held files
+// are worth asking about.
+type fileID struct {
+	size int64
+	mod  int64
+}
+
+func idOf(fi os.FileInfo) fileID { return fileID{fi.Size(), fi.ModTime().UnixNano()} }
 
 func newDocCache() *docCache {
 	return &docCache{
-		docs:  map[string]*mdoc.Doc{},
-		info:  map[string]os.FileInfo{},
-		alias: map[string]string{},
+		docs:     map[string]*mdoc.Doc{},
+		info:     map[string]os.FileInfo{},
+		alias:    map[string]string{},
+		sameSize: map[fileID][]string{},
 	}
 }
 
 // get answers with the parsed file and the name the plan is holding it under.
-// Two entries can name one file differently — "docs/x.md" and "./docs/x.md", a
-// symlink, an absolute path — and taking those for two files would plan each
-// against the original and then write the file twice, the second write undoing
-// the first. The answer is the spelling the plan used first, so the changes of
-// every entry that reaches this file are gathered in one place.
+// "docs/x.md", "./docs/x.md", a symlink and an absolute path are one file, and
+// answering each with the spelling the plan used first gathers the changes of
+// every entry that reaches it in one place -- rather than planning each against
+// the original and writing the file twice, the second write undoing the first.
 func (d *docCache) get(path string) (*mdoc.Doc, string, error) {
 	if doc, ok := d.docs[path]; ok {
 		return doc, path, nil
 	}
-	// An alias answers with the name it stands for, never with itself, or the
-	// changes of two spellings would be gathered in two places and the file
-	// written twice.
 	if seen, ok := d.alias[path]; ok {
 		return d.docs[seen], seen, nil
 	}
@@ -445,7 +458,8 @@ func (d *docCache) get(path string) (*mdoc.Doc, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	for _, seen := range d.order {
+	id := idOf(fi)
+	for _, seen := range d.sameSize[id] {
 		if os.SameFile(fi, d.info[seen]) {
 			d.alias[path] = seen
 			return d.docs[seen], seen, nil
@@ -458,5 +472,6 @@ func (d *docCache) get(path string) (*mdoc.Doc, string, error) {
 	doc := mdoc.Parse(path, data)
 	d.docs[path], d.info[path] = doc, fi
 	d.order = append(d.order, path)
+	d.sameSize[id] = append(d.sameSize[id], path)
 	return doc, path, nil
 }

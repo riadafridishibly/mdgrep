@@ -116,20 +116,24 @@ Output
                         the flags under Selection either
       --separator STR   what to print between two results of a file (default
                         "--"); pass "" to leave them out
-      --truncate N      print at most N lines of any one result, then a line
-                        saying how many were held back. json reports the
-                        count as "truncated" instead
+      --truncate N      print at most N lines of any one result, keeping the
+                        matched node, then a line saying how many were held
+                        back. The machine formats report the count as a
+                        number instead: "truncated" in json, the last field
+                        of a compact record
       --color WHEN      auto, always or never (default auto)
       --format WHEN     plain (default), compact or json. compact prints the
                         path once per file and then one tab-separated record
-                        per result — "start[-end] kind text", with newlines
-                        escaped so a record is always one line, path included
-                        — which costs a fraction of the same results as json.
-                        Neither machine format is coloured, and compact leaves
-                        out the breadcrumb and the score; ask for json if you
-                        want them. One record is one node: two hits that touch
-                        are printed as one passage in plain output and kept
-                        apart here
+                        per result — "start[-end] kind text truncated", with
+                        newlines escaped so a record is always one line, path
+                        included — which costs a fraction of the same results
+                        as json. Neither machine format is coloured, and
+                        compact leaves out the breadcrumb and the score; ask
+                        for json if you want them. One record is one node: two
+                        hits that touch are printed as one passage in plain
+                        output and kept apart here. Both machine formats say
+                        why a run was refused in their own shape rather than
+                        in English
       --json            one JSON object per result (same as --format json)
   -c, --count           print only the number of results per file
   -l, --files-with-matches

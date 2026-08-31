@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
+	"github.com/riadafridishibly/mdgrep/internal/render"
 	"github.com/riadafridishibly/mdgrep/internal/search"
 )
 
@@ -89,10 +90,16 @@ func entryPrefix(n int) string {
 const shownMatches = 10
 
 // Refused shows what the edit would have hit, so the next attempt can
-// narrow the search rather than guess at it.
-func Refused(w io.Writer, files []File, total int, why Reason, asJSON bool) {
-	if asJSON {
+// narrow the search rather than guess at it. A refusal is written in the
+// format the caller asked its results in, so a program that can read the run
+// that worked can read the one that did not.
+func Refused(w io.Writer, files []File, total int, why Reason, f render.Format) {
+	switch f {
+	case render.JSON:
 		refusedJSON(w, files, total, why)
+		return
+	case render.Compact:
+		refusedCompact(w, files, total, why)
 		return
 	}
 	fmt.Fprintf(w, "mdgrep: %s%s\n", entryPrefix(why.Entry), why.Text)
@@ -107,6 +114,36 @@ func Refused(w io.Writer, files []File, total int, why Reason, asJSON bool) {
 				strings.TrimSpace(r.Src.Line(res.Start)))
 			n++
 		}
+	}
+}
+
+// refusedCompact says the same thing as tab-separated records, so a caller
+// reading --format compact parses a refusal with the reader it already has:
+//
+//	error <TAB> kind <TAB> entry <TAB> total <TAB> expected <TAB> entries <TAB> path <TAB> message
+//	match <TAB> path <TAB> line <TAB> text
+//	written <TAB> path
+//
+// The fields of the error record are always all there, zero or empty where
+// they do not apply, and the records that follow it are the hits that caused
+// the refusal and the files a failed run left changed.
+func refusedCompact(w io.Writer, files []File, total int, why Reason) {
+	fmt.Fprintf(w, "error\t%s\t%d\t%d\t%d\t%d\t%s\t%s\n",
+		why.Kind, why.Entry, total, why.Expected, why.Entries,
+		render.Escape(why.Path), render.Escape(why.Text))
+	shown := 0
+	for _, r := range files {
+		for _, res := range r.Res {
+			if shown == shownMatches {
+				break
+			}
+			fmt.Fprintf(w, "match\t%s\t%d\t%s\n", render.Escape(r.Src.Path), res.Start+1,
+				render.Escape(validUTF8(strings.TrimSpace(r.Src.Line(res.Start)))))
+			shown++
+		}
+	}
+	for _, path := range why.Written {
+		fmt.Fprintf(w, "written\t%s\n", render.Escape(path))
 	}
 }
 

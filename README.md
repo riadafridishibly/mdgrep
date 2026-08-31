@@ -320,16 +320,16 @@ docs/pruning.md
 ### Machine-readable output
 
 `--format compact` prints the path once per file and then one tab-separated
-record per result — the line span, the kind, and the text with its newlines
-escaped, so a record is always one line and the path is the line with no tab
-in it:
+record per result — the line span, the kind, the text with its newlines
+escaped, and the number of lines `--truncate` held back — so a record is
+always one line and the path is the line with no tab in it:
 
 ```
 $ mdgrep "" pruning.md --format compact
 pruning.md
-1	heading	# Pruning
-3	heading	## Winter Pruning
-5-6	paragraph	Cut back the leader\nbefore the sap rises.
+1	heading	# Pruning	0
+3	heading	## Winter Pruning	0
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	0
 ```
 
 One record is one node. Two hits that touch — neighbouring checkboxes, headings
@@ -350,6 +350,17 @@ object on stderr — `error` (`ambiguous`, `expect`, or `nomatch` for a plan
 entry), `message`, `total`, `expected`, the capped `matches` list, and `entry`
 under `--apply` — so a JSON caller parses the refusal with the reader it
 already has.
+
+A refusal is written in the format the results were asked for, so `compact`
+gets records rather than prose on stderr: an `error` record carrying the kind,
+entry, total, expected count, entries refused, path and message, then a `match`
+record per listed hit and a `written` record per file a failed run left changed.
+
+```
+error	ambiguous	1	2	0	0		2 matches; narrow "match" or set "multi": true
+match	notes.md	3	- [ ] thin the fruit
+match	notes.md	9	- [ ] thin the hedge
+```
 
 ```bash
 mdgrep "rollback" docs --json | jq -r '.path + ":" + (.start|tostring)'
