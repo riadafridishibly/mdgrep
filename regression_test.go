@@ -30,6 +30,18 @@ const (
 	// mixed holds a paragraph that is not inside any list, next to bullets
 	// that are, so a kind filter that leaks is visible in one run.
 	mixed = "# Doc\n\n## Tasks\n\n- [ ] alpha one\n\nSome paragraph.\n\n- apple pie\n"
+
+	// ranked has a long task item before a short one, so a fuzzy search scores
+	// the later line first and hands the two back out of file order.
+	ranked = "# H\n\n- [ ] a x b x c\n- [ ] abc\n"
+
+	// buried puts the match on the last line of a run of paragraphs, so any
+	// flag that widens the region backwards leaves the hit far from its start.
+	buried = "# T\n\npara one\n\npara two\n\nmore stuff\n\nneedle here\n"
+
+	// empty is a heading with nothing under it: its body covers no line at
+	// all, which is the region that has no span to print.
+	empty = "# Top\n\n## Empty\n## Next\n\nbody\n"
 )
 
 // --- A. Data loss and silent wrong writes -----------------------------------
@@ -105,6 +117,28 @@ func TestApplyKindItemDoesNotEditAParagraph(t *testing.T) {
 	}
 	if strings.Contains(stdout, "REWRITTEN") {
 		t.Errorf("the paragraph was planned for rewriting:\n%s", stdout)
+	}
+}
+
+// edit.Apply walks a file once, forwards, so a change behind the one before it
+// is a change it steps over. A ranked search orders its results by score, and
+// a report that claims an edit the file never took is worse than a refusal.
+func TestRankedEditsAllReachTheFile(t *testing.T) {
+	path := doc(t, ranked)
+	stdout, stderr, code := capture(t,
+		"--fuzzy", "abc", path, "--min-score", "0.1", "--multi", "--check")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (%s)", code, stderr)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"- [x] a x b x c", "- [x] abc"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("stdout reported every edit, but the file has no %q:\n%s\n%s",
+				want, got, stdout)
+		}
 	}
 }
 
@@ -204,12 +238,31 @@ func TestMergedResultKeepsTheAncestorTrail(t *testing.T) {
 // normally reached. The optional topic must not swallow the pattern.
 func TestHelpPrintsTheManualDespiteAPattern(t *testing.T) {
 	path := doc(t, widened)
-	stdout, stderr, code := capture(t, "Beta", path, "--help")
-	if code != 0 {
-		t.Fatalf("exit = %d, want 0 (%s)", code, stderr)
+	for _, args := range [][]string{{"Beta", path, "--help"}, {"Beta", "--help"}} {
+		stdout, stderr, code := capture(t, args...)
+		if code != 0 {
+			t.Fatalf("%v: exit = %d, want 0 (%s)", args, code, stderr)
+		}
+		if !strings.Contains(stdout, "usage: mdgrep") {
+			t.Errorf("%v: want the manual:\n%s\n%s", args, stdout, stderr)
+		}
 	}
-	if !strings.Contains(stdout, "usage: mdgrep") {
-		t.Errorf("want the manual:\n%s\n%s", stdout, stderr)
+}
+
+// --truncate is a cap on printed lines, not a licence to print the wrong ones.
+// A flag that widens the region backwards must not spend the whole budget on
+// context and leave out what the caller searched for.
+func TestTruncateKeepsTheMatchedNode(t *testing.T) {
+	path := doc(t, buried)
+	for _, format := range [][]string{nil, {"--format", "compact"}, {"--json"}} {
+		args := append([]string{"needle", path, "-B", "3", "--truncate", "2"}, format...)
+		stdout, stderr, code := capture(t, args...)
+		if code != 0 {
+			t.Fatalf("%v: exit = %d, want 0 (%s)", format, code, stderr)
+		}
+		if !strings.Contains(stdout, "needle here") {
+			t.Errorf("%v: the match was truncated away:\n%s", format, stdout)
+		}
 	}
 }
 
@@ -311,6 +364,44 @@ func TestEmptyFormatIsRejected(t *testing.T) {
 	}
 }
 
+// compact and --json both publish a region as start[-end]. A region that
+// covers no line is spelled End < Start inside, and printing that unchanged
+// gives a range running backwards that no reader of the grammar can take.
+func TestEmptySectionBodyHasNoBackwardsSpan(t *testing.T) {
+	path := doc(t, empty)
+	stdout, stderr, code := capture(t, "--section-body", "--format", "compact", "^## Empty", path)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (%s)", code, stderr)
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(stdout), "\n") {
+		span, _, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		lo, hi, ranged := strings.Cut(span, "-")
+		if !ranged {
+			continue
+		}
+		if start, end := atoi(t, lo), atoi(t, hi); end < start {
+			t.Errorf("span %q runs backwards:\n%s", span, stdout)
+		}
+	}
+
+	stdout, stderr, code = capture(t, "--section-body", "--json", "^## Empty", path)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (%s)", code, stderr)
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(stdout), "\n") {
+		var rec struct{ Start, End int }
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("stdout line is not JSON: %q", line)
+		}
+		if rec.End < rec.Start {
+			t.Errorf("end %d precedes start %d:\n%s", rec.End, rec.Start, stdout)
+		}
+	}
+}
+
 // --- D. Latent and cosmetic ---------------------------------------------------
 
 // A section title is judged by its first character. Reading one byte of a
@@ -386,4 +477,15 @@ func quote(path string) string {
 		panic(err)
 	}
 	return string(b)
+}
+
+// atoi reads a line number a format published, and fails the test rather than
+// the parse: a span that is not a number is a defect of its own.
+func atoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatalf("span holds %q, which is not a line number", s)
+	}
+	return n
 }
