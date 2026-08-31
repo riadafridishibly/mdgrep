@@ -35,14 +35,16 @@ file. Locate with `-l`, re-run with `--section` on the one file.
 ## Output
 
 `--outline` is one indented line per heading and takes paths, not a pattern —
-the cheapest view of a tree. `-N` (no line numbers), `--no-breadcrumb` and
+the cheapest view of a tree. It takes no selection flag either; there is
+nothing for one to widen. `-N` (no line numbers), `--no-breadcrumb` and
 `--separator ''` together are about half the default cost. `--truncate N` caps
 one node, the guard against a hit inside a 400-line fence. `-l` names files,
 `-c` counts, `-m N` caps per file, `-q` answers in the exit status alone.
 
 **Parse with `--format compact`**: the path once per file, then tab-separated
-`start[-end] kind text` with newlines escaped, so a record is one line and a
-path is the line with no tab.
+`start[-end] kind text` with newlines escaped — in the path too — so a record
+is one line and a path is the line with no tab. An insertion is a point rather
+than a span, so `append` and `prepend` record the single line they land on.
 
 ```
 pruning.md

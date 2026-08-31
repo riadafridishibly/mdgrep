@@ -266,7 +266,7 @@ for a single edit.
 | `-n`, `--line-number` | number the printed lines (the default) |
 | `-N`, `--no-line-number` | drop the line-number gutter |
 | `--no-breadcrumb` | hide the heading trail |
-| `--outline` | one indented line per heading, no PATTERN |
+| `--outline` | one indented line per heading, no PATTERN, no widening |
 | `--separator STR` | what goes between two results of a file (default `--`) |
 | `--truncate N` | print at most N lines of any one result |
 | `--color WHEN` | `auto` (default), `always`, `never` |
@@ -290,7 +290,9 @@ itself is the next line printed. `--section-body` keeps the whole trail, because
 there the heading line never appears.
 
 `--outline` answers "what is in these files" rather than "where does this
-appear". It takes paths where a search takes a pattern:
+appear". It takes paths where a search takes a pattern, and it takes none of
+the selection flags: one line per heading is all it has to print, so there is
+nothing for `--section`, `-B`, `--lines` or `--expand` to widen.
 
 ```
 $ mdgrep --outline docs/pruning.md
