@@ -139,6 +139,7 @@ their own shape. Colour is off when stdout is not a terminal, NO_COLOR is set
 or TERM=dumb.
 
 A short flag takes its value attached or apart: -C2 and -C 2 are the same.
+Everything after -- is a PATTERN or a PATH, dashes and all.
 Exit status is 0 when something matched, 1 when nothing did, 2 on error.
 `
 
