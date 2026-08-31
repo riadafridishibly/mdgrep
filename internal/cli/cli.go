@@ -25,7 +25,7 @@ type Config struct {
 	ForceFold  bool
 	Word       bool
 	Invert     bool
-	MinScore   float64
+	MinScore   OptFloat
 	Kinds      string
 	AnchorSty  string
 	Task       bool
@@ -47,7 +47,7 @@ type Config struct {
 	Ext        string
 	Hidden     bool
 	NoIgnore   bool
-	Help       bool
+	Help       OptTopic
 	ShowVer    bool
 
 	Check     bool
@@ -119,6 +119,64 @@ func (o *OptInt) Set(v string) error {
 	return nil
 }
 
+// OptFloat is the same for a score, so --min-score can say it was given at
+// all: a threshold nothing reads is a flag the caller meant to have an effect.
+type OptFloat struct {
+	val float64
+	set bool
+}
+
+func (o *OptFloat) String() string { return strconv.FormatFloat(o.val, 'g', -1, 64) }
+
+// Value is the score a flag was given and whether it was given at all.
+func (o OptFloat) Value() (float64, bool) { return o.val, o.set }
+
+// Or is the score to search with: what was asked for, or def when nothing was.
+func (o OptFloat) Or(def float64) float64 {
+	if !o.set {
+		return def
+	}
+	return o.val
+}
+
+func (o *OptFloat) Set(v string) error {
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fmt.Errorf("not a number: %q", v)
+	}
+	o.val, o.set = f, true
+	return nil
+}
+
+// OptTopic is --help, which stands on its own but also names the part of the
+// manual it wants. IsBoolFlag is what lets both spellings through: bare
+// --help takes no argument, and --help=editing carries one.
+type OptTopic struct {
+	topic string
+	set   bool
+}
+
+func (o *OptTopic) String() string   { return o.topic }
+func (o *OptTopic) IsBoolFlag() bool { return true }
+
+// Asked reports whether help was wanted, and Topic names the part of it, empty
+// when the caller asked for the manual whole.
+func (o OptTopic) Asked() bool   { return o.set }
+func (o OptTopic) Topic() string { return o.topic }
+
+func (o *OptTopic) Set(v string) error {
+	// "true" and "false" are what the flag package synthesises for a bare
+	// --help and for --help=false; neither is the name of a topic.
+	switch v {
+	case "true":
+		o.set = true
+	case "false":
+	default:
+		o.set, o.topic = true, v
+	}
+	return nil
+}
+
 // PatternList collects repeated -e flags, which are alternatives to one
 // another the way they are in grep.
 type PatternList []string
@@ -148,7 +206,7 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 	fs.BoolVar(&c.fuzzy, "fuzzy", false, "")
 	fs.BoolVar(&c.useAnchor, "anchor", false, "")
 	fs.StringVar(&c.AnchorSty, "anchor-style", "", "")
-	fs.Float64Var(&c.MinScore, "min-score", 0.7, "")
+	fs.Var(&c.MinScore, "min-score", "")
 	bind(func(n string) { fs.BoolVar(&c.Word, n, false, "") }, "w", "word-regexp")
 	bind(func(n string) { fs.BoolVar(&c.Invert, n, false, "") }, "v", "invert-match")
 	bind(func(n string) { fs.BoolVar(&c.ForceFold, n, false, "") }, "i", "ignore-case")
@@ -198,7 +256,7 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 	fs.StringVar(&c.Ext, "ext", "md,markdown,mdown,mkd,mdx", "")
 	fs.BoolVar(&c.Hidden, "hidden", false, "")
 	fs.BoolVar(&c.NoIgnore, "no-ignore", false, "")
-	bind(func(n string) { fs.BoolVar(&c.Help, n, false, "") }, "h", "help")
+	bind(func(n string) { fs.Var(&c.Help, n, "") }, "h", "help")
 	bind(func(n string) { fs.BoolVar(&c.ShowVer, n, false, "") }, "V", "version")
 
 	if err := fs.Parse(permute(fs, args)); err != nil {
@@ -213,11 +271,20 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 // the options instead.
 func (c *Config) Matcher() (match.Matcher, error) {
 	mode := match.Regexp
+	_, minScoreGiven := c.MinScore.Value()
 	switch {
 	case c.fuzzy && c.fixed:
 		return nil, errors.New("--fuzzy and --fixed-strings are mutually exclusive")
 	case c.useAnchor && (c.fuzzy || c.fixed || c.Word || c.Invert):
 		return nil, errors.New("--anchor selects a heading by name and takes no other matching flag")
+	// A flag nothing reads is a flag the caller expected to have an effect, so
+	// the run says it will not rather than searching some other way in silence.
+	case count(c.ForceFold, c.ForceCase, c.smart) > 1:
+		return nil, errors.New("-i, -s and -S each say how case is read; pass one")
+	case minScoreGiven && !c.fuzzy:
+		return nil, errors.New("--min-score is the threshold --fuzzy scores against, and does nothing without it")
+	case c.AnchorSty != "" && !c.useAnchor:
+		return nil, errors.New("--anchor-style narrows the conventions --anchor tries, and does nothing without it")
 	case c.fuzzy:
 		mode = match.Fuzzy
 		// A fuzzy pattern is a question about which node fits best, so the
@@ -239,6 +306,46 @@ func (c *Config) Matcher() (match.Matcher, error) {
 	}
 	c.Opt.Anchor = anchor
 	return match.All(), nil
+}
+
+func count(flags ...bool) int {
+	n := 0
+	for _, f := range flags {
+		if f {
+			n++
+		}
+	}
+	return n
+}
+
+// Validate rejects the arguments that name a size no run can have. A count of
+// lines or of nodes is how many to print or how far to climb, so a negative
+// one is a typo -- and left alone it reads as if the flag had been left off,
+// which is the one thing the caller did not ask for.
+func (c *Config) Validate() error {
+	for _, n := range []struct {
+		flag string
+		val  int
+	}{
+		{"--expand", c.Opt.Expand},
+		{"--before", c.Opt.Before},
+		{"--after", c.Opt.After},
+		{"--context", c.Context},
+		{"--lines", c.Opt.Lines},
+		{"--max-count", c.Opt.Max},
+		{"--truncate", c.Truncate},
+	} {
+		if n.val < 0 {
+			return fmt.Errorf("%s %d: a count of lines or nodes cannot be negative", n.flag, n.val)
+		}
+	}
+	if s, given := c.MinScore.Value(); given && (s < 0 || s > 1) {
+		return fmt.Errorf("--min-score %v: a fuzzy score runs from 0 to 1", s)
+	}
+	if c.Checked && c.Unchecked {
+		return errors.New("--checked and --unchecked are opposite filters; --task selects either")
+	}
+	return nil
 }
 
 // Printer is the renderer the output flags describe.
@@ -399,20 +506,21 @@ func parseAnchorStyles(spec string) ([]mdoc.AnchorStyle, error) {
 	return out, nil
 }
 
-// buildMatcher folds the case flags and every -e pattern into one matcher.
+// DefaultMinScore is the fuzzy threshold a run that names none searches with.
+const DefaultMinScore = 0.7
+
 // BuildMatcher turns every pattern into one matcher, alternatives to each
 // other the way repeated -e is in grep.
 //
-// Smart case reads all the patterns together: a single upper-case letter
-// anywhere in them makes the whole search case sensitive.
+// Smart case is the default and needs no flag of its own here, since -i and -s
+// are refused alongside -S. It reads all the patterns together: a single
+// upper-case letter anywhere in them makes the whole search case sensitive.
 func BuildMatcher(c *Config, mode match.Mode, smart bool) (match.Matcher, error) {
-	opt := match.Options{Mode: mode, MinScore: c.MinScore, Word: c.Word}
+	opt := match.Options{Mode: mode, MinScore: c.MinScore.Or(DefaultMinScore), Word: c.Word}
 	switch {
-	case smart:
-		opt.IgnoreCase = match.SmartCase(strings.Join(c.Patterns, " "))
-	case c.ForceFold:
+	case c.ForceFold && !smart:
 		opt.IgnoreCase = true
-	case c.ForceCase:
+	case c.ForceCase && !smart:
 		opt.IgnoreCase = false
 	default:
 		opt.IgnoreCase = match.SmartCase(strings.Join(c.Patterns, " "))

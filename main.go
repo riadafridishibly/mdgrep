@@ -56,9 +56,11 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
 	}
-	if c.Help {
-		topic := ""
-		if fs.NArg() == 1 {
+	if c.Help.Asked() {
+		// --help=editing names its topic outright. Bare --help leaves it to
+		// the one positional still standing, if there is one.
+		topic := c.Help.Topic()
+		if topic == "" && fs.NArg() == 1 {
 			topic = helpTopic(os.Args[1:], fs.Arg(0))
 		}
 		text, err := help.Text(topic)
@@ -78,8 +80,8 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
 	}
-	if c.Truncate < 0 {
-		fmt.Fprintf(os.Stderr, "mdgrep: --truncate %d: a cap on printed lines cannot be negative\n", c.Truncate)
+	if err := c.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
 	}
 	// A plan is a whole run of its own: it names its files, its searches and

@@ -357,7 +357,7 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	if e.Fixed {
 		mode = match.Substring
 	}
-	matcher, err := cli.BuildMatcher(&cli.Config{Patterns: cli.PatternList{*e.Match}, MinScore: 0.7}, mode, false)
+	matcher, err := cli.BuildMatcher(&cli.Config{Patterns: cli.PatternList{*e.Match}}, mode, false)
 	if err != nil {
 		return bad("%v", err)
 	}
