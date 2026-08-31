@@ -108,19 +108,34 @@ Pipelines
       --then            narrow what the search before it selected: everything
                         after this word is another search, and the last one is
                         the one that prints or writes
+      --exec PIPELINE   the same, written as one string: words as a shell
+                        reads them, and a bare "|" between two stages
       --stream          hand one region per result to the next mdgrep rather
                         than printing them; same as --format stream
 
   $ mdgrep "^## Release" --section docs \
       --then -k list --then --todo --check --multi
+  $ mdgrep --exec '"^## Release" --section \
+      | -k list | --todo --check --multi' docs
 
-Each stage of a --then is a whole mdgrep command line of its own, so it takes
+Each stage of a pipeline is a whole mdgrep command line of its own, so it takes
 the Matching, Filters and Selection flags and reads them as this manual says
 it does. Only the first stage names files, so a word on a later one is its
 pattern and a stage that writes none selects by its filters alone; only the
 last stage prints or writes, and it is the one the Output and Editing flags
 belong to. The word itself is read before the flags are, the way a shell reads
 a pipe before the commands around it.
+
+--exec spells the whole pipeline in one string, for a query kept in a variable,
+a config file or a script. It is split into words the way a shell splits a
+line -- single quotes literal throughout, double quotes literal but for a
+backslash before a quote or a backslash, "" a word in its own right, and a
+backslash at the end of a line joining it to the next -- and a bare "|"
+divides one stage from the next. The quoting is mdgrep's own here, which is
+what keeps the pipe character usable in a pattern: "^(alpha|beta)" is one word
+and never a separator, and a quoted "|" is a word too. Only paths may
+stand beside --exec, and they go to the stage that walks them, so one query
+can be pointed at whichever files the caller means.
 
 A pipeline can cross processes instead, which is what --stream is for:
 

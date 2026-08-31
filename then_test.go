@@ -273,3 +273,95 @@ func TestAMessageNamesTheStageItIsAbout(t *testing.T) {
 		t.Errorf("a single stage should not be numbered: exit %d, stderr %q", code, stderr)
 	}
 }
+
+// A pipeline written as one string runs the pipeline it spells, so the two
+// spellings are interchangeable and a query can be kept in a variable.
+func TestExecRunsThePipelineItSpells(t *testing.T) {
+	path := doc(t, pipedDoc)
+
+	spelled, stderr, code := capture(t, "--exec",
+		`"^## Some header" --section `+path+` | -k list | --todo --json`)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	along, _, code := capture(t, "^## Some header", "--section", path,
+		"--then", "-k", "list",
+		"--then", "--todo", "--json")
+	if code != 0 {
+		t.Fatalf("--then exit %d", code)
+	}
+	if spelled != along {
+		t.Errorf("--exec and --then disagree:\n--exec:\n%s\n--then:\n%s", spelled, along)
+	}
+}
+
+// Only paths may stand beside --exec, and they belong to the stage that walks
+// them, so one query can be pointed at whichever files the caller means.
+func TestExecTakesItsPathsBesideIt(t *testing.T) {
+	path := doc(t, pipedDoc)
+
+	out, stderr, code := capture(t, "--exec", `"^### Sub" --section | --todo`, path)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if !strings.Contains(out, "gamma task") || strings.Contains(out, "alpha task") {
+		t.Errorf("out = %q, want the sub-section's box and no others", out)
+	}
+	if _, stderr, code := capture(t, "--exec", `"" --todo`, path, "--json"); code != 2 ||
+		!strings.Contains(stderr, "belongs inside it") {
+		t.Errorf("a flag beside --exec: exit %d, stderr %q", code, stderr)
+	}
+}
+
+// The quoting inside --exec is mdgrep's own, so a pattern is free to hold the
+// character that divides two stages.
+func TestExecKeepsAPipeInAPattern(t *testing.T) {
+	path := doc(t, pipedDoc)
+
+	out, stderr, code := capture(t, "--exec", `"(alpha|delta) task" `+path)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	for _, want := range []string{"alpha task", "delta task"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("out = %q, want %s", out, want)
+		}
+	}
+}
+
+// The last stage of a spelled pipeline writes, the same as the last stage of
+// one written along the line.
+func TestExecEndsInAnEdit(t *testing.T) {
+	path := doc(t, pipedDoc)
+
+	_, stderr, code := capture(t, "--exec",
+		`"^### Sub" --section `+path+` | --todo | --check`)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "- [x] gamma task") {
+		t.Errorf("the edit did not reach the file:\n%s", got)
+	}
+	if !strings.Contains(got, "- [ ] alpha task") {
+		t.Errorf("the edit reached outside the stages' regions:\n%s", got)
+	}
+}
+
+// A stage of a spelled pipeline is held to its place the way one written along
+// the line is, and a message says which stage it is about.
+func TestExecKeepsEveryStageInItsPlace(t *testing.T) {
+	path := doc(t, pipedDoc)
+
+	_, stderr, code := capture(t, "--exec", `"" `+path+` --json | --todo`)
+	if code != 2 || !strings.Contains(stderr, "only the last stage prints") {
+		t.Errorf("exit %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "stage 1 of 2") {
+		t.Errorf("stderr = %q, want the stage named", stderr)
+	}
+}

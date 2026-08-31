@@ -285,6 +285,22 @@ alone; only the last stage prints or writes, and it is the one the output and
 editing flags belong to. A flag given where it would be read and then change
 nothing is refused by name.
 
+`--exec` spells the whole pipeline in one string, for a query kept in a
+variable, a config file or a script:
+
+```bash
+mdgrep --exec '"^## Release" --section | -k list | --todo --check --multi' docs
+```
+
+It is split into words the way a shell splits a line — single quotes literal
+throughout, double quotes literal but for a backslash before a quote or a
+backslash, `""` a word in its own right, and a backslash at the end of a line
+joining it to the next — and a bare `|` divides one stage from the next. The quoting is mdgrep's own here rather than the shell's, which
+is what keeps the pipe character usable in a pattern: `"^(alpha|beta)"` is one
+word and never a separator, and a quoted `'|'` is a word too. Only paths may
+stand beside `--exec`, and they go to the stage that walks them, so one query
+can be pointed at whichever files you mean.
+
 The same pipeline can cross processes instead. `--stream` is what one stage
 hands the next:
 
@@ -323,7 +339,7 @@ of "read stdin", and naming it alongside a file is refused rather than half
 honoured. Markdown arriving on stdin is still read as markdown — the header
 line is what tells the two apart.
 
-`--then` and a pipe of `--stream` describe the same pipeline, one with a
+`--then`, `--exec` and a pipe of `--stream` describe the same pipeline, one with a
 process boundary in it and one without, and they answer alike. `--then` parses
 each file once for the whole run and can say which stage of it narrowed to
 nothing; `--stream` can be saved, replayed, and passed between machines.
@@ -359,6 +375,7 @@ the search and one lost to a typo would come back as "no matches".
 | `--json` | one JSON object per result (same as `--format json`) |
 | `--stream` | hand the regions to the next mdgrep (same as `--format stream`) |
 | `--then` | narrow what the search before it selected; everything after it is another search |
+| `--exec PIPELINE` | the same pipeline written as one string, stages divided by `\|` |
 | `-c`, `--count` | number of results per file |
 | `-l`, `--files-with-matches` | names of matching files only |
 | `-m`, `--max-count N` | stop after N results per file |
@@ -472,7 +489,7 @@ mdgrep --help anchor    # or any flag name
 
 ```
 main.go              a run end to end: parse, walk, the stages of a search
-internal/cli         the flags, and the search, edit and output they describe
+internal/cli         the flags and the stages, and what each combination means
 internal/help        the manual, and the rules for printing one part of it
 internal/walk        the files a search reads: paths, extensions, stdin
 internal/ignore      .gitignore, .ignore, .git/info/exclude and the skip list

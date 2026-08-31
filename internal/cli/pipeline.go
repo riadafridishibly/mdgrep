@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 )
 
 // StageSep divides one stage of a pipeline from the next. It is read before
@@ -11,6 +12,17 @@ import (
 // so it separates wherever it stands rather than being a value some flag
 // could have taken.
 const StageSep = "--then"
+
+// ExecFlag spells a whole pipeline in one string, so a query can be kept in a
+// variable, a config file or a script rather than written out along a command
+// line. The string is words and pipes, and comes to the same stages the line
+// itself would have made.
+const ExecFlag = "--exec"
+
+// ExecSep divides two stages inside ExecFlag's string. The quoting there is
+// mdgrep's own rather than the shell's, which is what lets a pattern hold the
+// pipe character: only a bare word that is nothing but this separates.
+const ExecSep = "|"
 
 // Stages splits a command line into the stages of a pipeline. Each stage is a
 // whole mdgrep command line of its own -- its own pattern, its own filters,
@@ -20,14 +32,41 @@ const StageSep = "--then"
 // A line with no separator in it is a single stage, which is every command
 // mdgrep took before there were stages at all.
 func Stages(args []string) ([][]string, error) {
+	line, rest, given, err := execLine(args)
+	if err != nil {
+		return nil, err
+	}
+	if !given {
+		return checked(split(args, StageSep), StageSep)
+	}
+	out, err := splitExec(line)
+	if err != nil {
+		return nil, err
+	}
+	// Whatever stood beside --exec names the files, and the files belong to
+	// the stage that walks them.
+	out[0] = append(out[0], rest...)
+	return checked(out, ExecSep)
+}
+
+// split cuts a list of words into the stages the separator divides it into.
+// The list always holds at least one stage, empty though it may be.
+func split(args []string, sep string) [][]string {
 	out := [][]string{{}}
 	for _, a := range args {
-		if a == StageSep {
+		if a == sep {
 			out = append(out, []string{})
 			continue
 		}
 		out[len(out)-1] = append(out[len(out)-1], a)
 	}
+	return out
+}
+
+// checked refuses a pipeline with a hole in it, since a separator joins two
+// searches and has to have one on each side. A line holding no separator is
+// one stage and cannot have a hole, however little it says.
+func checked(out [][]string, sep string) ([][]string, error) {
 	if len(out) == 1 {
 		return out, nil
 	}
@@ -37,12 +76,175 @@ func Stages(args []string) ([][]string, error) {
 		}
 		switch i {
 		case 0:
-			return nil, fmt.Errorf("%s narrows a search, so it wants one before it", StageSep)
+			return nil, fmt.Errorf("%s narrows a search, so it wants one before it", sep)
 		case len(out) - 1:
-			return nil, fmt.Errorf("%s hands its nodes to another search, so it wants one after it", StageSep)
+			return nil, fmt.Errorf("%s hands its nodes to another search, so it wants one after it", sep)
 		}
-		return nil, fmt.Errorf("two %s in a row leave the stage between them with nothing in it", StageSep)
+		return nil, fmt.Errorf("two %s in a row leave the stage between them with nothing in it", sep)
 	}
+	return out, nil
+}
+
+// execLine finds --exec on a command line and hands back the pipeline it was
+// given together with whatever stood beside it. Like the stage separator it is
+// read before the flags are, since what it holds is the flags of every stage.
+//
+// Only paths may stand beside it: a flag outside the string is one the string
+// was written to carry, and honouring it on some stage the caller did not
+// name is a guess a search should not make.
+func execLine(args []string) (line string, rest []string, given bool, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == ExecFlag:
+			if i+1 >= len(args) {
+				return "", nil, false, fmt.Errorf("%s wants a pipeline to run", ExecFlag)
+			}
+			i++
+			line = args[i]
+		case strings.HasPrefix(a, ExecFlag+"="):
+			line = strings.TrimPrefix(a, ExecFlag+"=")
+		default:
+			rest = append(rest, a)
+			continue
+		}
+		if given {
+			return "", nil, false, fmt.Errorf("%s spells a whole pipeline, so it is given once", ExecFlag)
+		}
+		given = true
+	}
+	if !given {
+		return "", nil, false, nil
+	}
+	for _, a := range rest {
+		switch {
+		case a == "--":
+			// Everything past a "--" the caller wrote is a path, dashes and
+			// all, which is exactly what may stand beside --exec.
+			return line, rest, true, nil
+		case a == StageSep:
+			return "", nil, false, fmt.Errorf("%s spells a pipeline in one string and %s spells one along the line; use one", ExecFlag, StageSep)
+		case len(a) > 1 && a[0] == '-':
+			return "", nil, false, fmt.Errorf("%s holds the flags of every stage, so %s belongs inside it", ExecFlag, a)
+		}
+	}
+	return line, rest, true, nil
+}
+
+// splitExec reads --exec's argument as a pipeline: words the way a shell reads
+// them, quotes and all, and a bare word that is nothing but "|" between one
+// stage and the next. The quoting is mdgrep's own here rather than the
+// shell's, which is what keeps the pipe character usable in a pattern --
+// "^(alpha|beta)" is one word and never a separator, and a quoted "|" is a
+// word too.
+func splitExec(line string) ([][]string, error) {
+	words, err := execWords(line)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ExecFlag, err)
+	}
+	out := [][]string{{}}
+	for _, w := range words {
+		switch {
+		case w.bare && (w.text == ExecSep || w.text == StageSep):
+			out = append(out, []string{})
+		case w.text == ExecFlag || strings.HasPrefix(w.text, ExecFlag+"="):
+			return nil, fmt.Errorf("%s is read before the flags are, so it cannot stand inside one", ExecFlag)
+		default:
+			out[len(out)-1] = append(out[len(out)-1], w.text)
+		}
+	}
+	return out, nil
+}
+
+// lineBreak is the length of the line break a string opens with, and zero
+// when it opens with anything else.
+func lineBreak(s string) int {
+	switch {
+	case strings.HasPrefix(s, "\r\n"):
+		return 2
+	case strings.HasPrefix(s, "\n"), strings.HasPrefix(s, "\r"):
+		return 1
+	}
+	return 0
+}
+
+// isSpace reports whether a byte divides two words. It is the ASCII
+// whitespace and no more: a space a caller went to the trouble of writing in
+// some other alphabet is one they meant to search for.
+func isSpace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	}
+	return false
+}
+
+// word is one argument read out of --exec's string. Only a word written
+// without any quoting can be the separator, so that a caller who means the
+// pipe character itself has a way to say so.
+type word struct {
+	text string
+	bare bool
+}
+
+// execWords splits a string into words the way a shell would: ASCII
+// whitespace divides them, single quotes are literal throughout, double quotes are
+// literal but for a backslash before a quote or a backslash, and a backslash
+// outside both stands for the character after it. Quoted emptiness is a word,
+// so "" is how a stage asks for the pattern that matches everything.
+func execWords(line string) ([]word, error) {
+	var out []word
+	var sb strings.Builder
+	started, bare := false, true
+	flush := func() {
+		if !started {
+			return
+		}
+		out = append(out, word{text: sb.String(), bare: bare})
+		sb.Reset()
+		started, bare = false, true
+	}
+	for i := 0; i < len(line); i++ {
+		switch c := line[i]; {
+		case isSpace(c):
+			flush()
+		case c == '\'':
+			started, bare = true, false
+			end := strings.IndexByte(line[i+1:], '\'')
+			if end < 0 {
+				return nil, fmt.Errorf("a quote opened at position %d is never closed", i+1)
+			}
+			sb.WriteString(line[i+1 : i+1+end])
+			i += end + 1
+		case c == '"':
+			started, bare = true, false
+			open := i
+			for i++; i < len(line) && line[i] != '"'; i++ {
+				if line[i] == '\\' && i+1 < len(line) && (line[i+1] == '"' || line[i+1] == '\\') {
+					i++
+				}
+				sb.WriteByte(line[i])
+			}
+			if i >= len(line) {
+				return nil, fmt.Errorf("a quote opened at position %d is never closed", open+1)
+			}
+		case c == '\\' && i+1 < len(line):
+			// A backslash before a line break is a continuation, the way it is
+			// in a shell: it joins what stands on either side of it and is
+			// itself nothing at all.
+			if n := lineBreak(line[i+1:]); n > 0 {
+				i += n
+				continue
+			}
+			started, bare = true, false
+			i++
+			sb.WriteByte(line[i])
+		default:
+			started = true
+			sb.WriteByte(c)
+		}
+	}
+	flush()
 	return out, nil
 }
 
