@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/riadafridishibly/mdgrep/internal/cli"
 	"github.com/riadafridishibly/mdgrep/internal/edit"
 	"github.com/riadafridishibly/mdgrep/internal/help"
 	"github.com/riadafridishibly/mdgrep/internal/match"
@@ -85,12 +86,13 @@ var applyKeeps = map[string]bool{
 // files as they were read, and one that cannot be carried out refuses the whole
 // run: a plan is a single instruction, and half of one applied is worse than
 // none of it.
-func runApply(c config, fs *flag.FlagSet, format render.Format) int {
+func runApply(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 	if err := applyFlags(fs); err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
 	}
-	text, err := readText(c.apply.val)
+	path, _ := c.Apply.Value()
+	text, err := cli.ReadText(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: --apply: %v\n", err)
 		return 2
@@ -135,7 +137,7 @@ func runApply(c config, fs *flag.FlagSet, format render.Format) int {
 	// A plan applies whole or not at all, so every file is written beside
 	// itself first and only renamed into place once all of them are there.
 	// A file that cannot be written is then found before any has been.
-	if !c.dryRun {
+	if !c.DryRun {
 		if err := stageAll(cache, planned, asJSON); err != nil {
 			return 2
 		}
@@ -143,13 +145,13 @@ func runApply(c config, fs *flag.FlagSet, format render.Format) int {
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
-	p := newPrinter(out, c, format)
+	p := c.Printer(out, format)
 	for _, path := range cache.order {
 		changes := changesOf(planned[path])
-		if len(changes) == 0 || c.quiet {
+		if len(changes) == 0 || c.Quiet {
 			continue
 		}
-		p.PrintEdits(cache.docs[path].Src, changes, c.dryRun)
+		p.PrintEdits(cache.docs[path].Src, changes, c.DryRun)
 	}
 	out.Flush()
 	return 0
@@ -223,20 +225,8 @@ func wroteSoFar(written []string) string {
 // applyFlags rejects the flags a plan supersedes, rather than accepting them
 // and quietly doing what the entries say instead.
 func applyFlags(fs *flag.FlagSet) error {
-	var extra []string
-	fs.Visit(func(f *flag.Flag) {
-		if applyKeeps[f.Name] {
-			return
-		}
-		dash := "--"
-		if len(f.Name) == 1 {
-			dash = "-"
-		}
-		extra = append(extra, dash+f.Name)
-	})
-	if len(extra) > 0 {
-		return fmt.Errorf("--apply carries its own search and edit in every entry, so there is nothing left for %s to say",
-			strings.Join(extra, ", "))
+	if extra := cli.Given(fs, func(name string) bool { return !applyKeeps[name] }); extra != "" {
+		return fmt.Errorf("--apply carries its own search and edit in every entry, so there is nothing left for %s to say", extra)
 	}
 	if fs.NArg() > 0 {
 		return fmt.Errorf("--apply names its files in the plan, so it takes no PATTERN and no PATH: %s",
@@ -349,7 +339,7 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 		return bad(`op %q edits the matched node, so "section" has nothing to widen; use "replace"`, e.Op)
 	}
 
-	kinds, err := parseKinds(e.Kind)
+	kinds, err := cli.ParseKinds(e.Kind)
 	if err != nil {
 		return bad("%v", err)
 	}
@@ -371,7 +361,7 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	if e.Fixed {
 		mode = match.Substring
 	}
-	matcher, err := buildMatcher(config{patterns: patternList{*e.Match}, minScore: 0.7}, mode, false)
+	matcher, err := cli.BuildMatcher(&cli.Config{Patterns: cli.PatternList{*e.Match}, MinScore: 0.7}, mode, false)
 	if err != nil {
 		return bad("%v", err)
 	}

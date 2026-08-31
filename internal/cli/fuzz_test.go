@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 	"github.com/riadafridishibly/mdgrep/internal/edit"
 )
 
-// editFlags is every flag buildEdit reads as an instruction to change a file,
+// editFlags is every flag Edit reads as an instruction to change a file,
 // in the order the fuzzer's bit mask names them. The four that take text are
 // listed twice, once for each spelling, because saying both is the mistake the
 // pairing has to catch.
@@ -16,23 +16,23 @@ var editFlags = []struct {
 	group  string // flags sharing a group are two spellings of one edit
 	takes  bool   // the edit carries text at all
 	inline bool   // that text is the argument rather than a file to read
-	set    func(c *config, text, path string)
+	set    func(c *Config, text, path string)
 }{
-	{"check", false, false, func(c *config, _, _ string) { c.check = true }},
-	{"uncheck", false, false, func(c *config, _, _ string) { c.uncheck = true }},
-	{"toggle", false, false, func(c *config, _, _ string) { c.toggle = true }},
-	{"delete", false, false, func(c *config, _, _ string) { c.del = true }},
-	{"replace", true, true, func(c *config, t, _ string) { c.replace.Set(t) }},
-	{"replace", true, false, func(c *config, _, p string) { c.replFrom.Set(p) }},
-	{"set-text", true, true, func(c *config, t, _ string) { c.setText.Set(t) }},
-	{"set-text", true, false, func(c *config, _, p string) { c.setFrom.Set(p) }},
-	{"append", true, true, func(c *config, t, _ string) { c.appendTo.Set(t) }},
-	{"append", true, false, func(c *config, _, p string) { c.appFrom.Set(p) }},
-	{"prepend", true, true, func(c *config, t, _ string) { c.prependTo.Set(t) }},
-	{"prepend", true, false, func(c *config, _, p string) { c.preFrom.Set(p) }},
+	{"check", false, false, func(c *Config, _, _ string) { c.Check = true }},
+	{"uncheck", false, false, func(c *Config, _, _ string) { c.Uncheck = true }},
+	{"toggle", false, false, func(c *Config, _, _ string) { c.Toggle = true }},
+	{"delete", false, false, func(c *Config, _, _ string) { c.Del = true }},
+	{"replace", true, true, func(c *Config, t, _ string) { c.Replace.Set(t) }},
+	{"replace", true, false, func(c *Config, _, p string) { c.ReplFrom.Set(p) }},
+	{"set-text", true, true, func(c *Config, t, _ string) { c.SetText.Set(t) }},
+	{"set-text", true, false, func(c *Config, _, p string) { c.SetFrom.Set(p) }},
+	{"append", true, true, func(c *Config, t, _ string) { c.AppendTo.Set(t) }},
+	{"append", true, false, func(c *Config, _, p string) { c.AppFrom.Set(p) }},
+	{"prepend", true, true, func(c *Config, t, _ string) { c.PrependTo.Set(t) }},
+	{"prepend", true, false, func(c *Config, _, p string) { c.PreFrom.Set(p) }},
 }
 
-// FuzzBuildEdit walks the flag combinations a caller can type. buildEdit is the
+// FuzzBuildEdit walks the flag combinations a caller can type. Edit is the
 // gate that turns them into one operation, and the -from spellings doubled the
 // ways two flags can collide, so what matters is that every combination is
 // either refused or resolved to exactly one edit carrying exactly one text —
@@ -55,7 +55,7 @@ func FuzzBuildEdit(f *testing.F) {
 			t.Fatal(err)
 		}
 
-		var c config
+		var c Config
 		var groups []string
 		var clashed bool
 		seen := map[string]bool{}
@@ -80,12 +80,12 @@ func FuzzBuildEdit(f *testing.F) {
 				wantText[fl.group] = body
 			}
 		}
-		c.multi = multi
+		c.Multi = multi
 		if wantExpect {
-			c.expect = optInt{val: expect, set: true}
+			c.Expect = OptInt{val: expect, set: true}
 		}
 
-		e, err := buildEdit(&c)
+		e, err := c.Edit()
 		switch {
 		case clashed && err == nil:
 			t.Fatalf("mask %#x names one edit twice and was accepted", mask)
