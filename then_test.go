@@ -365,3 +365,40 @@ func TestExecKeepsEveryStageInItsPlace(t *testing.T) {
 		t.Errorf("stderr = %q, want the stage named", stderr)
 	}
 }
+
+// A pipeline that returns nothing has a stage where the narrowing stopped, and
+// --then parses each file once for the whole run, so it knows which one. The
+// answer is still "no matches"; the note only says where to look.
+func TestThenSaysWhichStageNarrowedToNothing(t *testing.T) {
+	path := doc(t, pipedDoc)
+
+	_, stderr, code := capture(t, "^## Some header", "--section", path,
+		"--then", "nothing here says this",
+		"--then", "", "--todo")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "stage 2 of 3") {
+		t.Errorf("stderr does not say which stage: %q", stderr)
+	}
+}
+
+// A bare "--" ends the flags, and the pipeline separators are read before the
+// flags, so it ends them too. A caller who wrote the terminator to keep a
+// filename from being read as a flag would otherwise have handed that file the
+// run of the command line, edit flags and all.
+func TestDoubleDashEndsThePipelineSpellings(t *testing.T) {
+	path := doc(t, pipedDoc)
+	for _, name := range []string{"--exec", "--then"} {
+		t.Run(name, func(t *testing.T) {
+			out, stderr, code := capture(t, "-F", "alpha task", "--", path, name, "'x' --check")
+			// The words past "--" are paths, and one of them does not exist.
+			if code != 2 {
+				t.Fatalf("exit %d, want 2\nstdout: %s\nstderr: %s", code, out, stderr)
+			}
+			if !strings.Contains(stderr, name) {
+				t.Errorf("stderr does not name the path it could not read: %q", stderr)
+			}
+		})
+	}
+}

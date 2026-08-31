@@ -314,7 +314,6 @@ type jsonResult struct {
 // what it says. The next stage reads the file for the rest.
 func (p *Printer) printStream(results []search.Result) {
 	for _, r := range results {
-		p.wroteAny = true
 		stream.WriteRegion(p.W, r.Path, r.Start, r.End)
 	}
 }

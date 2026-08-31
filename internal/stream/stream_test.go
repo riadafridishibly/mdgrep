@@ -108,6 +108,50 @@ func TestRegionSurvivesTheRoundTrip(t *testing.T) {
 	}
 }
 
+// A record is one line and a line is one record. Anything past the record on
+// its line is either a second region the read would drop or a typo the read
+// would honour, and each leaves the next stage searching less than it was
+// handed -- the one thing a malformed stream must not be able to do quietly.
+func TestParseRefusesMoreThanTheRecordOnALine(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"trailing words", `{"path":"a.md","start":3,"end":3} not json at all`},
+		{"a second record", `{"path":"a.md","start":3,"end":3}{"path":"a.md","start":5,"end":5}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok, err := Parse([]byte("{\"mdgrep\":1}\n" + tt.line + "\n"))
+			if !ok {
+				t.Fatal("a header opens a stream however its records read")
+			}
+			if err == nil {
+				t.Errorf("Parse(%q) = no error, want the line refused", tt.line)
+			}
+		})
+	}
+}
+
+// Two spellings of one path are one file. A stream that names it twice would
+// otherwise be parsed twice and, at the end of a pipeline, written twice --
+// the second write carrying none of the first one's changes.
+func TestParseNamesAFileOnce(t *testing.T) {
+	s, ok, err := Parse([]byte("{\"mdgrep\":1}\n" +
+		`{"path":"docs/a.md","start":3,"end":3}` + "\n" +
+		`{"path":"./docs/a.md","start":5,"end":5}` + "\n"))
+	if err != nil || !ok {
+		t.Fatalf("Parse = %v, %v", ok, err)
+	}
+	if !equal(s.Paths, []string{"docs/a.md"}) {
+		t.Fatalf("Paths = %v, want the one file", s.Paths)
+	}
+	want := []search.Region{{Start: 2, End: 2}, {Start: 4, End: 4}}
+	if got := s.For("docs/a.md"); !equalRegions(got, want) {
+		t.Errorf("regions = %v, want %v", got, want)
+	}
+}
+
 func equal(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

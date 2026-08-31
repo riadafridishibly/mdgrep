@@ -65,3 +65,20 @@ func TestScopeGatesTheHitAndNotTheWidening(t *testing.T) {
 		t.Fatalf("range = %d..%d, want the Install section 2..7", res[0].Start, res[0].End)
 	}
 }
+
+// A filter that climbs -- --todo reporting the task a sub-bullet hangs under --
+// climbs to a node the region may not hold. Containment is about the node a
+// stage selects, not about the block that happened to match inside it, so the
+// climb is checked too: otherwise a later stage prints, and an edit rewrites,
+// lines no stage ever selected.
+func TestScopeAdmitsOnlyTheNodeAStageSelects(t *testing.T) {
+	// Line 7 is a plain sub-bullet of the checked item on line 6.
+	res := findTasks(t, "runbook", Options{Scope: []Region{{Start: 7, End: 7}}, Task: TaskAny})
+	if len(res) != 0 {
+		t.Fatalf("the task filter climbed out of the region: %+v", res)
+	}
+	// The region holding the whole item still selects it.
+	if res := findTasks(t, "runbook", Options{Scope: []Region{{Start: 6, End: 7}}, Task: TaskAny}); len(res) != 1 {
+		t.Fatalf("got %d results inside the whole item, want 1: %+v", len(res), res)
+	}
+}

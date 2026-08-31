@@ -725,6 +725,17 @@ func StreamFlags(fs *flag.FlagSet) error {
 	return nil
 }
 
+// StreamWalks refuses the flags that say which files a run reads when the
+// files were not walked for but named by a stream. They belong to the stage
+// that did the walking, and a walk described on a stage handed a stream is one
+// nothing carries out -- the same flag a later --then stage refuses by name.
+func StreamWalks(fs *flag.FlagSet) error {
+	if named := Given(fs, func(name string) bool { return pipeReads[name] }); named != "" {
+		return fmt.Errorf("a stream names its own files, so %s belongs on the stage that walked them", named)
+	}
+	return nil
+}
+
 // Given lists the flags a run was given that match want, spelled the way the
 // caller would have typed them, and empty when none were: the shape a mode
 // that refuses the flags it cannot honour needs to name them.

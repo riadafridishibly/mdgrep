@@ -278,3 +278,57 @@ func TestExecTakesItsValueAttached(t *testing.T) {
 		t.Errorf("Stages = %q, want two stages", got)
 	}
 }
+
+// A bare "--" ends the flags, and the separators are read before the flags, so
+// it ends them too: a word past it is a path however it is spelled. Without
+// that a caller who wrote "mdgrep -F "$pat" -- "$@"" to keep a filename from
+// being read as a flag would have handed the file the run of the command line.
+func TestDoubleDashEndsTheSeparatorScan(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"then", []string{"-F", "p", "--", "--then", "docs"}},
+		{"exec", []string{"-F", "p", "--", "--exec", "'a' | -k item"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Stages(tt.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || !slices.Equal(got[0], tt.args) {
+				t.Errorf("Stages = %q, want the line whole", got)
+			}
+		})
+	}
+}
+
+// --exec spells the whole pipeline, so a hole in it is refused whatever else
+// stands on the line: the paths beside the flag name files and never stand in
+// for the search a stage is missing.
+func TestExecWantsASearchOnEachSideEvenWithAPath(t *testing.T) {
+	if _, err := Stages([]string{"--exec", "| -k item", "docs"}); err == nil ||
+		!strings.Contains(err.Error(), "wants one before it") {
+		t.Errorf("err = %v, want a complaint about the missing first stage", err)
+	}
+}
+
+// Quoting is what makes a word literal inside --exec, and it makes every word
+// literal: a quoted "--exec" is a pattern like any other rather than the flag
+// the string cannot carry.
+func TestQuotingHidesTheExecFlagInsideExec(t *testing.T) {
+	got, err := Stages([]string{"--exec", `-F '--exec' | -k item`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"-F", "--exec"}, {"-k", "item"}}
+	if len(got) != len(want) {
+		t.Fatalf("Stages = %q, want %q", got, want)
+	}
+	for i := range want {
+		if !slices.Equal(got[i], want[i]) {
+			t.Errorf("stage %d = %q, want %q", i+1, got[i], want[i])
+		}
+	}
+}

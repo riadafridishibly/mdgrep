@@ -16,8 +16,8 @@ every second-level heading. PATH is files or directories, default cwd, stdin
 when piped. Exit **0** matched, **1** no match, **2** error.
 
 `mdgrep --help TOPIC` (`matching`, `filters`, `selection`, `editing`, `plans`,
-`output`, or any long flag name) costs 130–540 tokens against ~1600 for the
-manual — fetch one rather than guess a flag.
+`pipelines`, `output`, or any long flag name) costs 130–540 tokens against
+~1600 for the manual — fetch one rather than guess a flag.
 
 ## Search
 
@@ -40,6 +40,7 @@ together cut a quarter to a half, most on short nodes. `--truncate N` caps one
 node, the guard against a hit inside a 400-line fence. `-l` names files, `-c`
 counts, `-m N` caps per file, `-q` answers in the exit status alone.
 
+To feed another mdgrep, chain stages (below) rather than reparsing text.
 **Parse with `--format compact`** — one record per line under the path, where
 `--json` costs 2–3× as much for the breadcrumb, the score and an edit's `old`:
 
@@ -55,6 +56,38 @@ is the node's, the text is what `--truncate` kept, and `before` and `after` are
 the lines it held back on each side: the text starts at start plus `before`. An
 edit records `start[-end] op applied|dry|unchanged new`, an insertion the one
 line it lands on.
+
+## Pipelines
+
+Narrow in stages instead of two searches with text-munging between them. Each
+stage is a whole mdgrep line and searches only inside the nodes the stage
+before it selected. Only the first names files, only the last prints or
+writes; a flag on the wrong stage is refused by name.
+
+```bash
+mdgrep "^## Release" --section docs --then -k list --then --todo --check --multi
+mdgrep --exec '"^## Release" --section | -k list | --todo' docs   # the same, one string
+```
+
+`--exec` splits like a shell — quotes literal, a bare `|` separates — so
+`"^(alpha|beta)"` is one word. `--then` and `--exec` are read before the flags,
+and a bare `--` ends them, so a file named `--then` stays a path.
+
+Across processes, `--stream` (`--format stream`) hands on regions rather than
+text: a header line, then `{"path":...,"start":...,"end":...}` per result,
+1-based inclusive. The next stage reopens the file, so line numbers,
+breadcrumbs and paths survive — which is why an edit can end a pipeline.
+
+```bash
+mdgrep "" docs --todo --stream > open-boxes.jsonl   # save, replay, pass around
+mdgrep "" --section < open-boxes.jsonl
+```
+
+Narrowing is by containment: a node the region holds whole is a candidate, one
+straddling it is not, and a climb (`--todo`, `--expand`) leaving the region
+selects nothing. A stage reading a stream takes no PATH and none of `--ext`,
+`--hidden`, `--no-ignore`; a stream cannot be made from stdin. `--then` says on
+stderr which stage narrowed to nothing, exit 1 either way.
 
 ## Edit
 
@@ -97,6 +130,7 @@ mdgrep "" . --todo --format compact             # every open box, parseable
 mdgrep --outline docs -N                        # what is in this tree
 mdgrep "sign the tarball" --check --expect 1    # tick exactly one task
 mdgrep "^## Changelog" --section-body --replace-from CHANGELOG.md --dry-run
+mdgrep "^## Release" --section docs --then --todo --check --multi  # tick the boxes in one section
 ```
 
 **`mdgrep --help <flag>` for:** `--anchor` / `--anchor-style` (a heading from a

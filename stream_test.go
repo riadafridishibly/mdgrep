@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -233,5 +234,54 @@ func TestBrokenStreamRefusesTheRun(t *testing.T) {
 				t.Errorf("stderr = %q, want %q", stderr, tt.says)
 			}
 		})
+	}
+}
+
+// A stream names a file for the next stage to read, and stdin is not one: the
+// records would carry "<stdin>", which the stage after it cannot open. The run
+// says so where the mistake was made rather than a stage later.
+func TestStreamRefusesStdin(t *testing.T) {
+	onStdin(t, pipedDoc)
+	out, stderr, code := capture(t, "", "-k", "item", "--stream")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2\nstdout: %s\nstderr: %s", code, out, stderr)
+	}
+	if strings.Contains(out, "<stdin>") {
+		t.Errorf("a path no stage can open went out on the wire:\n%s", out)
+	}
+}
+
+// The flags that say which files a run reads belong to the stage that walked
+// them. A stage handed a stream reads the files the stream names, so a walk
+// described here is one nothing carries out -- refused by name, the way the
+// same flag is refused on a later --then stage.
+func TestStreamStageRefusesTheWalkFlags(t *testing.T) {
+	path := doc(t, pipedDoc)
+	first, _, code := capture(t, "^## Some header", "--section", path, "--stream")
+	if code != 0 {
+		t.Fatalf("stage 1 exit %d", code)
+	}
+	_, stderr, code := runStage(t, first, "", "--todo", "--ext", "txt")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "--ext") {
+		t.Errorf("stderr does not name the flag: %q", stderr)
+	}
+}
+
+// A stream can be saved and replayed, so it can name a file that has since
+// moved. That is a hole in the search rather than an answer about it: "no
+// matches" over files that were never read is a result a caller would act on.
+func TestStreamOverAMissingFileIsAnError(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone.md")
+	saved := "{\"mdgrep\":1}\n" + `{"path":"` + gone + `","start":1,"end":1}` + "\n"
+
+	_, stderr, code := runStage(t, saved, "")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "gone.md") {
+		t.Errorf("stderr does not name the file: %q", stderr)
 	}
 }

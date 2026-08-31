@@ -43,20 +43,34 @@ func Stages(args []string) ([][]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The pipeline is checked as it was written, before the files are added
+	// to it: a path standing beside --exec names a file, and a stage missing
+	// its search is not one a path can fill in for.
+	if out, err = checked(out, ExecSep); err != nil {
+		return nil, err
+	}
 	// Whatever stood beside --exec names the files, and the files belong to
 	// the stage that walks them.
 	out[0] = append(out[0], rest...)
-	return checked(out, ExecSep)
+	return out, nil
 }
 
 // split cuts a list of words into the stages the separator divides it into.
 // The list always holds at least one stage, empty though it may be.
+//
+// A bare "--" ends the separators the way it ends the flags: a caller who
+// wrote it to keep a filename from being read as a flag meant to keep it from
+// being read as a pipeline too.
 func split(args []string, sep string) [][]string {
 	out := [][]string{{}}
+	paths := false
 	for _, a := range args {
-		if a == sep {
+		if a == sep && !paths {
 			out = append(out, []string{})
 			continue
+		}
+		if a == "--" {
+			paths = true
 		}
 		out[len(out)-1] = append(out[len(out)-1], a)
 	}
@@ -95,6 +109,12 @@ func checked(out [][]string, sep string) ([][]string, error) {
 func execLine(args []string) (line string, rest []string, given bool, err error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			// Everything past a "--" the caller wrote is a path, dashes and
+			// all, so the flag is not looked for out there.
+			rest = append(rest, args[i:]...)
+			break
+		}
 		switch {
 		case a == ExecFlag:
 			if i+1 >= len(args) {
@@ -147,7 +167,7 @@ func splitExec(line string) ([][]string, error) {
 		switch {
 		case w.bare && (w.text == ExecSep || w.text == StageSep):
 			out = append(out, []string{})
-		case w.text == ExecFlag || strings.HasPrefix(w.text, ExecFlag+"="):
+		case w.bare && (w.text == ExecFlag || strings.HasPrefix(w.text, ExecFlag+"=")):
 			return nil, fmt.Errorf("%s is read before the flags are, so it cannot stand inside one", ExecFlag)
 		default:
 			out[len(out)-1] = append(out[len(out)-1], w.text)
@@ -255,16 +275,20 @@ var pipeReads = map[string]bool{
 	"ext": true, "hidden": true, "no-ignore": true,
 }
 
-// pipePrints names the flags that describe the printed page, and the shapes
-// that stand a tally or a file name where a result would have gone. Only the
-// last stage prints, so anywhere else each of these would be read, understood,
-// and then change nothing.
-var pipePrints = map[string]bool{
+// pipeFormats names the flags that choose the shape of the printed page.
+var pipeFormats = map[string]bool{
 	"format": true, "json": true, "stream": true, "outline": true,
-	"color": true, "truncate": true, "separator": true, "no-breadcrumb": true,
-	"n": true, "line-number": true, "N": true, "no-line-number": true,
-	"c": true, "count": true, "l": true, "files-with-matches": true,
-	"q": true, "quiet": true,
+}
+
+// pipePrints reports whether a flag describes the printed page rather than the
+// search: the format itself, and everything a stream already refuses -- the
+// decoration, and the shapes that stand a tally or a file name where a result
+// would have gone. Only the last stage prints, so anywhere else each of these
+// would be read, understood, and then change nothing. The two lists are one
+// list so that a new output flag cannot be honoured on the wrong stage by
+// being added to only one of them.
+func pipePrints(name string) bool {
+	return pipeFormats[name] || streamIgnores[name]
 }
 
 // pipeWhole names the flags that answer a question about the command rather
@@ -289,12 +313,13 @@ func StageFlags(fs *flag.FlagSet, i, n int) error {
 		if named := Given(fs, func(name string) bool { return pipeReads[name] }); named != "" {
 			return fmt.Errorf("a pipeline reads its files once, so %s belongs on the first stage", named)
 		}
+
 	}
 	if i < n-1 {
 		if named := Given(fs, func(name string) bool { return streamEdits[name] }); named != "" {
 			return fmt.Errorf("a stage hands its nodes to the next one, so %s belongs on the last stage", named)
 		}
-		if named := Given(fs, func(name string) bool { return pipePrints[name] }); named != "" {
+		if named := Given(fs, pipePrints); named != "" {
 			return fmt.Errorf("only the last stage prints, so %s belongs there", named)
 		}
 	}

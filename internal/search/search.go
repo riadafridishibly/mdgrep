@@ -100,6 +100,14 @@ func File(doc *mdoc.Doc, m match.Matcher, opt Options) []Result {
 		if !ok {
 			continue
 		}
+		// The node a stage selects is the node it hands on, and an edit at the
+		// end of a pipeline rewrites. So containment is asked of the lift as
+		// well as of the block that matched: --todo climbing to the task a
+		// sub-bullet hangs under, or --expand climbing the tree, must not
+		// reach past the region the stage was given.
+		if !inScope(sel, opt.Scope) {
+			continue
+		}
 		start, end := sel.Start, sel.End
 		start, end = withSiblings(sel, start, end, opt.Before, opt.After)
 		switch {

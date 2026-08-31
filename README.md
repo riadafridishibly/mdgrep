@@ -277,7 +277,8 @@ command line of its own, so it takes the matching, filter and selection flags
 and reads them exactly as it would on its own — which is the point of spelling
 a stage as a command line rather than inventing a query syntax for one. The
 word is read before the flags are, the way a shell reads `|` before the
-commands around it.
+commands around it — and a bare `--` ends them the way it ends the flags, so a
+file named `--then` or `--exec` stays a path.
 
 Each stage does one job. Only the first names the files, so a word on a later
 stage is its pattern and a stage that writes none selects by its filters
@@ -329,20 +330,30 @@ the line's own, a breadcrumb is still the whole trail, and the last stage of a
 pipeline holds real paths — which is why an edit can stand at the end of one.
 
 Narrowing goes by containment: a node the region holds whole is a candidate, a
-node straddling it is not. Widening is the other direction and still works,
-so `--section` on a scoped heading prints the section it names.
+node straddling it is not. It is the node a stage selects that has to fit, not
+just the block that matched inside it, so a climb counts as well as a match:
+`--todo` reporting the task a sub-bullet hangs under, or `--expand` climbing
+the tree, selects nothing where the climb would leave the region. Widening is
+the other direction and still works, so `--section` on a scoped heading prints
+the section it names.
 
-A stream names its own files, so a stage reading one takes no `PATH`. A `PATH`
-means stdin is not read at all, the way grep reads one, so a stage that names
-a file searches that file rather than the stream; `-` is the explicit spelling
-of "read stdin", and naming it alongside a file is refused rather than half
-honoured. Markdown arriving on stdin is still read as markdown — the header
-line is what tells the two apart.
+A stream names its own files, so a stage reading one takes no `PATH`, and none
+of `--ext`, `--hidden` or `--no-ignore` either: those describe a walk, and the
+stage that walked is the one before. A `PATH` means stdin is not read at all,
+the way grep reads one, so a stage that names a file searches that file rather
+than the stream; `-` is the explicit spelling of "read stdin", and naming it
+alongside a file is refused rather than half honoured. Markdown arriving on
+stdin is still read as markdown — the header line is what tells the two apart.
+
+The other direction is refused too: a stream names the files the next stage
+opens, and stdin is not one of them, so `--stream` over markdown on stdin is an
+error rather than a stream of regions in a file nothing can find.
 
 `--then`, `--exec` and a pipe of `--stream` describe the same pipeline, one with a
 process boundary in it and one without, and they answer alike. `--then` parses
 each file once for the whole run and can say which stage of it narrowed to
-nothing; `--stream` can be saved, replayed, and passed between machines.
+nothing — `stage 2 of 3 narrowed to nothing`, on stderr, with the exit status
+still 1; `--stream` can be saved, replayed, and passed between machines.
 
 A stream is a stage in the middle, so it takes no edit, and none of `-c`,
 `-l`, `-q`, `--truncate`, `--color` or the line-number and breadcrumb flags:
@@ -358,7 +369,10 @@ mdgrep "" --section < open-boxes.jsonl
 A search that matched nothing still writes its header, so an empty stream says
 the search ran; an empty pipe says there was none. A malformed record refuses
 the run rather than being skipped, since the regions are the whole subject of
-the search and one lost to a typo would come back as "no matches".
+the search and one lost to a typo would come back as "no matches"; a record is
+the whole of its line, so anything after one on its line is malformed too. A
+file the stream names but nothing can open is an error rather than "no
+matches", for the same reason an unreadable directory is.
 
 ### Output
 

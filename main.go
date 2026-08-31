@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/riadafridishibly/mdgrep/internal/cli"
 	"github.com/riadafridishibly/mdgrep/internal/edit"
@@ -73,7 +74,7 @@ func staged(i, n int, err error) error {
 	return fmt.Errorf("stage %d of %d: %w", i+1, n, err)
 }
 
-func run() int {
+func run() (code int) {
 	lines, err := cli.Stages(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
@@ -226,11 +227,16 @@ func run() int {
 	// A directory that could not be read is a hole in the search, and the run
 	// says so however well the rest of it went: "no matches" over a tree only
 	// half looked at is an answer the caller would act on and should not.
-	done := func(code int) int {
-		if len(unread) > 0 {
+	// A file that could not be read is the same hole, and a stream names its
+	// files rather than walking for them: one saved and replayed after a
+	// rename names a file nothing can open, and that is an error rather than
+	// an answer about the search.
+	var unreadable atomic.Bool
+	done := func(answer int) int {
+		if len(unread) > 0 || unreadable.Load() {
 			return 2
 		}
-		return code
+		return answer
 	}
 	// A pipe carrying a stream names its own files, so it stands in for the
 	// walk rather than being parsed as a document: the regions say which lines
@@ -255,6 +261,14 @@ func run() int {
 				fmt.Fprintln(os.Stderr, "mdgrep: a stream names its own files, so it takes no PATH")
 				return 2
 			}
+			// The stage that walked the tree is the one the walk flags belong
+			// to, and it was another process. Refusing them by name here is
+			// what keeps the two spellings of a pipeline answering alike: the
+			// same flag on a later --then stage is refused too.
+			if err := cli.StreamWalks(first.fs); err != nil {
+				fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", staged(0, len(stages), err), help.Hint)
+				return 2
+			}
 			scope, files, useStdin, stdinData = sc, sc.Paths, false, nil
 		}
 	}
@@ -262,9 +276,24 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "mdgrep: an edit needs files to write to, not stdin")
 		return 2
 	}
+	// A stream names a file for the next stage to read, and stdin is not one:
+	// the records would carry "<stdin>", which nothing downstream can open. The
+	// run says so where the mistake was made rather than a stage later.
+	if format == render.Stream && useStdin {
+		fmt.Fprintln(os.Stderr, "mdgrep: a stream names the files the next stage reads, so it cannot be made from stdin")
+		return 2
+	}
 
 	out := bufio.NewWriter(os.Stdout)
-	defer out.Flush()
+	// Output that could not be written is not output. A run whose last write
+	// failed has printed less than it found, so it says so rather than
+	// handing back the exit status of the search it did not finish reporting.
+	defer func() {
+		if err := out.Flush(); err != nil && code != 2 {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+			code = 2
+		}
+	}()
 	p := last.c.Printer(out, format)
 	p.Begin()
 
@@ -285,9 +314,12 @@ func run() int {
 		}
 	}
 
+	// reached[i] is whether stage i selected anything in any file, which is
+	// what lets a run of several stages say where the narrowing stopped.
+	reached := make([]atomic.Bool, len(stages))
 	if useStdin {
 		doc := mdoc.Parse("<stdin>", stdinData)
-		emit(doc.Src, pipeline(doc, stages, nil))
+		emit(doc.Src, pipeline(doc, stages, nil, reached))
 	}
 
 	results := make([]report.File, len(files))
@@ -300,13 +332,14 @@ func run() int {
 				data, err := os.ReadFile(files[i])
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+					unreadable.Store(true)
 					continue
 				}
 				doc := mdoc.Parse(files[i], data)
 				// The scope a stream handed in is the one thing that differs
 				// per file, since it is the earlier stage's answer about that
 				// file and no other.
-				results[i] = report.File{Src: doc.Src, Res: pipeline(doc, stages, scope.For(files[i]))}
+				results[i] = report.File{Src: doc.Src, Res: pipeline(doc, stages, scope.For(files[i]), reached)}
 			}
 		})
 	}
@@ -332,6 +365,9 @@ func run() int {
 		}
 	}
 	if !found {
+		if len(stages) > 1 && !last.c.Quiet {
+			fmt.Fprintf(os.Stderr, "mdgrep: %s\n", narrowed(stages, reached))
+		}
 		return done(1)
 	}
 	return done(0)
@@ -341,20 +377,38 @@ func run() int {
 // only inside the regions the stage before it selected, and the last stage's
 // results are the run's. A stage that selects nothing ends the file there,
 // since a later stage has nothing left to look inside.
-func pipeline(doc *mdoc.Doc, stages []*stage, scope []search.Region) []search.Result {
-	for _, st := range stages[:len(stages)-1] {
+func pipeline(doc *mdoc.Doc, stages []*stage, scope []search.Region, reached []atomic.Bool) []search.Result {
+	for i, st := range stages[:len(stages)-1] {
 		opt := st.c.Opt
 		opt.Scope = scope
 		res := search.File(doc, st.m, opt)
 		if len(res) == 0 {
 			return nil
 		}
+		reached[i].Store(true)
 		scope = regions(res)
 	}
 	last := stages[len(stages)-1]
 	opt := last.c.Opt
 	opt.Scope = scope
-	return search.File(doc, last.m, opt)
+	out := search.File(doc, last.m, opt)
+	if len(out) > 0 {
+		reached[len(stages)-1].Store(true)
+	}
+	return out
+}
+
+// narrowed says where a pipeline that ended with nothing ran out: the first
+// stage that selected nothing in any file. The answer is still "no matches" --
+// this only says which of several searches to look at, which is what one
+// process holding every stage knows and a pipe of streams cannot.
+func narrowed(stages []*stage, reached []atomic.Bool) string {
+	for i := range stages {
+		if !reached[i].Load() {
+			return fmt.Sprintf("stage %d of %d narrowed to nothing", i+1, len(stages))
+		}
+	}
+	return "no matches"
 }
 
 // regions is what one stage hands the next: the span of each result, which is

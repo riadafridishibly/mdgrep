@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/riadafridishibly/mdgrep/internal/search"
@@ -54,7 +55,7 @@ func (s *Scope) For(path string) []search.Region {
 	if s == nil {
 		return nil
 	}
-	return s.regions[path]
+	return s.regions[filepath.Clean(path)]
 }
 
 // WriteHeader opens a stream on w.
@@ -98,10 +99,16 @@ func Parse(data []byte) (*Scope, bool, error) {
 		if err != nil {
 			return nil, true, fmt.Errorf("stream line %d: %v", n, err)
 		}
-		if _, seen := s.regions[r.Path]; !seen {
+		// Two spellings of one path are one file, keyed the way the walk keys
+		// what it found. A file read twice is parsed twice and, at the end of
+		// a pipeline, written twice -- and the second write would carry none
+		// of the first one's changes. The list keeps the spelling the stream
+		// used, as the walk keeps the caller's.
+		key := filepath.Clean(r.Path)
+		if _, seen := s.regions[key]; !seen {
 			s.Paths = append(s.Paths, r.Path)
 		}
-		s.regions[r.Path] = append(s.regions[r.Path], search.Region{Start: r.Start - 1, End: r.End - 1})
+		s.regions[key] = append(s.regions[key], search.Region{Start: r.Start - 1, End: r.End - 1})
 	}
 	if err := sc.Err(); err != nil {
 		return nil, true, err
@@ -131,6 +138,12 @@ func readRegion(line string) (wireRegion, error) {
 	var r wireRegion
 	if err := dec.Decode(&r); err != nil {
 		return r, err
+	}
+	// A record is the whole of its line. What follows one is either a second
+	// region the read would drop or a typo it would honour, and each leaves
+	// the next stage searching less than it was handed.
+	if _, err := dec.Token(); err != io.EOF {
+		return r, fmt.Errorf("a record is the whole of its line")
 	}
 	switch {
 	case r.Path == "":

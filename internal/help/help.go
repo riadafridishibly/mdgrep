@@ -149,14 +149,20 @@ stage reading it opens each file again and searches only inside those lines,
 so a line number is still the line's own, a breadcrumb is still the whole
 trail, and the last stage of a pipeline holds real paths and can edit them.
 Narrowing goes by containment: a node lying inside a region is a candidate and
-a node straddling one is not, though --section and --expand may still widen a
-candidate back out past it. A stream names its own files, so a stage reading
-one takes no PATH: a PATH means stdin goes unread, the way grep reads one, and
-"-" is the explicit spelling of "read stdin". Markdown on stdin is still read
-as markdown, since the header is what tells the two apart. A stream is a stage
-in the middle, so it takes no edit and none of the flags that decorate a
-printed page. The two spellings describe the same pipeline, one with a process
-boundary in it and one without, and they answer alike.
+a node straddling one is not. It is the node the stage selects that has to
+fit, so a climb counts as well as a match -- --todo reporting the task a
+sub-bullet hangs under, or --expand climbing the tree, selects nothing where
+the climb would leave the region. --section widens the other way and may still
+reach back out past it. A stream names its own files, so a stage reading one
+takes no PATH, and no --ext, --hidden or --no-ignore either: a PATH means
+stdin goes unread, the way grep reads one, and "-" is the explicit spelling of
+"read stdin". Markdown on stdin is still read as markdown, since the header is
+what tells the two apart; a stream cannot be made from stdin, having no file
+to name the stage after it. A stream is a stage in the middle, so it takes no
+edit and none of the flags that decorate a printed page. The two spellings
+describe the same pipeline, one with a process boundary in it and one without,
+and they answer alike -- and --then, holding every stage in one process, says
+which of them narrowed to nothing.
 
 Output
   -n, --line-number     number the printed lines (the default)
