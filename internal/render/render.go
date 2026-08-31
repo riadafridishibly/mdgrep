@@ -75,10 +75,10 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	}
 	switch p.Format {
 	case JSON:
-		p.printJSON(src, results)
+		p.printJSON(src, results, m)
 		return
 	case Compact:
-		p.printCompact(src, results)
+		p.printCompact(src, results, m)
 		return
 	case Outline:
 		p.printOutline(src, results)
@@ -104,7 +104,7 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
 		}
 		shown = r.Breadcrumb
-		first, last, before, after := p.window(r)
+		first, last, before, after := p.window(src, r, m)
 		if before > 0 {
 			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(before)))
 		}
@@ -127,19 +127,42 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	}
 }
 
-// window applies Truncate to one result. The cap is a budget of lines, and the
-// matched line is what the caller asked for, so the window keeps the hit and
-// spends what is left on the context above it before the context below.
-func (p *Printer) window(r search.Result) (first, last, before, after int) {
+// window applies Truncate to one result. The cap is a budget of lines and the
+// matched line is the one thing the caller asked for, so the window starts at
+// the top of the region and slides down only as far as it must to hold that
+// line, spending what is left of the budget below it. before is therefore
+// what was skipped to reach the hit, not context kept above it.
+func (p *Printer) window(src *mdoc.Source, r search.Result, m match.Matcher) (first, last, before, after int) {
 	if p.Truncate <= 0 || r.End-r.Start+1 <= p.Truncate {
 		return r.Start, r.End, 0, 0
 	}
+	hit := hitLine(src, r, m)
 	first = r.Start
-	if r.HitStart > first+p.Truncate-1 {
-		first = min(r.HitStart, r.End-p.Truncate+1)
+	if hit > first+p.Truncate-1 {
+		first = min(hit, r.End-p.Truncate+1)
 	}
 	last = min(first+p.Truncate-1, r.End)
 	return first, last, first - r.Start, r.End - last
+}
+
+// hitLine is the line the window has to keep. A block is scored whole -- the
+// matcher reads the raw text of the fence or the table, not its lines -- so
+// HitStart is where the block begins and says nothing about where in it the
+// match is. Truncating from HitStart cuts a long block down to its opening
+// lines and drops the very line that was searched for. Spans finds that line
+// the same way the highlight does; a matcher with nothing to point at leaves
+// the block's first line, which is what an anchor search selects a heading by
+// and what a fuzzy score spread over several lines comes to anyway.
+func hitLine(src *mdoc.Source, r search.Result, m match.Matcher) int {
+	if m == nil {
+		return r.HitStart
+	}
+	for n := r.HitStart; n <= r.HitEnd && n < src.NumLines(); n++ {
+		if len(m.Spans(src.Line(n))) > 0 {
+			return n
+		}
+	}
+	return r.HitStart
 }
 
 func elision(cut int) string {
@@ -188,11 +211,11 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 // indistinguishable from. They are two fields and not their sum because the
 // span is the node's and the text is the window: a reader adds before to
 // start to find the line the text begins on, which one total cannot say.
-func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
+func (p *Printer) printCompact(src *mdoc.Source, results []search.Result, m match.Matcher) {
 	p.wroteAny = true
 	fmt.Fprintln(p.W, Escape(src.Path))
 	for _, r := range results {
-		first, last, before, after := p.window(r)
+		first, last, before, after := p.window(src, r, m)
 		text := strings.Join(src.Lines(first, last), "\n")
 		fmt.Fprintf(p.W, "%s\t%s\t%s\t%d\t%d\n",
 			lineSpan(r.Start, r.End), r.Kind, Escape(text), before, after)
@@ -265,7 +288,7 @@ type jsonResult struct {
 	TruncatedAfter  int `json:"truncated_after,omitempty"`
 }
 
-func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
+func (p *Printer) printJSON(src *mdoc.Source, results []search.Result, m match.Matcher) {
 	enc := json.NewEncoder(p.W)
 	for _, r := range results {
 		p.wroteAny = true
@@ -274,7 +297,7 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 		if r.Task {
 			checked = &r.Checked
 		}
-		first, last, before, after := p.window(r)
+		first, last, before, after := p.window(src, r, m)
 		enc.Encode(jsonResult{
 			Path:            r.Path,
 			Kind:            string(r.Kind),

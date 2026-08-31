@@ -479,6 +479,39 @@ func TestTruncateCapsOneResult(t *testing.T) {
 	}
 }
 
+// A block is scored whole, so a match deep inside a long fence used to be cut
+// away by the very flag meant to make it readable: the window began at the
+// fence and printed its opening lines. It slides down to hold the hit.
+func TestTruncateKeepsTheMatchedLine(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "five", path, "--truncate", "3")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "five") {
+		t.Errorf("truncated away the line that matched:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "\u2026 +4 lines") {
+		t.Errorf("want the count of what was skipped to reach it:\n%s", stdout)
+	}
+
+	// The machine formats report the same two counts, and start plus before
+	// is the line the text begins on.
+	stdout, _, code = capture(t, "five", path, "--truncate", "3", "--format", "compact")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	fields := strings.Split(strings.Split(stdout, "\n")[1], "\t")
+	if len(fields) != 5 || fields[3] != "4" || fields[4] != "0" {
+		t.Errorf("fields = %q, want 5 ending in 4, 0:\n%s", fields, stdout)
+	}
+	// The window fills its budget rather than starting flush at the hit, so
+	// the text runs from start+before -- "four" -- and holds the match.
+	if !strings.HasPrefix(fields[2], "four") || !strings.Contains(fields[2], "five") {
+		t.Errorf("text = %q, want it to run from line 11 and hold the match", fields[2])
+	}
+}
+
 func TestTruncateSaysOneLineOnce(t *testing.T) {
 	path := doc(t, long)
 	stdout, _, code := capture(t, "one", path, "--truncate", "6")
