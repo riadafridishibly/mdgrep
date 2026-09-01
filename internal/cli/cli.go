@@ -33,8 +33,14 @@ type Config struct {
 	Unchecked  bool
 	Opt        search.Options
 	Context    int
+	Nums       bool
 	NoNums     bool
+	Crumb      bool
 	NoCrumb    bool
+	Heading    bool
+	NoHeading  bool
+	WithName   bool
+	NoName     bool
 	Separator  OptString
 	Truncate   int
 	Outline    bool
@@ -242,9 +248,16 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 	fs.IntVar(&c.Opt.Lines, "lines", 0, "")
 	bind(func(n string) { fs.IntVar(&c.Opt.Max, n, 0, "") }, "m", "max-count")
 	bind(func(n string) { fs.BoolVar(&c.NoNums, n, false, "") }, "N", "no-line-number")
-	// Numbering is already on; -n exists so a grep habit does not error out.
-	bind(func(n string) { fs.Bool(n, false, "") }, "n", "line-number")
+	// Numbering is already on, so -n exists first so that a grep habit does
+	// not error out -- but it is still an answer, and --no-decorate is only a
+	// default for the questions nobody answered, so -n keeps the gutter there.
+	bind(func(n string) { fs.BoolVar(&c.Nums, n, false, "") }, "n", "line-number")
+	fs.BoolVar(&c.Crumb, "breadcrumb", false, "")
 	fs.BoolVar(&c.NoCrumb, "no-breadcrumb", false, "")
+	fs.BoolVar(&c.Heading, "heading", false, "")
+	fs.BoolVar(&c.NoHeading, "no-heading", false, "")
+	bind(func(n string) { fs.BoolVar(&c.WithName, n, false, "") }, "H", "with-filename")
+	fs.BoolVar(&c.NoName, "no-filename", false, "")
 	fs.BoolVar(&c.Outline, "outline", false, "")
 	fs.Var(&c.Separator, "separator", "")
 	fs.IntVar(&c.Truncate, "truncate", 0, "")
@@ -359,20 +372,59 @@ func (c *Config) Validate() error {
 	if c.Checked && c.Unchecked {
 		return errors.New("--checked and --unchecked are opposite filters; --task selects either")
 	}
+	if c.Crumb && c.NoHeading {
+		return errors.New("a breadcrumb stands above a file's results, which is what --heading is for; --no-heading leaves nowhere to put one")
+	}
 	return nil
 }
 
-// Printer is the renderer the output flags describe.
-func (c *Config) Printer(w *bufio.Writer, format render.Format) *render.Printer {
+// Page is what a run knows about its own output before it writes any: where
+// the output is going, and how many files could have answered. grep and rg
+// settle three defaults from exactly these two facts, and mdgrep settles the
+// same three the same way.
+type Page struct {
+	// TTY is whether stdout is a terminal, which decides both whether the
+	// file name goes above a file's results or in front of every line of
+	// them, and whether the lines are numbered at all.
+	TTY bool
+	// ManyFiles is whether more than one file could answer, which decides
+	// whether the name of the one that did is worth printing.
+	ManyFiles bool
+}
+
+// Printer is the renderer the output flags describe. pg supplies the defaults
+// for the three questions the flags may leave open; a flag that was spelled
+// out always wins over one of them.
+func (c *Config) Printer(w *bufio.Writer, format render.Format, pg Page) *render.Printer {
+	heading := pick(c.Heading || c.Crumb, c.NoHeading, pg.TTY)
 	return &render.Printer{
-		W:           w,
-		Color:       useColor(c.Color),
-		LineNumbers: !c.NoNums,
-		Breadcrumb:  !c.NoCrumb,
+		W:     w,
+		Color: useColor(c.Color),
+		// A breadcrumb is the one part of the page that only a heading has
+		// room for, so asking for one asks for the mode; --no-heading beside
+		// it is refused rather than silently answered.
+		LineNumbers: pick(c.Nums, c.NoNums, pg.TTY),
+		Filename:    pick(c.WithName, c.NoName, pg.ManyFiles),
+		Heading:     heading,
+		Breadcrumb:  c.Crumb && !c.NoCrumb,
 		Format:      format,
 		Separator:   separator(c.Separator),
 		Truncate:    c.Truncate,
 	}
+}
+
+// pick reads a pair of opposite flags over a default. Neither given leaves the
+// default standing; both given is read as the negative, since a caller who
+// asked for a thing and then asked against it is most safely taken at the
+// narrower word -- and it is what "-n -N" has always meant here.
+func pick(yes, no, byDefault bool) bool {
+	switch {
+	case no:
+		return false
+	case yes:
+		return true
+	}
+	return byDefault
 }
 
 // Edit reads the editing flags as one operation, and rejects the
@@ -665,11 +717,14 @@ func (c *Config) TaskFilter() search.TaskFilter {
 	return search.TaskIgnore
 }
 
-// separator reads --separator, where leaving the flag out is the default rule
-// and passing an empty string is the deliberate choice to have none.
+// separator reads --separator. Nothing is the default: two results of a file
+// are two nodes of the same document, and a page of them reads as the
+// document does. grep prints its "--" only where a context flag has put lines
+// between the hits that were never next to each other, which is the case
+// --separator is there to spell out.
 func separator(o OptString) string {
 	if !o.set {
-		return "--"
+		return ""
 	}
 	return o.val
 }
@@ -697,7 +752,10 @@ func OutlineFlags(fs *flag.FlagSet) error {
 // where a result would have gone. A stream is a list of regions, so each of
 // these would be read, understood, and then change nothing the next stage sees.
 var streamIgnores = map[string]bool{
-	"truncate": true, "no-breadcrumb": true, "separator": true, "color": true,
+	"truncate": true, "breadcrumb": true, "no-breadcrumb": true,
+	"heading": true, "no-heading": true, "no-filename": true,
+	"H": true, "with-filename": true,
+	"separator": true, "color": true,
 	"n": true, "line-number": true, "N": true, "no-line-number": true,
 	"c": true, "count": true, "l": true, "files-with-matches": true,
 	"q": true, "quiet": true,
@@ -841,6 +899,13 @@ func useColor(when string) bool {
 	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return false
 	}
+	return IsTTY()
+}
+
+// IsTTY reports whether the output is going to a terminal, which is what
+// stands behind every default that differs between a person reading a page
+// and a program reading a stream.
+func IsTTY() bool {
 	stat, err := os.Stdout.Stat()
 	return err == nil && stat.Mode()&os.ModeCharDevice != 0
 }

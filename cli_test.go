@@ -395,14 +395,14 @@ const long = "# Orchard\n\n## Winter Pruning\n\nCut the leader.\n\n```bash\none\
 // heading search, so the trail stops at the parent instead.
 func TestHeadingTrailStopsAtTheParent(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "^## Winter", path)
+	stdout, _, code := capture(t, "^## Winter", path, "--breadcrumb")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
 	if strings.Contains(stdout, "Orchard › Winter Pruning") {
 		t.Errorf("trail repeats the heading below it:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "  Orchard\n") {
+	if !strings.Contains(stdout, "Orchard\n") {
 		t.Errorf("want the parent trail:\n%s", stdout)
 	}
 }
@@ -412,7 +412,7 @@ func TestHeadingTrailStopsAtTheParent(t *testing.T) {
 // section's own name appears.
 func TestSectionBodyKeepsTheWholeTrail(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "^## Winter", path, "--section-body")
+	stdout, _, code := capture(t, "^## Winter", path, "--section-body", "--breadcrumb")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -426,7 +426,7 @@ func TestSectionBodyKeepsTheWholeTrail(t *testing.T) {
 // only context.
 func TestOtherKindsKeepTheWholeTrail(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "thin the fruit", path)
+	stdout, _, code := capture(t, "thin the fruit", path, "--breadcrumb")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -442,9 +442,9 @@ func TestSeparatorIsWhatTheCallerSays(t *testing.T) {
 		wants string
 		omits string
 	}{
-		{name: "default", wants: "  --\n"},
-		{name: "left out", args: []string{"--separator", ""}, omits: "  --\n"},
-		{name: "chosen", args: []string{"--separator", "~~"}, wants: "  ~~\n", omits: "  --\n"},
+		{name: "default", omits: "--\n"},
+		{name: "asked for", args: []string{"--separator", "--"}, wants: "--\n"},
+		{name: "chosen", args: []string{"--separator", "~~"}, wants: "~~\n", omits: "--\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -467,7 +467,7 @@ func TestSeparatorIsWhatTheCallerSays(t *testing.T) {
 // fenced block printing the whole block.
 func TestTruncateCapsOneResult(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "one", path, "--truncate", "3")
+	stdout, _, code := capture(t, "one", path, "--truncate", "3", "--heading")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -484,7 +484,7 @@ func TestTruncateCapsOneResult(t *testing.T) {
 // fence and printed its opening lines. It slides down to hold the hit.
 func TestTruncateKeepsTheMatchedLine(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "five", path, "--truncate", "3")
+	stdout, _, code := capture(t, "five", path, "--truncate", "3", "--heading")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -514,7 +514,7 @@ func TestTruncateKeepsTheMatchedLine(t *testing.T) {
 
 func TestTruncateSaysOneLineOnce(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "one", path, "--truncate", "6")
+	stdout, _, code := capture(t, "one", path, "--truncate", "6", "--heading")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -580,6 +580,180 @@ func TestTruncateStaysParseable(t *testing.T) {
 
 // An edit reports what it wrote, and a cap on that report would hide part of
 // the change from the caller who asked for it.
+// Two results that touch are run together so the page reads as one passage.
+// Under --truncate that was the wrong trade: the cap was spent on the first
+// node of the merged region and every later match fell off the page rather
+// than being shortened, so a search for five task items printed one line and
+// a count. The cap belongs to a node, so --truncate keeps them apart.
+func TestTruncateCapsEachTouchingResultOnItsOwn(t *testing.T) {
+	path := doc(t, "# Orchard\n\n- [ ] thin the fruit\n      before the drop\n- [ ] order the oil\n      before the frost\n- [ ] stake the leader\n      before the wind\n")
+	stdout, _, code := capture(t, "", path, "--todo", "--truncate", "1", "--heading")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	for _, want := range []string{"thin the fruit", "order the oil", "stake the leader"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("dropped the result holding %q:\n%s", want, stdout)
+		}
+	}
+	for _, unwanted := range []string{"before the drop", "before the frost", "before the wind"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Errorf("printed past the cap of one line (%q):\n%s", unwanted, stdout)
+		}
+	}
+	if n := strings.Count(stdout, "… +1 line"); n != 3 {
+		t.Errorf("held-back counts = %d, want one per result:\n%s", n, stdout)
+	}
+}
+
+// Without --truncate the merge stands: a person reading three touching
+// bullets wants the passage, not three blocks with a separator between them.
+func TestTouchingResultsStillRunTogetherWithoutTruncate(t *testing.T) {
+	path := doc(t, "# Orchard\n\n- [ ] thin the fruit\n- [ ] order the oil\n- [ ] stake the leader\n")
+	stdout, _, code := capture(t, "", path, "--todo")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(stdout, "  --\n") {
+		t.Errorf("split a passage the page used to run together:\n%s", stdout)
+	}
+}
+
+// Where the output is going decides the shape, the way it does for grep and
+// rg: a terminal gets the file name above a file's results and numbered
+// lines, and a pipe gets neither unless it asks.
+func TestPipedOutputIsBareByDefault(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "thin the fruit", path)
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if stdout != "- [ ] thin the fruit\n" {
+		t.Errorf("stdout = %q, want the markdown alone", stdout)
+	}
+}
+
+// A file named outright answers for itself, so its name is not worth
+// printing; a directory could have answered from more than one file, so it
+// is. -H and --no-filename each override the rule they are the answer to.
+func TestFilenameFollowsHowManyFilesCouldAnswer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.md")
+	if err := os.WriteFile(path, []byte(long), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name  string
+		args  []string
+		named bool
+	}{
+		{name: "one file", args: []string{path}, named: false},
+		{name: "a directory", args: []string{dir}, named: true},
+		{name: "forced on", args: []string{path, "-H"}, named: true},
+		{name: "forced off", args: []string{dir, "--no-filename"}, named: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, _, code := capture(t, append([]string{"thin the fruit"}, tt.args...)...)
+			if code != 0 {
+				t.Fatalf("exit = %d", code)
+			}
+			if got := strings.Contains(stdout, "a.md"); got != tt.named {
+				t.Errorf("named = %v, want %v:\n%s", got, tt.named, stdout)
+			}
+		})
+	}
+}
+
+// --heading puts the name above a file's results; without it the name rides
+// every line, which is what makes the output greppable in turn.
+func TestHeadingChoosesWhereTheNameGoes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte(long), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, code := capture(t, "thin the fruit", dir, "--heading", "-n")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "a.md\n17:- [ ] thin the fruit\n") {
+		t.Errorf("want the name above and the number in front:\n%s", stdout)
+	}
+
+	stdout, _, code = capture(t, "thin the fruit", dir, "--no-heading", "-n")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.HasSuffix(stdout, "a.md:17:- [ ] thin the fruit\n") {
+		t.Errorf("want path:line:text on the line itself:\n%s", stdout)
+	}
+}
+
+// Every line mdgrep prints belongs to a node that matched or to the region a
+// widening flag grew it to, and neither is context in grep's sense -- so
+// every line takes the colon and the output stays one shape to read.
+func TestEveryPrintedLineTakesTheColon(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "^## Winter", path, "--section", "-n")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
+		if n := strings.IndexByte(line, ':'); n < 1 {
+			t.Errorf("line %q carries no number", line)
+		}
+	}
+	if strings.Contains(stdout, "\u2502") {
+		t.Errorf("want no gutter bar:\n%s", stdout)
+	}
+}
+
+// A breadcrumb has no counterpart in grep, so it is off until asked for, and
+// there is nowhere to put one where the name rides every line.
+func TestBreadcrumbIsOptInAndWantsAHeading(t *testing.T) {
+	path := doc(t, long)
+	stdout, _, code := capture(t, "thin the fruit", path)
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(stdout, "›") {
+		t.Errorf("printed a trail nobody asked for:\n%s", stdout)
+	}
+
+	stdout, _, code = capture(t, "thin the fruit", path, "--breadcrumb")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "Orchard › Summer Pruning") {
+		t.Errorf("want the trail that was asked for:\n%s", stdout)
+	}
+
+	_, stderr, code := capture(t, "thin the fruit", path, "--breadcrumb", "--no-heading")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "--no-heading") {
+		t.Errorf("want the contradiction named:\n%s", stderr)
+	}
+}
+
+// A stream is a list of regions, so a flag about how a page is decorated
+// would be read and then change nothing the next stage sees.
+func TestPageFlagsAreRefusedOnAStream(t *testing.T) {
+	for _, flag := range []string{"--heading", "--no-heading", "-H", "--no-filename", "--breadcrumb"} {
+		t.Run(flag, func(t *testing.T) {
+			path := doc(t, long)
+			_, stderr, code := capture(t, "^## ", path, flag, "--stream")
+			if code != 2 {
+				t.Fatalf("exit = %d, want 2", code)
+			}
+			if !strings.Contains(stderr, flag) {
+				t.Errorf("want the flag named:\n%s", stderr)
+			}
+		})
+	}
+}
+
 func TestTruncateIsRefusedWithAnEdit(t *testing.T) {
 	path := doc(t, sample)
 	_, stderr, code := capture(t, "verify checksum", path, "--check", "--truncate", "2")
@@ -715,9 +889,24 @@ func TestPlainOutputStillReadsAsOnePassage(t *testing.T) {
 }
 
 func TestCountTalliesNodesRatherThanPassages(t *testing.T) {
+	// One file named outright answers for itself, so the tally stands alone,
+	// the way grep writes one.
 	stdout, _, _ := capture(t, "", doc(t, adjacent), "--todo", "-c")
-	if !strings.HasSuffix(strings.TrimSpace(stdout), ":2") {
+	if strings.TrimSpace(stdout) != "2" {
 		t.Errorf("count = %q, want 2 items", strings.TrimSpace(stdout))
+	}
+}
+
+// A directory could have answered from more than one file, so the tally says
+// which one it came from.
+func TestCountNamesTheFileWhenMoreThanOneCouldAnswer(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte(adjacent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, _ := capture(t, "", dir, "--todo", "-c")
+	if !strings.HasSuffix(strings.TrimSpace(stdout), ":2") {
+		t.Errorf("count = %q, want the file named beside it", strings.TrimSpace(stdout))
 	}
 }
 

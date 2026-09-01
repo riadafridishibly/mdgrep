@@ -14,13 +14,13 @@ func TestThenNarrowsThroughEveryStage(t *testing.T) {
 
 	out, stderr, code := capture(t, "^## Some header", "--section", path,
 		"--then", "", "-k", "list",
-		"--then", "", "--todo")
+		"--then", "", "--todo", "-n", "-H")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	// The line numbers are the file's own, and the box outside the section the
 	// first stage chose never comes into it.
-	for _, want := range []string{"alpha task", "gamma task", " 8 │", "13 │", path} {
+	for _, want := range []string{"alpha task", "gamma task", ":8:", ":13:", path} {
 		if !strings.Contains(out, want) {
 			t.Errorf("out = %q, want %s", out, want)
 		}

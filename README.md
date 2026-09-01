@@ -7,12 +7,12 @@ quotes and tables — so `mdgrep` gives you the whole node the hit landed in.
 
 ```
 $ mdgrep "brew install" notes.md
-notes.md
-  Deployment › Prerequisites
-  13 │   - On macOS run `brew install foo`
+13:  - On macOS run `brew install foo`
 ```
 
-Matched characters are highlighted, and the heading trail says where you are.
+Matched characters are highlighted. Lines are written the way `grep` and `rg`
+write them — `path:line:text` — and `--breadcrumb` adds the heading trail that
+says where you are.
 
 ## Install
 
@@ -378,11 +378,16 @@ matches", for the same reason an unreadable directory is.
 
 | Flag | Meaning |
 | --- | --- |
-| `-n`, `--line-number` | number the printed lines (the default) |
-| `-N`, `--no-line-number` | drop the line-number gutter |
-| `--no-breadcrumb` | hide the heading trail |
+| `-n`, `--line-number` | number the printed lines |
+| `-N`, `--no-line-number` | do not |
+| `-H`, `--with-filename` | print the file a result came from |
+| `--no-filename` | do not |
+| `--heading` | that name above a file's results, not in front of every line |
+| `--no-heading` | the other way: `path:line:text` on every line |
+| `--breadcrumb` | print the heading trail above each result |
+| `--no-breadcrumb` | do not (the default) |
 | `--outline` | one indented line per heading, no PATTERN, no widening |
-| `--separator STR` | what goes between two results of a file (default `--`) |
+| `--separator STR` | what goes between two results of a file; nothing by default |
 | `--truncate N` | print at most N lines of any one result |
 | `--color WHEN` | `auto` (default), `always`, `never` |
 | `--format WHEN` | `plain` (default), `compact`, `json` or `stream` |
@@ -403,6 +408,48 @@ matches", for the same reason an unreadable directory is.
 Colour turns itself off when stdout is not a terminal, or under `NO_COLOR` or
 `TERM=dumb`.
 
+#### How a line is written
+
+`path:line:text`, each part there only when it has something to say — the shape
+`grep` and `rg` write. Three of those decisions have defaults, taken from where
+the output is going and how much of the tree was searched, and each yields to
+the flag that answers it.
+
+| Question | Default | Flag |
+| --- | --- | --- |
+| Print the file name? | when more than one file could have answered | `-H` / `--no-filename` |
+| Above the results, or in front of each line? | above, when stdout is a terminal | `--heading` / `--no-heading` |
+| Number the lines? | when stdout is a terminal | `-n` / `-N` |
+
+"More than one file could have answered" is a question about what was asked
+for, not about what matched: a directory counts as more than one file however
+few markdown documents it holds, so `mdgrep x docs/` names `docs/a.md` even
+when `a.md` is all there is. A single file named outright, or markdown on
+stdin, answers for itself and is not named. `-c` names the file on the same
+terms.
+
+So a terminal gets a heading and numbers, and a pipe gets the markdown alone
+until it asks for more:
+
+```
+$ mdgrep "brew install" docs            # terminal
+docs/notes.md
+13:  - On macOS run `brew install foo`
+
+$ mdgrep "brew install" docs | cat      # pipe
+docs/notes.md:  - On macOS run `brew install foo`
+```
+
+`grep` marks a context line with `-` where a matching line takes `:`. mdgrep
+prints nodes: every line it prints belongs to a node that matched, or to the
+region a selection flag widened that node to, and neither is context in
+`grep`'s sense — so every line takes `:` and the output keeps one shape to
+read. Narrow with a filter or another stage rather than by reading the marker.
+
+The heading trail has no counterpart in `grep`, so it is off until
+`--breadcrumb` asks for it. Having nowhere to stand but above a file's
+results, it is refused beside `--no-heading`.
+
 The trail above a heading stops at that heading's parent, since the heading
 itself is the next line printed. `--section-body` keeps the whole trail, because
 there the heading line never appears.
@@ -413,27 +460,39 @@ the selection flags: one line per heading is all it has to print, so there is
 nothing for `--section`, `-B`, `--lines` or `--expand` to widen.
 
 ```
-$ mdgrep --outline docs/pruning.md
-docs/pruning.md
-   1 │ # Pruning
-   5 │   ## Winter Pruning
-  16 │   ## Summer Pruning
-  27 │   ## Central Leader
+$ mdgrep --outline docs/pruning.md -n
+1:# Pruning
+5:  ## Winter Pruning
+16:  ## Summer Pruning
+27:  ## Central Leader
 ```
 
-`--separator ''` drops the `--` between results, and `--truncate N` caps how
-much of one node is printed — a hit inside a 400-line fenced block otherwise
+Nothing goes between two results of a file: they are two nodes of one
+document, and a page of them reads the way the document does. `--separator --`
+spells grep's marker, which grep itself prints only where a context flag has
+put lines between hits that were never next to each other.
+
+`--truncate N` caps how much of one node is printed — a hit inside a 400-line fenced block otherwise
 prints all 400 lines:
 
 ```
 $ mdgrep "orchard survey" docs --truncate 3
 docs/pruning.md
-  Pruning › Winter Pruning
-  12 │ ```bash
-  13 │ orchard survey --block 04
-  14 │ orchard survey --block 05
-  … +38 lines
+12:```bash
+13:orchard survey --block 04
+14:orchard survey --block 05
+… +38 lines
 ```
+
+Two results that touch are printed as one passage, so that a page reads the
+way the file does — but not under `--truncate`, where the cap would be spent
+on the first of them and the rest would drop off the page rather than be
+shortened. Under `--truncate` each node is capped on its own.
+
+The `… +N lines` note is prose rather than a line of the file, so it belongs
+to the same heading mode a person reads. Where every line carries its path and
+number, `--format compact` and `--format json` carry the two counts as
+numbers.
 
 ### Machine-readable output
 

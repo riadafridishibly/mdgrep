@@ -191,18 +191,18 @@ func TestOutlinePrintsOnlyHeadings(t *testing.T) {
 // be printed at their own depth.
 func TestOutlineIndentsByTheLevelOfTheHeadingItPrints(t *testing.T) {
 	path := doc(t, levels)
-	stdout, stderr, code := capture(t, "--outline", path)
+	stdout, stderr, code := capture(t, "--outline", path, "-n")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
 	seen := 0
 	for line := range strings.SplitSeq(stdout, "\n") {
-		bar := strings.Index(line, "│")
-		if bar < 0 {
+		// The prefix is "NN:", then two spaces per level below the first.
+		colon := strings.IndexByte(line, ':')
+		if colon < 0 {
 			continue // the path line
 		}
-		// The gutter is "  NN │ ", then two spaces per level below the first.
-		body := strings.TrimPrefix(line[bar+len("│"):], " ")
+		body := line[colon+1:]
 		text := strings.TrimLeft(body, " ")
 		if !strings.HasPrefix(text, "#") {
 			continue
@@ -226,7 +226,7 @@ func TestOutlineIndentsByTheLevelOfTheHeadingItPrints(t *testing.T) {
 // there the last element is a real ancestor and has to stay.
 func TestMergedResultKeepsTheAncestorTrail(t *testing.T) {
 	path := doc(t, interrupted)
-	stdout, stderr, code := capture(t, "--fuzzy", "--min-score", "0.1", "ndl", path)
+	stdout, stderr, code := capture(t, "--fuzzy", "--min-score", "0.1", "ndl", path, "--breadcrumb")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -413,7 +413,7 @@ func TestEmptySectionBodyHasNoBackwardsSpan(t *testing.T) {
 // every adjacent hit costs more than the trail is worth.
 func TestTrailIsNotRepeatedForAdjacentResults(t *testing.T) {
 	path := doc(t, paired)
-	stdout, stderr, code := capture(t, "alpha", path)
+	stdout, stderr, code := capture(t, "alpha", path, "--breadcrumb")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}

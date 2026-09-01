@@ -146,7 +146,9 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
-	p := c.Printer(out, format)
+	// A plan names its own files and reaches across several of them, so the
+	// name of the one a change landed in is always worth printing.
+	p := c.Printer(out, format, cli.Page{TTY: cli.IsTTY(), ManyFiles: true})
 	for _, path := range cache.order {
 		changes := changesOf(planned[path])
 		if len(changes) == 0 || c.Quiet {

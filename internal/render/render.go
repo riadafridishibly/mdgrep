@@ -54,8 +54,19 @@ type Printer struct {
 	W           *bufio.Writer
 	Color       bool
 	LineNumbers bool
-	Breadcrumb  bool
-	Format      Format
+	// Filename prints which file a result came from, and Heading puts that
+	// name on a line above the file's results rather than in front of every
+	// line of them. Both are grep's and ripgrep's, and so are the two facts
+	// the caller settles them from when nobody said: a name is worth printing
+	// when more than one file could answer, and a heading when a person is
+	// reading the output rather than a program.
+	Filename bool
+	Heading  bool
+	// Breadcrumb writes the heading trail above a result. It is the one piece
+	// of the page with no counterpart in grep, and it is off unless asked
+	// for.
+	Breadcrumb bool
+	Format     Format
 	// Separator goes between two results of the same file. It is there for a
 	// person scanning the output; an empty one leaves the results flush
 	// against each other.
@@ -66,6 +77,30 @@ type Printer struct {
 	Truncate int
 
 	wroteAny bool
+}
+
+// prefix is what stands in front of one printed line: the file name, the line
+// number, or neither, each closed by a colon, so that a line reads
+// "path:line:text" the way grep and rg write one.
+//
+// Those two mark a context line with a dash where a matching line takes a
+// colon. mdgrep prints nodes rather than lines: every line it prints is part
+// of a node that matched, or of the region --section and its neighbours
+// widened that node to, and neither is context in grep's sense. So every line
+// takes the colon and stays one shape for a program to read, and a caller who
+// wants a narrower set of them says so with a filter or another stage rather
+// than by reading the marker.
+func (p *Printer) prefix(path string, n int) string {
+	var sb strings.Builder
+	if p.Filename && !p.Heading {
+		sb.WriteString(p.paint(magenta, path))
+		sb.WriteString(p.paint(dim, ":"))
+	}
+	if p.LineNumbers {
+		sb.WriteString(p.paint(green, strconv.Itoa(n+1)))
+		sb.WriteString(p.paint(dim, ":"))
+	}
+	return sb.String()
 }
 
 // paint colours a string for a person. Compact and JSON are read by programs,
@@ -106,29 +141,38 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 		p.printOutline(src, results)
 		return
 	}
-	if p.wroteAny {
-		fmt.Fprintln(p.W)
+	// A heading stands above a file's results with a blank line between two
+	// files, the way rg writes a terminal. Without one there is nothing to
+	// stand above and nothing to separate: the file name rides every line
+	// instead, and the separator does whatever work is left.
+	if p.Heading {
+		if p.wroteAny {
+			fmt.Fprintln(p.W)
+		}
+		if p.Filename {
+			fmt.Fprintln(p.W, p.paint(magenta, src.Path))
+		}
+	} else if p.wroteAny && p.Separator != "" {
+		fmt.Fprintln(p.W, p.paint(dim, p.Separator))
 	}
 	p.wroteAny = true
 
-	fmt.Fprintln(p.W, p.paint(magenta, src.Path))
-	last := 0
-	for _, r := range results {
-		last = max(last, r.End+1)
-	}
-	width := len(strconv.Itoa(last))
 	var shown []string
 	for i, r := range results {
 		if i > 0 && p.Separator != "" {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, p.Separator))
+			fmt.Fprintln(p.W, p.paint(dim, p.Separator))
 		}
 		if p.Breadcrumb && len(r.Breadcrumb) > 0 && !slices.Equal(r.Breadcrumb, shown) {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
+			fmt.Fprintln(p.W, p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
 		}
 		shown = r.Breadcrumb
 		first, last, before, after := p.window(src, r, m)
-		if before > 0 {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(before)))
+		// The note of what --truncate held back is prose rather than a line
+		// of the file, so it belongs to the mode a person reads. Where every
+		// line carries its path and number, the same two counts are in
+		// --format compact and --format json as numbers.
+		if before > 0 && p.Heading {
+			fmt.Fprintln(p.W, p.paint(dim, elision(before)))
 		}
 		for n := first; n <= last; n++ {
 			line := src.Line(n)
@@ -136,15 +180,10 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 			if n >= r.HitStart && n <= r.HitEnd {
 				body = p.highlight(line, m)
 			}
-			if p.LineNumbers {
-				num := fmt.Sprintf("%*d", width, n+1)
-				fmt.Fprintf(p.W, "  %s %s %s\n", p.paint(green, num), p.paint(dim, "│"), body)
-			} else {
-				fmt.Fprintf(p.W, "  %s\n", body)
-			}
+			fmt.Fprintf(p.W, "%s%s\n", p.prefix(src.Path, n), body)
 		}
-		if after > 0 {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(after)))
+		if after > 0 && p.Heading {
+			fmt.Fprintln(p.W, p.paint(dim, elision(after)))
 		}
 	}
 }
@@ -249,29 +288,22 @@ func (p *Printer) printCompact(src *mdoc.Source, results []search.Result, m matc
 // sits at the outermost level rather than being dropped, since the caller
 // asked to see what matched.
 func (p *Printer) printOutline(src *mdoc.Source, results []search.Result) {
-	if p.wroteAny {
-		fmt.Fprintln(p.W)
+	if p.Heading {
+		if p.wroteAny {
+			fmt.Fprintln(p.W)
+		}
+		if p.Filename {
+			fmt.Fprintln(p.W, p.paint(magenta, src.Path))
+		}
 	}
 	p.wroteAny = true
-	fmt.Fprintln(p.W, p.paint(magenta, src.Path))
 
-	last := 0
-	for _, r := range results {
-		last = max(last, r.HitStart+1)
-	}
-	width := len(strconv.Itoa(last))
 	for _, r := range results {
 		// HitStart, not Start: the line to print is the heading's own, and
 		// Start is wherever the region around it happens to begin.
 		indent := strings.Repeat("  ", max(r.Level-1, 0))
 		text := strings.TrimSpace(src.Line(r.HitStart))
-		if p.LineNumbers {
-			fmt.Fprintf(p.W, "  %s %s %s%s\n",
-				p.paint(green, fmt.Sprintf("%*d", width, r.HitStart+1)),
-				p.paint(dim, "│"), indent, text)
-		} else {
-			fmt.Fprintf(p.W, "  %s%s\n", indent, text)
-		}
+		fmt.Fprintf(p.W, "%s%s%s\n", p.prefix(src.Path, r.HitStart), indent, text)
 	}
 }
 

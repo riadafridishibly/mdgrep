@@ -60,13 +60,15 @@ func TestStreamNarrowsThroughEveryStage(t *testing.T) {
 		}
 	}
 
-	third, stderr, code := runStage(t, second, "", "--todo")
+	// -n and -H ask for the two things the stream is meant to have carried
+	// through: a pipe numbers nothing and names nothing of its own accord.
+	third, stderr, code := runStage(t, second, "", "--todo", "-n", "-H")
 	if code != 0 {
 		t.Fatalf("stage 3 exit %d: %s", code, stderr)
 	}
 	// The line numbers are the file's own, not the fragment's, and the box
 	// outside the section the first stage chose never comes into it.
-	for _, want := range []string{"alpha task", "gamma task", " 8 │", "13 │", path} {
+	for _, want := range []string{"alpha task", "gamma task", ":8:", ":13:", path} {
 		if !strings.Contains(third, want) {
 			t.Errorf("stage 3 = %q, want %s", third, want)
 		}
@@ -142,7 +144,7 @@ func TestStreamHeaderIsWrittenWithoutResults(t *testing.T) {
 // Markdown on stdin is still markdown. The header is what tells the two
 // apart, so a document keeps arriving as one.
 func TestMarkdownOnStdinIsStillMarkdown(t *testing.T) {
-	out, _, code := runStage(t, pipedDoc, "alpha task")
+	out, _, code := runStage(t, pipedDoc, "alpha task", "-H")
 	if code != 0 || !strings.Contains(out, "alpha task") {
 		t.Fatalf("exit %d, out %q", code, out)
 	}

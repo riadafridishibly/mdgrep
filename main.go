@@ -54,6 +54,32 @@ func main() {
 	os.Exit(run())
 }
 
+// manyFiles is grep's rule for whether a file name is worth printing: a run
+// that could answer from more than one file says which one each result came
+// from, and one that could only ever answer from a single named file does
+// not. A directory counts as more than one file however few markdown
+// documents it turns out to hold, so the test is on what was asked for rather
+// than on what the walk came back with -- "mdgrep x docs/" names docs/a.md
+// even when a.md is all there is, which is what rg does and what keeps the
+// name from appearing and disappearing as a tree is edited.
+func manyFiles(paths, files []string, useStdin, streamed bool) bool {
+	switch {
+	case streamed:
+		// A stream names its files outright, so it is read the way a list of
+		// paths is rather than the way the walk that made it was.
+		return len(files) > 1
+	case useStdin && len(files) == 0:
+		// Markdown arriving on stdin has no name to print.
+		return false
+	case len(paths) != 1:
+		// No path at all is a walk of ".", which is a directory like any
+		// other; more than one is more than one file by inspection.
+		return true
+	}
+	info, err := os.Stat(paths[0])
+	return err != nil || info.IsDir()
+}
+
 // stage is one step of a search: a command line of its own, and the matcher
 // its flags describe. Every stage but the last narrows the document down for
 // the one after it; the last stage is the one that prints or writes.
@@ -176,8 +202,13 @@ func run() (code int) {
 	// Neighbouring hits are run together for a person reading the page as one
 	// passage, and kept apart for everyone else: an edit rewrites each node on
 	// its own, a machine format is counted and iterated over, an outline is one
-	// line per heading, and -c is a tally of nodes.
-	last.c.Opt.Distinct = ed.Op != edit.OpNone || format != render.Plain || last.c.Count
+	// line per heading, and -c is a tally of nodes. --truncate is the fourth
+	// case and the one that looks like plain output: it caps a result to keep a
+	// long one readable, so running the results together first would spend the
+	// whole cap on the first node and drop every other match off the page
+	// rather than shorten it.
+	last.c.Opt.Distinct = ed.Op != edit.OpNone || format != render.Plain ||
+		last.c.Count || last.c.Truncate > 0
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
@@ -294,7 +325,10 @@ func run() (code int) {
 			code = 2
 		}
 	}()
-	p := last.c.Printer(out, format)
+	p := last.c.Printer(out, format, cli.Page{
+		TTY:       cli.IsTTY(),
+		ManyFiles: manyFiles(paths, files, useStdin, scope != nil),
+	})
 	p.Begin()
 
 	found := false
@@ -308,7 +342,14 @@ func run() (code int) {
 		case last.c.FilesOnly:
 			fmt.Fprintln(out, src.Path)
 		case last.c.Count:
-			fmt.Fprintf(out, "%s:%d\n", src.Path, len(res))
+			// grep and rg name the file beside a tally on the same terms
+			// they name it beside a result: only when more than one file
+			// could have answered.
+			if p.Filename {
+				fmt.Fprintf(out, "%s:%d\n", src.Path, len(res))
+			} else {
+				fmt.Fprintf(out, "%d\n", len(res))
+			}
 		default:
 			p.Print(src, res, matcher)
 		}

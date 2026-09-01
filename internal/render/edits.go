@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/riadafridishibly/mdgrep/internal/edit"
@@ -25,60 +24,56 @@ func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) 
 		p.printEditCompact(src, changes, dry)
 		return
 	}
-	if p.wroteAny {
-		fmt.Fprintln(p.W)
+	if p.Heading {
+		if p.wroteAny {
+			fmt.Fprintln(p.W)
+		}
+		if p.Filename {
+			head := p.paint(magenta, src.Path)
+			if dry {
+				head += " " + p.paint(dim, "(dry run)")
+			}
+			fmt.Fprintln(p.W, head)
+		}
+	} else if p.wroteAny && p.Separator != "" {
+		fmt.Fprintln(p.W, p.paint(dim, p.Separator))
 	}
 	p.wroteAny = true
 
-	head := p.paint(magenta, src.Path)
-	if dry {
-		head += " " + p.paint(dim, "(dry run)")
-	}
-	fmt.Fprintln(p.W, head)
-
-	width := 1
-	for _, c := range changes {
-		width = max(width, len(strconv.Itoa(c.End+len(c.New)+1)))
-	}
 	// Lines the edit adds or removes shift everything after them, so the new
 	// side is numbered against a running offset rather than the old file.
 	offset := 0
 	var shown []string
 	for i, c := range changes {
 		if i > 0 && p.Separator != "" {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, p.Separator))
+			fmt.Fprintln(p.W, p.paint(dim, p.Separator))
 		}
 		if p.Breadcrumb && len(c.Breadcrumb) > 0 && !slices.Equal(c.Breadcrumb, shown) {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(c.Breadcrumb)))
+			fmt.Fprintln(p.W, p.paint(cyanFaint, joinCrumb(c.Breadcrumb)))
 		}
 		shown = c.Breadcrumb
 		if c.NoOp {
 			for n, line := range c.Old {
-				p.editLine(dim, "=", c.Start+n, width, line)
+				p.editLine(src.Path, dim, "=", c.Start+n, line)
 			}
-			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, "unchanged"))
+			fmt.Fprintln(p.W, p.paint(dim, "unchanged"))
 			continue
 		}
 		for n, line := range c.Old {
-			p.editLine(red, "-", c.Start+n, width, line)
+			p.editLine(src.Path, red, "-", c.Start+n, line)
 		}
 		for n, line := range c.New {
-			p.editLine(green, "+", c.Start+offset+n, width, line)
+			p.editLine(src.Path, green, "+", c.Start+offset+n, line)
 		}
 		offset += len(c.New) - len(c.Old)
 	}
 }
 
-func (p *Printer) editLine(color, mark string, num, width int, line string) {
-	if !p.LineNumbers {
-		fmt.Fprintf(p.W, "%s %s\n", p.paint(color, mark), line)
-		return
-	}
-	fmt.Fprintf(p.W, "%s %s %s %s\n",
-		p.paint(color, mark),
-		p.paint(color, fmt.Sprintf("%*d", width, num+1)),
-		p.paint(dim, "│"),
-		line)
+// editLine writes one side of a change: a patch's own -, + or = for what
+// happened to the line, and then the same "path:line:" prefix a search
+// prints, so that the two halves of the tool number a line the one way.
+func (p *Printer) editLine(path, color, mark string, num int, line string) {
+	fmt.Fprintf(p.W, "%s %s%s\n", p.paint(color, mark), p.prefix(path, num), line)
 }
 
 // printEditCompact reports a change the way printCompact reports a result:

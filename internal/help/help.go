@@ -148,15 +148,23 @@ The three spellings answer alike. --then holds every stage in one process and
 says which narrowed to nothing; a stream can be saved and replayed.
 
 Output
-  -n, --line-number     number the printed lines (the default)
-  -N, --no-line-number  drop the line-number gutter
-      --no-breadcrumb   hide the heading trail above each result
+  -n, --line-number     number the printed lines
+  -N, --no-line-number  do not
+  -H, --with-filename   print the file a result came from
+      --no-filename     do not
+      --heading         put that name above a file's results rather than in
+                        front of every line of them
+      --no-heading      the other way: "path:line:text" on every line
+      --breadcrumb      print the heading trail above each result
+      --no-breadcrumb   do not (the default)
       --outline         one indented line per heading; takes paths, no
                         PATTERN, and none of the Selection flags
-      --separator STR   what to print between two results of a file (default
-                        "--"); pass "" to leave them out
+      --separator STR   what to print between two results of a file; nothing
+                        by default, so "--separator --" spells grep's
       --truncate N      print at most N lines of a result, keeping the
-                        matched node, then a count of what was held back
+                        matched node, then a count of what was held back.
+                        Results that touch stay apart under it, since a cap
+                        spent on the first of them would drop the rest
       --color WHEN      auto, always or never (default auto)
       --format WHEN     plain (default), compact, json or stream
       --json            one JSON object per result (same as --format json)
@@ -176,12 +184,35 @@ Output
                         "mdgrep --help anchor"
   -V, --version         print the version and exit
 
+A line is written the way grep and rg write one -- "path:line:text", each
+part there only when it has something to say. Three defaults come from where
+the output is going and how much of the tree was searched, and every one of
+them yields to the flag that answers it. The file name is printed when more
+than one file could have answered: a directory counts as more than one however
+few markdown documents it holds, and a single file named outright, or markdown
+on stdin, answers for itself. Lines are numbered, and the name goes above a
+file's results rather than in front of each line, when stdout is a terminal.
+So a terminal shows a heading and numbers, and a pipe gets the markdown alone
+unless it asks for more.
+
+grep marks a context line with "-" where a matching line takes ":". mdgrep
+prints nodes: every line it prints belongs to a node that matched or to the
+region a Selection flag widened that node to, and neither is context in grep's
+sense -- so every line takes ":" and the output keeps one shape to read. Narrow
+with a filter or another stage rather than by reading the marker. The heading
+trail has no counterpart in grep and is off until --breadcrumb asks for it;
+having nowhere to stand but above a file's results, it is refused beside
+--no-heading. The note of what --truncate held back is prose rather than a line
+of the file, so it belongs to the same heading a person reads; --format compact
+and --format json carry the two counts as numbers wherever it does not.
+
 compact is one tab-separated record per result under the path — "start[-end]
 kind text before after", newlines escaped — for a fraction of what json costs.
 before and after are the lines --truncate held back on each side; the span is
 the node's, so the text starts at start plus before. json adds the breadcrumb
 and the score. Both keep touching nodes apart where plain runs them into one
-passage, and both report a refusal in their own shape. Colour is off when
+passage -- as --truncate does too -- and both report a refusal in their own
+shape. Colour is off when
 stdout is not a terminal, NO_COLOR is set or TERM=dumb.
 
 A short flag takes its value attached or apart: -C2 and -C 2 are the same.
