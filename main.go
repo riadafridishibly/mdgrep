@@ -340,16 +340,9 @@ func run() (code int) {
 		switch {
 		case last.c.Quiet:
 		case last.c.FilesOnly:
-			fmt.Fprintln(out, src.Path)
+			p.PrintFile(src.Path)
 		case last.c.Count:
-			// grep and rg name the file beside a tally on the same terms
-			// they name it beside a result: only when more than one file
-			// could have answered.
-			if p.Filename {
-				fmt.Fprintf(out, "%s:%d\n", src.Path, len(res))
-			} else {
-				fmt.Fprintf(out, "%d\n", len(res))
-			}
+			p.PrintCount(src.Path, len(res))
 		default:
 			p.Print(src, res, matcher)
 		}

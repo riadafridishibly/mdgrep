@@ -11,8 +11,8 @@ $ mdgrep "brew install" notes.md
 ```
 
 Matched characters are highlighted. Lines are written the way `grep` and `rg`
-write them — `path:line:text` — and `--breadcrumb` adds the heading trail that
-says where you are.
+write them — `path:line:text` — and on a terminal the heading trail above a
+result says where you are.
 
 ## Install
 
@@ -213,9 +213,24 @@ printf -- '- [ ] verify checksum\n- [ ] sign the tarball\n' |
 
 Files are written atomically, through a temporary file renamed over the
 original; a symlinked path is followed first, so what changes is the document
-the link points at rather than the link. A checkbox that already reads the way you asked is reported unchanged
-and left alone. `-A`, `-B`, `-C`, `--lines`, `-c`, `-l` and `-m` are refused
-with an edit.
+the link points at rather than the link. A checkbox that already reads the way
+you asked is left alone. `-A`, `-B`, `-C`, `--lines`, `-c`, `-l` and `-m` are
+refused with an edit.
+
+An edit reports what it did, one line per line: `-` before a line it removed
+and `+` before one it added, each numbered where it sits in its own version of
+the file, and `=` before a line it left as it found it. After the mark, the
+line is written the way a search writes one. A dry run prints `(dry run)`
+first, since the lines are otherwise the same:
+
+```
+$ mdgrep "ship the docs" notes.md --check --dry-run
+(dry run)
+
+Release
+- 5:- [ ] ship the docs
++ 5:- [x] ship the docs
+```
 
 ### A plan of edits
 
@@ -385,9 +400,9 @@ matches", for the same reason an unreadable directory is.
 | `--heading` | that name above a file's results, not in front of every line |
 | `--no-heading` | the other way: `path:line:text` on every line |
 | `--breadcrumb` | print the heading trail above each result |
-| `--no-breadcrumb` | do not (the default) |
+| `--no-breadcrumb` | do not |
 | `--outline` | one indented line per heading, no PATTERN, no widening |
-| `--separator STR` | what goes between two results of a file; nothing by default |
+| `--separator STR` | what goes between two results, and between two files where no heading parts them; nothing by default |
 | `--truncate N` | print at most N lines of any one result |
 | `--color WHEN` | `auto` (default), `always`, `never` |
 | `--format WHEN` | `plain` (default), `compact`, `json` or `stream` |
@@ -428,12 +443,13 @@ when `a.md` is all there is. A single file named outright, or markdown on
 stdin, answers for itself and is not named. `-c` names the file on the same
 terms.
 
-So a terminal gets a heading and numbers, and a pipe gets the markdown alone
-until it asks for more:
+So a terminal gets a heading, the trail and numbers, and a pipe gets the
+markdown alone until it asks for more:
 
 ```
 $ mdgrep "brew install" docs            # terminal
 docs/notes.md
+Install › macOS
 13:  - On macOS run `brew install foo`
 
 $ mdgrep "brew install" docs | cat      # pipe
@@ -446,9 +462,11 @@ region a selection flag widened that node to, and neither is context in
 `grep`'s sense — so every line takes `:` and the output keeps one shape to
 read. Narrow with a filter or another stage rather than by reading the marker.
 
-The heading trail has no counterpart in `grep`, so it is off until
-`--breadcrumb` asks for it. Having nowhere to stand but above a file's
-results, it is refused beside `--no-heading`.
+The heading trail has no counterpart in `grep`, so a pipe gets none until
+`--breadcrumb` asks for it. It goes wherever a heading goes, since a heading is
+what says a person is reading, and `--no-breadcrumb` leaves it out. Having
+nowhere to stand but above a file's results, it is refused beside
+`--no-heading`.
 
 The trail above a heading stops at that heading's parent, since the heading
 itself is the next line printed. `--section-body` keeps the whole trail, because
@@ -470,14 +488,17 @@ $ mdgrep --outline docs/pruning.md -n
 Nothing goes between two results of a file: they are two nodes of one
 document, and a page of them reads the way the document does. `--separator --`
 spells grep's marker, which grep itself prints only where a context flag has
-put lines between hits that were never next to each other.
+put lines between hits that were never next to each other. It goes where
+grep's does: between two results, and between two files where no heading
+parts them.
 
-`--truncate N` caps how much of one node is printed — a hit inside a 400-line fenced block otherwise
-prints all 400 lines:
+`--truncate N` caps how much of one node is printed — a hit inside a 400-line
+fenced block otherwise prints all 400 lines:
 
 ```
 $ mdgrep "orchard survey" docs --truncate 3
 docs/pruning.md
+Pruning › Survey
 12:```bash
 13:orchard survey --block 04
 14:orchard survey --block 05
@@ -489,10 +510,10 @@ way the file does — but not under `--truncate`, where the cap would be spent
 on the first of them and the rest would drop off the page rather than be
 shortened. Under `--truncate` each node is capped on its own.
 
-The `… +N lines` note is prose rather than a line of the file, so it belongs
-to the same heading mode a person reads. Where every line carries its path and
-number, `--format compact` and `--format json` carry the two counts as
-numbers.
+The `… +N lines` note is printed wherever lines were held back, on a line of
+its own that names its file the way every other line does and takes no line
+number, having none — `docs/pruning.md:… +38 lines` on a pipe. `--format
+compact` and `--format json` carry the two counts as numbers.
 
 ### Machine-readable output
 

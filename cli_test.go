@@ -578,8 +578,6 @@ func TestTruncateStaysParseable(t *testing.T) {
 	}
 }
 
-// An edit reports what it wrote, and a cap on that report would hide part of
-// the change from the caller who asked for it.
 // Two results that touch are run together so the page reads as one passage.
 // Under --truncate that was the wrong trade: the cap was spent on the first
 // node of the merged region and every later match fell off the page rather
@@ -610,11 +608,13 @@ func TestTruncateCapsEachTouchingResultOnItsOwn(t *testing.T) {
 // bullets wants the passage, not three blocks with a separator between them.
 func TestTouchingResultsStillRunTogetherWithoutTruncate(t *testing.T) {
 	path := doc(t, "# Orchard\n\n- [ ] thin the fruit\n- [ ] order the oil\n- [ ] stake the leader\n")
-	stdout, _, code := capture(t, "", path, "--todo")
+	// A separator is asked for so that three results would show as three:
+	// without one, three results and one merged passage print the same bytes.
+	stdout, _, code := capture(t, "", path, "--todo", "--separator", "--")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if strings.Contains(stdout, "  --\n") {
+	if strings.Contains(stdout, "--\n") {
 		t.Errorf("split a passage the page used to run together:\n%s", stdout)
 	}
 }
@@ -672,7 +672,7 @@ func TestHeadingChoosesWhereTheNameGoes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte(long), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stdout, _, code := capture(t, "thin the fruit", dir, "--heading", "-n")
+	stdout, _, code := capture(t, "thin the fruit", dir, "--heading", "-n", "--no-breadcrumb")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -708,24 +708,31 @@ func TestEveryPrintedLineTakesTheColon(t *testing.T) {
 	}
 }
 
-// A breadcrumb has no counterpart in grep, so it is off until asked for, and
-// there is nowhere to put one where the name rides every line.
-func TestBreadcrumbIsOptInAndWantsAHeading(t *testing.T) {
+// A breadcrumb has no counterpart in grep, so a pipe gets none until asked;
+// it goes wherever a heading goes, since a heading is what says a person is
+// reading; and there is nowhere to put one where the name rides every line.
+func TestBreadcrumbGoesWithTheHeading(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "thin the fruit", path)
-	if code != 0 {
-		t.Fatalf("exit = %d", code)
+	tests := []struct {
+		name  string
+		args  []string
+		trail bool
+	}{
+		{name: "a pipe", trail: false},
+		{name: "asked for", args: []string{"--breadcrumb"}, trail: true},
+		{name: "with a heading", args: []string{"--heading"}, trail: true},
+		{name: "declined under a heading", args: []string{"--heading", "--no-breadcrumb"}, trail: false},
 	}
-	if strings.Contains(stdout, "›") {
-		t.Errorf("printed a trail nobody asked for:\n%s", stdout)
-	}
-
-	stdout, _, code = capture(t, "thin the fruit", path, "--breadcrumb")
-	if code != 0 {
-		t.Fatalf("exit = %d", code)
-	}
-	if !strings.Contains(stdout, "Orchard › Summer Pruning") {
-		t.Errorf("want the trail that was asked for:\n%s", stdout)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, _, code := capture(t, append([]string{"thin the fruit", path}, tt.args...)...)
+			if code != 0 {
+				t.Fatalf("exit = %d", code)
+			}
+			if got := strings.Contains(stdout, "Orchard › Summer Pruning"); got != tt.trail {
+				t.Errorf("trail = %v, want %v:\n%s", got, tt.trail, stdout)
+			}
+		})
 	}
 
 	_, stderr, code := capture(t, "thin the fruit", path, "--breadcrumb", "--no-heading")
@@ -734,6 +741,23 @@ func TestBreadcrumbIsOptInAndWantsAHeading(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "--no-heading") {
 		t.Errorf("want the contradiction named:\n%s", stderr)
+	}
+}
+
+// A flag withdrawn by its opposite is withdrawn everywhere it was read:
+// --breadcrumb asks for a heading to stand under, and taking it back takes
+// the heading back too, so the pair together is the same as neither.
+func TestBreadcrumbWithdrawnTakesItsHeadingWithIt(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte(long), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, code := capture(t, "thin the fruit", dir, "--breadcrumb", "--no-breadcrumb")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.HasSuffix(stdout, "a.md:- [ ] thin the fruit\n") || strings.Contains(stdout, "›") {
+		t.Errorf("want the piped layout and no trail:\n%s", stdout)
 	}
 }
 
@@ -754,6 +778,8 @@ func TestPageFlagsAreRefusedOnAStream(t *testing.T) {
 	}
 }
 
+// An edit reports what it wrote, and a cap on that report would hide part of
+// the change from the caller who asked for it.
 func TestTruncateIsRefusedWithAnEdit(t *testing.T) {
 	path := doc(t, sample)
 	_, stderr, code := capture(t, "verify checksum", path, "--check", "--truncate", "2")
@@ -992,5 +1018,172 @@ func TestMinScoreKeepsItsRange(t *testing.T) {
 		if _, stderr, code := capture(t, "--fuzzy", "--min-score", arg, "installer", path); code != 0 {
 			t.Fatalf("--min-score %s: code %d\n%s", arg, code, stderr)
 		}
+	}
+}
+
+// A dry run prints the same lines a real edit does, so the one thing that
+// tells them apart has to be printed whatever the layout -- a page and a pipe
+// alike, and a plan as well as a search.
+func TestDryRunSaysSoInEveryLayout(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "a pipe"},
+		{name: "a heading", args: []string{"--heading"}},
+		{name: "a heading without a name", args: []string{"--heading", "--no-filename"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := doc(t, sample)
+			stdout, _, code := capture(t, append([]string{"verify checksum", path, "--check", "--dry-run"}, tt.args...)...)
+			if code != 0 {
+				t.Fatalf("exit = %d", code)
+			}
+			if !strings.Contains(stdout, "(dry run)") {
+				t.Errorf("nothing says the file was left alone:\n%s", stdout)
+			}
+			if !strings.Contains(stdout, "+ ") || read(t, path) != sample {
+				t.Errorf("want the change shown and the file untouched:\n%s", stdout)
+			}
+		})
+	}
+
+	t.Run("a plan", func(t *testing.T) {
+		path := doc(t, sample)
+		p := planFile(t, `{"path":"`+path+`","match":"verify checksum","op":"check"}`)
+		stdout, _, code := capture(t, "--apply", p, "--dry-run")
+		if code != 0 {
+			t.Fatalf("exit = %d", code)
+		}
+		if !strings.Contains(stdout, "(dry run)") || read(t, path) != sample {
+			t.Errorf("want the plan marked as a dry run and the file untouched:\n%s", stdout)
+		}
+	})
+}
+
+// A real edit is not marked, so the marker means something when it is there.
+func TestARealEditIsNotMarkedAsADryRun(t *testing.T) {
+	path := doc(t, sample)
+	stdout, _, code := capture(t, "verify checksum", path, "--check")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(stdout, "dry run") {
+		t.Errorf("a write was reported as a dry run:\n%s", stdout)
+	}
+}
+
+// A node already as asked is reported with "=" before each of its lines, the
+// way a change is reported with "-" and "+": the mark is the report, so no
+// bare line of prose follows it to break the shape.
+func TestAnEditAlreadyAsAskedIsMarkedEquals(t *testing.T) {
+	path := doc(t, "- [x] done\n")
+	stdout, _, code := capture(t, "done", path, "--check")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if stdout != "= - [x] done\n" {
+		t.Errorf("stdout = %q, want the line marked = and nothing else", stdout)
+	}
+}
+
+// What --truncate held back is said wherever it was held back, and the note
+// names its file the way every other line does: a pipe that cut a node and
+// said nothing would hand on a short node.
+func TestTruncateNoteIsPrintedOnAPipe(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.md")
+	if err := os.WriteFile(path, []byte(long), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, code := capture(t, "^one$", path, "--truncate", "2")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "\n… +") {
+		t.Errorf("the cut was not reported:\n%s", stdout)
+	}
+
+	stdout, _, code = capture(t, "^one$", dir, "--truncate", "2")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "a.md:… +") {
+		t.Errorf("want the note to name its file like any other line:\n%s", stdout)
+	}
+}
+
+// An outline keeps its files apart the way a search does: a heading and a
+// blank line on a page, and the separator, if any, where the name rides
+// every line.
+func TestOutlineKeepsFilesApart(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"a.md", "b.md"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("# "+f+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stdout, _, code := capture(t, "--outline", dir, "--heading")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "# a.md\n\n") {
+		t.Errorf("want a blank line between two files on a page:\n%s", stdout)
+	}
+
+	stdout, _, code = capture(t, "--outline", dir, "--separator", "~~")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "# a.md\n~~\n") {
+		t.Errorf("want the separator between two files on a pipe:\n%s", stdout)
+	}
+}
+
+// -c and -l are written by the same printer as a result, so a path is
+// coloured wherever it appears and the flags that place it are honoured.
+func TestCountAndFileListAreWrittenLikeAPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte(long), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, code := capture(t, "Pruning", dir, "-c", "--color", "always")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "\x1b[35m") || !strings.HasSuffix(stdout, "2\n") {
+		t.Errorf("want the path coloured beside the tally:\n%q", stdout)
+	}
+
+	stdout, _, code = capture(t, "Pruning", dir, "-c", "--no-filename")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if stdout != "2\n" {
+		t.Errorf("stdout = %q, want the bare tally", stdout)
+	}
+
+	stdout, _, code = capture(t, "Pruning", dir, "-l", "--color", "always")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "\x1b[35m") {
+		t.Errorf("want the path coloured on its own:\n%q", stdout)
+	}
+}
+
+// A plan prints its changes through the same printer a search does, so every
+// flag that places a name or a number is honoured beside it.
+func TestApplyTakesThePageFlags(t *testing.T) {
+	for _, flag := range []string{"--heading", "--no-heading", "-H", "--no-filename", "--breadcrumb", "--no-breadcrumb"} {
+		t.Run(flag, func(t *testing.T) {
+			path := doc(t, sample)
+			p := planFile(t, `{"path":"`+path+`","match":"verify checksum","op":"check"}`)
+			_, stderr, code := capture(t, "--apply", p, "--dry-run", flag)
+			if code != 0 {
+				t.Fatalf("exit = %d, want 0:\n%s", code, stderr)
+			}
+		})
 	}
 }

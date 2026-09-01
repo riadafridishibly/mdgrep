@@ -63,13 +63,15 @@ type Printer struct {
 	Filename bool
 	Heading  bool
 	// Breadcrumb writes the heading trail above a result. It is the one piece
-	// of the page with no counterpart in grep, and it is off unless asked
-	// for.
+	// of the page with no counterpart in grep, and it goes wherever a
+	// Heading goes unless asked otherwise: a heading is what says a person
+	// is reading, and the trail is what tells a person where in the document
+	// they are.
 	Breadcrumb bool
 	Format     Format
-	// Separator goes between two results of the same file. It is there for a
-	// person scanning the output; an empty one leaves the results flush
-	// against each other.
+	// Separator goes between two results, and between two files where no
+	// heading parts them, which is where grep prints its "--". An empty one
+	// leaves the results flush against each other.
 	Separator string
 	// Truncate caps how many lines of any one result are printed, so that a
 	// hit inside a 400-line fenced block does not print 400 lines. Zero means
@@ -79,9 +81,15 @@ type Printer struct {
 	wroteAny bool
 }
 
-// prefix is what stands in front of one printed line: the file name, the line
-// number, or neither, each closed by a colon, so that a line reads
-// "path:line:text" the way grep and rg write one.
+// inline reports whether the file name rides every line, as against standing
+// above a file's results.
+func (p *Printer) inline() bool { return p.Filename && !p.Heading }
+
+// writePrefix writes what stands in front of one printed line: the file name,
+// the line number, or neither, each closed by a colon, so that a line reads
+// "path:line:text" the way grep and rg write one. It writes straight to the
+// buffer because it runs once per line of output, which is the hottest path
+// in the program.
 //
 // Those two mark a context line with a dash where a matching line takes a
 // colon. mdgrep prints nodes rather than lines: every line it prints is part
@@ -90,17 +98,76 @@ type Printer struct {
 // takes the colon and stays one shape for a program to read, and a caller who
 // wants a narrower set of them says so with a filter or another stage rather
 // than by reading the marker.
-func (p *Printer) prefix(path string, n int) string {
-	var sb strings.Builder
-	if p.Filename && !p.Heading {
-		sb.WriteString(p.paint(magenta, path))
-		sb.WriteString(p.paint(dim, ":"))
+func (p *Printer) writePrefix(path string, n int) {
+	if p.inline() {
+		p.writePath(path)
 	}
 	if p.LineNumbers {
-		sb.WriteString(p.paint(green, strconv.Itoa(n+1)))
-		sb.WriteString(p.paint(dim, ":"))
+		p.W.WriteString(p.paint(green, strconv.Itoa(n+1)))
+		p.W.WriteString(p.paint(dim, ":"))
 	}
-	return sb.String()
+}
+
+// writePath writes a file name and the colon that closes it.
+func (p *Printer) writePath(path string) {
+	p.W.WriteString(p.paint(magenta, path))
+	p.W.WriteString(p.paint(dim, ":"))
+}
+
+// writeLine writes one line of a file behind its prefix.
+func (p *Printer) writeLine(path string, n int, text string) {
+	p.writePrefix(path, n)
+	p.W.WriteString(text)
+	p.W.WriteByte('\n')
+}
+
+// writeNote writes a line that is about the output rather than of the file:
+// what --truncate held back. It names its file the way every other line does
+// and takes no line number, having none, so a reader splitting on the colon
+// finds the path where it always is and prose where a number would be.
+func (p *Printer) writeNote(path, note string) {
+	if p.inline() {
+		p.writePath(path)
+	}
+	p.W.WriteString(p.paint(dim, note))
+	p.W.WriteByte('\n')
+}
+
+// beginFile writes what stands between one file's results and the next. A
+// heading stands above a file's results with a blank line between two files,
+// the way rg writes a terminal. Without one there is nothing to stand above
+// and nothing to separate: the file name rides every line instead, and the
+// separator goes between two files as it goes between two results, the way
+// grep and rg print "--" between two groups whether or not a file boundary
+// lies between them.
+func (p *Printer) beginFile(path string) {
+	if p.Heading {
+		if p.wroteAny {
+			fmt.Fprintln(p.W)
+		}
+		if p.Filename {
+			fmt.Fprintln(p.W, p.paint(magenta, path))
+		}
+	} else if p.wroteAny && p.Separator != "" {
+		fmt.Fprintln(p.W, p.paint(dim, p.Separator))
+	}
+	p.wroteAny = true
+}
+
+// PrintFile answers -l: the file's name is the whole of the line.
+func (p *Printer) PrintFile(path string) {
+	fmt.Fprintln(p.W, p.paint(magenta, path))
+}
+
+// PrintCount answers -c. grep and rg name the file beside a tally on the same
+// terms they name it beside a result, and never above one: a tally is one
+// line, and a heading over one line is a line spent on nothing.
+func (p *Printer) PrintCount(path string, n int) {
+	if p.Filename {
+		p.writePath(path)
+	}
+	p.W.WriteString(strconv.Itoa(n))
+	p.W.WriteByte('\n')
 }
 
 // paint colours a string for a person. Compact and JSON are read by programs,
@@ -141,21 +208,7 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 		p.printOutline(src, results)
 		return
 	}
-	// A heading stands above a file's results with a blank line between two
-	// files, the way rg writes a terminal. Without one there is nothing to
-	// stand above and nothing to separate: the file name rides every line
-	// instead, and the separator does whatever work is left.
-	if p.Heading {
-		if p.wroteAny {
-			fmt.Fprintln(p.W)
-		}
-		if p.Filename {
-			fmt.Fprintln(p.W, p.paint(magenta, src.Path))
-		}
-	} else if p.wroteAny && p.Separator != "" {
-		fmt.Fprintln(p.W, p.paint(dim, p.Separator))
-	}
-	p.wroteAny = true
+	p.beginFile(src.Path)
 
 	var shown []string
 	for i, r := range results {
@@ -167,12 +220,12 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 		}
 		shown = r.Breadcrumb
 		first, last, before, after := p.window(src, r, m)
-		// The note of what --truncate held back is prose rather than a line
-		// of the file, so it belongs to the mode a person reads. Where every
-		// line carries its path and number, the same two counts are in
-		// --format compact and --format json as numbers.
-		if before > 0 && p.Heading {
-			fmt.Fprintln(p.W, p.paint(dim, elision(before)))
+		// What --truncate held back is said wherever it was held back: a
+		// window with nothing to say it is short is a short node to whoever
+		// reads it. --format compact and --format json carry the same two
+		// counts as numbers.
+		if before > 0 {
+			p.writeNote(src.Path, elision(before))
 		}
 		for n := first; n <= last; n++ {
 			line := src.Line(n)
@@ -180,10 +233,10 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 			if n >= r.HitStart && n <= r.HitEnd {
 				body = p.highlight(line, m)
 			}
-			fmt.Fprintf(p.W, "%s%s\n", p.prefix(src.Path, n), body)
+			p.writeLine(src.Path, n, body)
 		}
-		if after > 0 && p.Heading {
-			fmt.Fprintln(p.W, p.paint(dim, elision(after)))
+		if after > 0 {
+			p.writeNote(src.Path, elision(after))
 		}
 	}
 }
@@ -288,22 +341,13 @@ func (p *Printer) printCompact(src *mdoc.Source, results []search.Result, m matc
 // sits at the outermost level rather than being dropped, since the caller
 // asked to see what matched.
 func (p *Printer) printOutline(src *mdoc.Source, results []search.Result) {
-	if p.Heading {
-		if p.wroteAny {
-			fmt.Fprintln(p.W)
-		}
-		if p.Filename {
-			fmt.Fprintln(p.W, p.paint(magenta, src.Path))
-		}
-	}
-	p.wroteAny = true
-
+	p.beginFile(src.Path)
 	for _, r := range results {
 		// HitStart, not Start: the line to print is the heading's own, and
 		// Start is wherever the region around it happens to begin.
 		indent := strings.Repeat("  ", max(r.Level-1, 0))
 		text := strings.TrimSpace(src.Line(r.HitStart))
-		fmt.Fprintf(p.W, "%s%s%s\n", p.prefix(src.Path, r.HitStart), indent, text)
+		p.writeLine(src.Path, r.HitStart, indent+text)
 	}
 }
 

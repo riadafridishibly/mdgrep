@@ -372,7 +372,7 @@ func (c *Config) Validate() error {
 	if c.Checked && c.Unchecked {
 		return errors.New("--checked and --unchecked are opposite filters; --task selects either")
 	}
-	if c.Crumb && c.NoHeading {
+	if pick(c.Crumb, c.NoCrumb, false) && c.NoHeading {
 		return errors.New("a breadcrumb stands above a file's results, which is what --heading is for; --no-heading leaves nowhere to put one")
 	}
 	return nil
@@ -396,17 +396,21 @@ type Page struct {
 // for the three questions the flags may leave open; a flag that was spelled
 // out always wins over one of them.
 func (c *Config) Printer(w *bufio.Writer, format render.Format, pg Page) *render.Printer {
-	heading := pick(c.Heading || c.Crumb, c.NoHeading, pg.TTY)
+	// A breadcrumb is the one part of the page that only a heading has room
+	// for, so asking for one asks for the mode (--no-heading beside it is
+	// refused rather than silently answered), and the trail then goes
+	// wherever a heading goes unless --no-breadcrumb says otherwise: a
+	// heading is what says a person is reading, and the trail is what tells
+	// a person where in the document they are. Each pair is read once, so
+	// a flag withdrawn by its opposite is withdrawn everywhere it was read.
+	heading := pick(c.Heading || pick(c.Crumb, c.NoCrumb, false), c.NoHeading, pg.TTY)
 	return &render.Printer{
-		W:     w,
-		Color: useColor(c.Color),
-		// A breadcrumb is the one part of the page that only a heading has
-		// room for, so asking for one asks for the mode; --no-heading beside
-		// it is refused rather than silently answered.
+		W:           w,
+		Color:       useColor(c.Color, pg.TTY),
 		LineNumbers: pick(c.Nums, c.NoNums, pg.TTY),
 		Filename:    pick(c.WithName, c.NoName, pg.ManyFiles),
 		Heading:     heading,
-		Breadcrumb:  c.Crumb && !c.NoCrumb,
+		Breadcrumb:  pick(c.Crumb, c.NoCrumb, heading),
 		Format:      format,
 		Separator:   separator(c.Separator),
 		Truncate:    c.Truncate,
@@ -717,11 +721,12 @@ func (c *Config) TaskFilter() search.TaskFilter {
 	return search.TaskIgnore
 }
 
-// separator reads --separator. Nothing is the default: two results of a file
-// are two nodes of the same document, and a page of them reads as the
-// document does. grep prints its "--" only where a context flag has put lines
-// between the hits that were never next to each other, which is the case
-// --separator is there to spell out.
+// separator reads --separator, which goes between two results, and between
+// two files where no heading parts them. Nothing is the default: two results
+// of a file are two nodes of the same document, and a page of them reads as
+// the document does. grep prints its "--" only where a context flag has put
+// lines between the hits that were never next to each other, which is the
+// case --separator is there to spell out.
 func separator(o OptString) string {
 	if !o.set {
 		return ""
@@ -889,7 +894,7 @@ func splitSet(spec string) map[string]bool {
 	return out
 }
 
-func useColor(when string) bool {
+func useColor(when string, tty bool) bool {
 	switch when {
 	case "always":
 		return true
@@ -899,7 +904,7 @@ func useColor(when string) bool {
 	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return false
 	}
-	return IsTTY()
+	return tty
 }
 
 // IsTTY reports whether the output is going to a terminal, which is what

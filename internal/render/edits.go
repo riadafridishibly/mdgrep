@@ -11,7 +11,10 @@ import (
 )
 
 // PrintEdits writes one file's changes as the lines that went and the lines
-// that came, each numbered where it sits in its own version of the file.
+// that came, each numbered where it sits in its own version of the file: "-"
+// before a line the edit removed, "+" before one it added, and "=" before one
+// it left as it found it, which is how a checkbox already in the asked-for
+// state is reported.
 func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) {
 	if len(changes) == 0 {
 		return
@@ -24,21 +27,17 @@ func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) 
 		p.printEditCompact(src, changes, dry)
 		return
 	}
-	if p.Heading {
-		if p.wroteAny {
+	// A dry run prints the same lines a real one does, so the one thing
+	// telling them apart has to be printed too, and once is enough: it is a
+	// fact about the run, not about any file of it, so it stands first,
+	// before any file is named.
+	if dry && !p.wroteAny {
+		fmt.Fprintln(p.W, p.paint(dim, "(dry run)"))
+		if p.Heading {
 			fmt.Fprintln(p.W)
 		}
-		if p.Filename {
-			head := p.paint(magenta, src.Path)
-			if dry {
-				head += " " + p.paint(dim, "(dry run)")
-			}
-			fmt.Fprintln(p.W, head)
-		}
-	} else if p.wroteAny && p.Separator != "" {
-		fmt.Fprintln(p.W, p.paint(dim, p.Separator))
 	}
-	p.wroteAny = true
+	p.beginFile(src.Path)
 
 	// Lines the edit adds or removes shift everything after them, so the new
 	// side is numbered against a running offset rather than the old file.
@@ -56,7 +55,6 @@ func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) 
 			for n, line := range c.Old {
 				p.editLine(src.Path, dim, "=", c.Start+n, line)
 			}
-			fmt.Fprintln(p.W, p.paint(dim, "unchanged"))
 			continue
 		}
 		for n, line := range c.Old {
@@ -73,7 +71,9 @@ func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) 
 // happened to the line, and then the same "path:line:" prefix a search
 // prints, so that the two halves of the tool number a line the one way.
 func (p *Printer) editLine(path, color, mark string, num int, line string) {
-	fmt.Fprintf(p.W, "%s %s%s\n", p.paint(color, mark), p.prefix(path, num), line)
+	p.W.WriteString(p.paint(color, mark))
+	p.W.WriteByte(' ')
+	p.writeLine(path, num, line)
 }
 
 // printEditCompact reports a change the way printCompact reports a result:

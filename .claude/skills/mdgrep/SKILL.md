@@ -35,22 +35,25 @@ file. Locate with `-l`, re-run with `--section` on the one file.
 ## Output
 
 A line is `path:line:text`, the shape `grep` and `rg` write, each part there
-only when it has something to say. **You are a pipe, so all three are off by
-default** — output is the markdown alone, which is also the cheapest form by a
+only when it has something to say. **You are a pipe**, so the line number, the
+heading and the breadcrumb are off unless asked, and the file name follows what
+was searched: a directory (or no path) puts `path:` on every line, while a
+single named file or stdin prints the markdown alone — the cheapest form by a
 quarter to a half, most on short nodes. Ask for what you need: `-n` numbers,
-`-H` names the file, `--heading` moves that name above the file's results
-instead, `--breadcrumb` adds the heading trail (refused beside `--no-heading`,
-which has nowhere to put one). Every printed line takes `:` — a node's own
-lines and the ones `--section` widened it to alike — so narrow with a filter or
-another stage, never by reading the marker.
+`-H` / `--no-filename` name the file or not, `--heading` moves that name above
+the file's results and brings the heading trail with it, `--breadcrumb` asks
+for the trail alone (refused beside `--no-heading`, which has nowhere to put
+one). Every printed line takes `:` — a node's own lines and the ones
+`--section` widened it to alike — so narrow with a filter or another stage,
+never by reading the marker.
 
 `--outline` is one indented line per heading and takes paths, not a pattern —
 the cheapest view of a tree. `--truncate N` caps one node, the guard against a
 hit inside a 400-line fence; under it two results that touch stay apart rather
-than sharing one cap, and its `… +N lines` note appears only under `--heading`
-(`--format compact` and `--format json` carry the counts as numbers). `-l`
-names files, `-c` counts, `-m N` caps per file, `-q` answers in the exit status
-alone.
+than sharing one cap, and its `… +N lines` note is a line of its own with the
+file name and no line number (`--format compact` and `--format json` carry the
+counts as numbers). `-l` names files, `-c` counts, `-m N` caps per file, `-q`
+answers in the exit status alone.
 
 To feed another mdgrep, chain stages (below) rather than reparsing text.
 **Parse with `--format compact`** — one record per line under the path, where
@@ -115,8 +118,9 @@ Rows 1–2 act on the **matched node** and are refused with `--section`; rows 3�
 act on the **region** `--section` and `--expand` widen to.
 
 **More than one match is an error**: nothing written, hits listed — narrow it,
-or say `--expect N` / `--multi`. Search → `--dry-run` → `--expect N`. A checkbox
-already in the asked-for state is `unchanged`, exit 0. The flags that only
+or say `--expect N` / `--multi`. Search → `--dry-run` → `--expect N`. An edit
+reports `- ` and `+ ` lines in the search shape, `= ` for a node already as
+asked (exit 0), and `(dry run)` first under `--dry-run`. The flags that only
 report refuse an edit: `-c`, `-l`, `-m`, `--truncate`, `-A`/`-B`/`-C`,
 `--lines`, `--outline`, and stdin input.
 

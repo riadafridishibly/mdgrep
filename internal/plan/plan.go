@@ -81,7 +81,10 @@ var applyKeeps = map[string]bool{
 	"q": true, "quiet": true,
 	"format": true, "json": true,
 	"n": true, "line-number": true, "N": true, "no-line-number": true,
-	"no-breadcrumb": true, "separator": true, "color": true,
+	"H": true, "with-filename": true, "no-filename": true,
+	"heading": true, "no-heading": true,
+	"breadcrumb": true, "no-breadcrumb": true,
+	"separator": true, "color": true,
 }
 
 // Run carries out a plan of edits. Every entry is planned against the

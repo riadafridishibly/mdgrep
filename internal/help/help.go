@@ -88,6 +88,11 @@ An edit rewrites what the same flags would have printed. --check and
 --prepend act on the region --section and --expand widen it to. Each file is
 written in one atomic go.
 
+An edit reports each line it removed behind "-" and each it added behind "+",
+numbered where it sits in its own version of the file, and a node already as
+asked behind "="; after the mark, the line is written as a search writes one.
+A dry run says "(dry run)" first, since the lines are otherwise the same.
+
 Plans
       --apply FILE      carry out a plan of edits read from FILE ("-" is
                         stdin): one JSON object per line
@@ -156,11 +161,12 @@ Output
                         front of every line of them
       --no-heading      the other way: "path:line:text" on every line
       --breadcrumb      print the heading trail above each result
-      --no-breadcrumb   do not (the default)
+      --no-breadcrumb   do not
       --outline         one indented line per heading; takes paths, no
                         PATTERN, and none of the Selection flags
-      --separator STR   what to print between two results of a file; nothing
-                        by default, so "--separator --" spells grep's
+      --separator STR   what to print between two results, and between two
+                        files where no heading parts them; nothing by
+                        default, so "--separator --" spells grep's
       --truncate N      print at most N lines of a result, keeping the
                         matched node, then a count of what was held back.
                         Results that touch stay apart under it, since a cap
@@ -192,19 +198,21 @@ than one file could have answered: a directory counts as more than one however
 few markdown documents it holds, and a single file named outright, or markdown
 on stdin, answers for itself. Lines are numbered, and the name goes above a
 file's results rather than in front of each line, when stdout is a terminal.
-So a terminal shows a heading and numbers, and a pipe gets the markdown alone
-unless it asks for more.
+So a terminal shows a heading, the trail and numbers, and a pipe gets the
+markdown alone unless it asks for more.
 
 grep marks a context line with "-" where a matching line takes ":". mdgrep
 prints nodes: every line it prints belongs to a node that matched or to the
 region a Selection flag widened that node to, and neither is context in grep's
 sense -- so every line takes ":" and the output keeps one shape to read. Narrow
 with a filter or another stage rather than by reading the marker. The heading
-trail has no counterpart in grep and is off until --breadcrumb asks for it;
-having nowhere to stand but above a file's results, it is refused beside
---no-heading. The note of what --truncate held back is prose rather than a line
-of the file, so it belongs to the same heading a person reads; --format compact
-and --format json carry the two counts as numbers wherever it does not.
+trail has no counterpart in grep, so a pipe gets none until --breadcrumb asks;
+it goes wherever a heading goes, since a heading is what says a person is
+reading, and --no-breadcrumb leaves it out. Having nowhere to stand but above
+a file's results, it is refused beside --no-heading. What --truncate held back
+is noted where it was held back: "… +N lines" on a line of its own, which
+names its file the way every other line does and takes no line number, having
+none. --format compact and --format json carry the two counts as numbers.
 
 compact is one tab-separated record per result under the path — "start[-end]
 kind text before after", newlines escaped — for a fraction of what json costs.
@@ -212,8 +220,8 @@ before and after are the lines --truncate held back on each side; the span is
 the node's, so the text starts at start plus before. json adds the breadcrumb
 and the score. Both keep touching nodes apart where plain runs them into one
 passage -- as --truncate does too -- and both report a refusal in their own
-shape. Colour is off when
-stdout is not a terminal, NO_COLOR is set or TERM=dumb.
+shape. Colour is off when stdout is not a terminal, NO_COLOR is set or
+TERM=dumb.
 
 A short flag takes its value attached or apart: -C2 and -C 2 are the same.
 Everything after -- is a PATTERN or a PATH, dashes and all.
