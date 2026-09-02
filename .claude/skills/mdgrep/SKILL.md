@@ -73,8 +73,10 @@ ladder, `(item 13-14, list 13-15, section 11-15)`, whose entries are what
 the cheapest view of a tree. `--truncate N` caps one node, the guard against a
 hit inside a 400-line fence; under it two results that touch stay apart rather
 than sharing one cap, and its `… +N lines` note is a line of its own with the
-file name and no line number (`--format compact` and `--format json` carry the
-counts as numbers). `-l` names files, `-c` counts, `-m N` caps per file, `-q`
+file name and no line number — left out where the page it capped is one of the
+spans the note writes out and the lines are numbered, since the span and the
+numbers already say it (`--format compact` and `--format json` carry the counts
+as numbers always). `-l` names files, `-c` counts, `-m N` caps per file, `-q`
 answers in the exit status alone.
 
 To feed another mdgrep, chain stages (below) rather than reparsing text.

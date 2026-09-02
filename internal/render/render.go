@@ -231,7 +231,18 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	last := -1
 	var shown []string
 	for _, r := range results {
-		window, before, after := p.cap(p.page(src, r), r)
+		full := p.page(src, r)
+		window, before, after := p.cap(full, r)
+		// The note writes out the spans a result could be widened to, so where
+		// the page it capped is one of them the note's own numbers are the
+		// count: "item 495-505" beside a printed 495 says the ten lines held
+		// back as plainly as "… +10 lines" does. It takes the numbers to say
+		// it, though -- they are what places the window inside the span -- and
+		// a page of match lines is no span at all, so there the counts are the
+		// only thing that says lines were cut.
+		if p.LineNumbers && named(full, r.Rungs) && p.spanNote(r, window) != "" {
+			before, after = 0, 0
+		}
 		// Context is counted in the file and clipped to it, so two windows
 		// reaching the same line are one group of file lines rather than two
 		// copies of it. The lines a widener asked for are the region itself
@@ -282,6 +293,21 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 			p.writeNote(src.Path, note)
 		}
 	}
+}
+
+// named reports whether a page is exactly one of the spans the note writes
+// out. The page is sorted and holds each line once, so covering the span's
+// count from its first line to its last is the whole of it.
+func named(page []outLine, rungs []search.Rung) bool {
+	if len(page) == 0 {
+		return false
+	}
+	for _, g := range rungs {
+		if len(page) == g.End-g.Start+1 && page[0].n == g.Start && page[len(page)-1].n == g.End {
+			return true
+		}
+	}
+	return false
 }
 
 // past drops the lines a group already printed, so a window reaching back into

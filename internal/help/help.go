@@ -201,9 +201,10 @@ Output
       --span            print the expand ladder after each result (default)
       --no-span         do not
       --truncate N      print at most N lines of a result, keeping the
-                        matched node, then a count of what was held back.
-                        Results that touch stay apart under it, since a cap
-                        spent on the first of them would drop the rest
+                        matched node, then a count of what was held back
+                        unless the span note already says it. Results that
+                        touch stay apart under it, since a cap spent on the
+                        first of them would drop the rest
       --color WHEN      auto, always or never (default auto)
       --format WHEN     plain (default), compact, json or stream
       --json            one JSON object per result (same as --format json)
@@ -260,7 +261,9 @@ reading, and --no-breadcrumb leaves it out. Having nowhere to stand but above
 a file's results, it is refused beside --no-heading. What --truncate held back
 is noted where it was held back: "… +N lines" on a line of its own, which
 names its file the way every other line does and takes no line number, having
-none. --format compact and --format json carry the two counts as numbers.
+none. It is left out where the page it capped is one of the spans the note
+writes out and the lines are numbered, since the span and the numbers are the
+count. --format compact and --format json carry the two as numbers always.
 
 compact is one tab-separated record per result under the path — "start[-end]
 kind text before after hits spans", newlines escaped — for a fraction of what

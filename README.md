@@ -603,13 +603,14 @@ other string.
 fenced block otherwise prints all 400 lines:
 
 ```
-$ mdgrep "orchard survey" docs --truncate 3
+$ mdgrep "orchard survey" docs --truncate 3 -n
 docs/pruning.md
 Pruning › Survey
-12:```bash
-13:orchard survey --block 04
-14:orchard survey --block 05
+8:orchard survey --block 03
+9:orchard survey --block 04
+10:orchard survey --block 05
 … +38 lines
+(code 7-49, section 3-49)
 ```
 
 Two results that touch are printed as one passage, so that a page reads the
@@ -621,6 +622,21 @@ The `… +N lines` note is printed wherever lines were held back, on a line of
 its own that names its file the way every other line does and takes no line
 number, having none — `docs/pruning.md:… +38 lines` on a pipe. `--format
 compact` and `--format json` carry the two counts as numbers.
+
+It is left out where the span note already says it. Above, the page is the
+lines that matched and no span names it, so the count is the only thing that
+says lines were cut. Where the page is one of the spans — a widener asked for
+the region, or a node matcher claimed it whole — the note's own numbers are
+the count, and repeating it would be saying the same thing twice:
+
+```
+$ mdgrep "" notes.md --todo --truncate 1 -n
+495:- [ ] What the shell draws while a body is coming — the header costs
+(item 495-505, list 443-505, section 423-505)
+```
+
+It takes the line numbers to say it, since they are what places the window
+inside the span, so with `-N` the counts come back.
 
 ### Machine-readable output
 

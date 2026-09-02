@@ -505,3 +505,35 @@ func TestMachineFormatsRefuseThePageFlags(t *testing.T) {
 		}
 	}
 }
+
+// --truncate says what it held back, and the span note says how long the node
+// was. Where the page it capped is one of the spans the note writes out, those
+// are the same fact twice: the note's own numbers are the count. Where it is
+// not -- a page of match lines, which no span names -- the count is the only
+// thing that says lines were cut, and it stays.
+func TestTruncateSaysWhatTheNoteDoesNot(t *testing.T) {
+	path := doc(t, notes)
+	// The page is the task item whole, which the note's first span names.
+	want := strings.Join([]string{
+		"13:- [ ] rotate the foo key",
+		"(item 13-14, list 13-15, section 11-15)",
+		"--",
+		"15:- [ ] archive the logs",
+		"(item 15-15, list 13-15, section 11-15)",
+		"",
+	}, "\n")
+	if got := page(t, "", path, "--todo", "-n", "--truncate", "1"); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	// The page is the two lines of the paragraph that matched, and no span
+	// says there were two rather than three.
+	want = strings.Join([]string{
+		"7:Install foo, then run foo doctor.",
+		"… +1 line",
+		"(paragraph 7-9, section 5-9)",
+		"",
+	}, "\n")
+	if got := page(t, "foo doctor|foo again", path, "-n", "--truncate", "1"); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
