@@ -257,6 +257,7 @@ depth, and disagree as soon as the list is not there.
 | `--expand N` | climbs block parents, saturates | climbs into the heading hierarchy |
 | `--section` | widens the region | unchanged; now also means "print it whole" |
 | `--span` / `--no-span` | — | new: the span note, on by default in plain |
+| `--at N-M` | — | new: select these lines outright; no matcher, no PATTERN |
 | `--separator` | default `''` | default `--` |
 
 `--siblings` is symmetric where the old flags were not. Asymmetric context is
@@ -277,6 +278,84 @@ positional when exactly one is left. That is not available here: in
 So `permute` gains one rule: **an optional-valued flag followed by a bare
 integer consumes it.** `--expand=2` needs nothing. `permute` already
 special-cases the attached `-C2` form, so this is in keeping.
+
+### 2.6 `--at`: taking a span back
+
+The note hands out spans; `--at` is what takes one back. `--at 693-715` selects
+lines 693 to 715 of a file as one result, and `--at 700` selects one line.
+The numbers are 1-based and inclusive — the numbers the note printed. The flag
+repeats, naming several regions of the one file.
+
+An address selects **by construction**, the way `--anchor` does, so no matcher
+runs and §1.2's second rule applies: every line of the region is a match line,
+and the region therefore prints whole with no widener asked for.
+
+`--at` takes no PATTERN. Every positional beside it is a path, as under
+`--outline` — otherwise `mdgrep --at 693-715 tracking.md` would read the file
+name as the pattern.
+
+A pattern given with `-e` beside an address is a **guard**, not a search: the
+address says which lines to take, the pattern says what they should still say.
+The guard is an ordinary search run inside the region — `-k`, `--todo`, `-v`
+and the case flags all read there as they read anywhere else — and it must
+find at least one node or the run refuses. Searching *inside* an address, and
+keeping what the search found, is `--then`'s job:
+
+```
+$ mdgrep --at 507-724 tracking.md --then CONDSTORE
+```
+
+An address names lines of **one file**, so a run where more than one file could
+answer is refused rather than applying the same numbers to each of them.
+
+Bounds are checked against the file: a start below 1, a start after the end, or
+an end past the last line refuses the run (status 2) rather than being clipped
+to it. Context lines clip (§2.1) because they pad something that was found; an
+address *is* the thing being found, and one that does not fit the file is a
+stale note or a typo — worth being told, rather than quietly answered with
+fewer lines than were asked for.
+
+The kind reported is the block whose span is exactly the address — which is
+what every rung of a note is — and `region` where the address names no single
+block. The ladder is built from the smallest block containing the address, the
+rule §1.3 already gives for a merged result, so the note reads the same either
+way.
+
+`--anchor` and `--outline` are refused beside it. One selects a heading by
+name, the other is one line per heading, and an address is neither.
+
+### 2.7 An address as the thing an edit rewrites
+
+The region an address names is the region an edit rewrites. `--replace`,
+`--delete`, `--append` and `--prepend` act on exactly those lines. The node
+edits — `--check`, `--uncheck`, `--toggle`, `--set-text` — act on the node the
+address resolves to, and refuse one that resolves to none in the words they
+already use: `not a task list item`, and `--set-text does not apply to a
+region; use --replace`.
+
+`--expect` and `--multi` are refused beside an address. Both state how many
+nodes a search should have found, and an address found one by saying so.
+
+This is the loop the note could not close on its own. A search reports where
+something is, and without an address there is no way to say that back — the
+note is a precise instruction nothing can execute. With one, the second command
+rewrites what the first reported without searching for it again, which matters
+most where the pattern that found a node is not a pattern that would find it
+*only*:
+
+```
+$ mdgrep CONDSTORE tracking.md -n
+
+693:- [ ] `SELECT (CONDSTORE)` + `FETCH CHANGEDSINCE` loop against all three — the pair
+(item 693-715, list 509-722, section 507-724)
+
+$ mdgrep -e CONDSTORE --at 693-715 tracking.md --check
+```
+
+The guard is what keeps the second command honest. It edits by line number, and
+`-e CONDSTORE` refuses it if those lines no longer hold what the first command
+found there — which is the one failure a line number has that a pattern does
+not.
 
 ## 3. Worked examples
 
@@ -449,6 +528,29 @@ of `--section` and delivering less.
 Widen the wrong way in a file like this and you have pulled 214 lines into
 context to read 23.
 
+### 3.9 Consuming the note
+
+The note in §3.3 said `item 13-14`. That is an address:
+
+```
+$ mdgrep --at 13-14 spec.md -n
+
+13:- [ ] rotate the foo key
+14:      the old key is in the vault
+(item 13-14, list 13-15, section 11-15)
+```
+
+The same lines `--expand` printed in §3.4, without the search that found them.
+The note is unchanged again, for the reason §1.3.1 gives: it says where the
+lines sit, not how they were reached.
+
+```
+$ mdgrep -e vault --at 13-14 spec.md --check
+```
+
+The address selects the item, `--check` ticks it, and `-e vault` refuses the
+whole thing if lines 13 to 14 are no longer the item that search found.
+
 ## 4. Machine formats
 
 `--format compact`, `--format json` and `--format stream` are unchanged. They
@@ -470,6 +572,41 @@ comma-separated as `kind:start-end`.
 
 `--outline` is unchanged. It already prints one line per heading, chosen by
 `HitStart` for exactly the reason this specification generalises.
+
+`spans` is what `--at` consumes: an entry of it, written `start-end`, is an
+address. A search reported in `--json` and an edit made with `--at` are the two
+halves of one workflow, and this is the join between them.
+
+### 4.1 `--apply` entries
+
+A plan is the machine format that comes *in*, and it names its nodes the way a
+command line does: today every entry carries a `"match"`, which is the pattern
+that selects the node to edit. An entry gains an alternative:
+
+- `"at"` — the address, as a string, in `--at`'s syntax: `"693-715"` or
+  `"700"`.
+
+An entry names its node one way or the other, so `"match"` alone and `"at"`
+alone are both complete, and an entry with neither is refused as it is today.
+`"match"` beside `"at"` is the guard of §2.6: the pattern is searched inside
+the address, and the entry is refused if it is not there.
+
+`"multi"` and `"expect"` are refused beside `"at"`, as their flags are.
+`"kind"`, `"expand"`, `"section"` and `"section-body"` keep their meanings —
+the widening climbs from the smallest block containing the address.
+
+Nothing else about a plan changes. Two entries reaching for the same lines are
+already refused before anything is written, which is the mistake addresses make
+easiest to write: `orderChanges` catches an overlap whether the entries that
+made it named their nodes by pattern or by number.
+
+The reason to want addresses in a plan is the reason to want them on the
+command line, doubled. A plan is generated by one run and applied by another,
+so every entry that names its node by pattern is a search repeated against a
+file that may have moved under it, gated by `"expect"` and `"multi"` because
+the pattern might now find a different number of things. An addressed entry has
+one node by construction, and `"match"` beside it turns the gate into a
+question with a yes-or-no answer: is line 693 still what I read?
 
 ## 5. Implementation
 
@@ -514,6 +651,30 @@ both hits and the unmatched node between them.
 `promote` continues the expand ladder into the heading hierarchy when block
 parents run out, reusing `sectionEnd`.
 
+`Options` gains the address:
+
+```go
+At []Region // when set, these regions are the results; no matcher runs
+```
+
+`File` answers an address before it considers a block. Each region becomes one
+`Result` with `Start`/`End` and `HitStart`/`HitEnd` set to it, `Hits` empty
+(§1.2), `Kind` the block whose span is exactly that region or `mdoc.KindRegion`
+where there is none, and `Rungs` built from the smallest block containing it.
+It is `anchorHits`' shape carried one step further: an anchor still names a
+block, and an address need not.
+
+`mdoc` gains `KindRegion = "region"`. It is the one kind no parse produces —
+`--at` is the only thing that can select a span the document does not itself
+draw — and it is what makes `--set-text`'s existing refusal read correctly
+without a new message.
+
+The guard is not part of the address. It is an ordinary search — `search.File`
+with `Scope` set to the addresses and `At` unset — run by the caller, whose
+answer is only whether it found anything. Refusing is the caller's business the
+way `--expect`'s refusal already is, and it goes out through the same
+`report.Refused`.
+
 ### 5.2 `internal/render`
 
 `writePrefix` takes a marker so a context line gets `-` where a match line
@@ -538,6 +699,17 @@ Rebind `-A`/`-B`/`-C` to printer fields. Drop `--lines`, add `--siblings`,
 `--span`/`--no-span`. Make `--expand` optional-valued and teach `permute` the
 integer rule.
 
+`--at` is a repeating `flag.Value` reading `N` or `N-M` into `[]search.Region`,
+so `permute` needs nothing: it carries its value the ordinary way. `Validate`
+checks the pair — 1-based, ascending — and the file's length is checked where
+the file is read, since that is where the length is known. `Edit` refuses
+`--expect` and `--multi` beside it, `Matcher` refuses `--anchor`, and
+`OutlineFlags` gains it.
+
+`main.go` learns one more case in the switch that decides whether the first
+positional is PATTERN: with `--at`, as with `--outline`, it is a path. The
+same place refuses a run where an address stands against more than one file.
+
 `widens` loses `lines` and the `-A`/`-B`/`-C` entries, which no longer widen
 anything; `--siblings` joins it. `streamIgnores` gains `-A`/`-B`/`-C`,
 `--span` and `--no-span`, since a stream prints nothing.
@@ -549,7 +721,8 @@ edit, and the one refusing them beside `--outline`.
 
 `internal/help/help.go` — the Selection and Output sections, and the paragraph
 beginning "grep marks a context line", which states the opposite of this
-specification.
+specification. `--at` joins Selection, and the Editing section's list of the
+keys a plan entry takes gains `"at"`.
 
 Most plain-output assertions in `cli_test.go` and `regression_test.go` change.
 `stream_test.go`, `apply_test.go`, `then_test.go` and `atomic_test.go` should
@@ -557,13 +730,33 @@ not: `Result.Start`/`Result.End` keep their meaning, so edits, streams and
 pipeline scoping are untouched. If one of those fails, something widened a
 region that should only have been printed.
 
+`--at` is new behaviour rather than changed behaviour, so it is new tests
+beside those: selection and bounds in `cli_test.go`, the edits of §2.7 in
+`apply_test.go`, and the `"at"` key and its guard beside the plan tests already
+there.
+
+### 5.5 `internal/plan`
+
+`planEntry` gains `At *string`, a pointer for the reason `Match` is one.
+`planSearch` requires one of the two, reads `At` into `Options.At`, and refuses
+`Multi` and `Expect` beside it. Where both are given, `Match` builds the
+matcher for the guard search rather than for the selection.
+
+`applyKeeps` is unchanged: `--at` on a command line beside `--apply` is refused
+along with every other flag that selects, because the entries do the selecting.
+
 ## 6. Deferred
 
-- **No flag consumes a span.** The note hands you `693-715` and mdgrep has no
-  way to take it back; you need `sed -n 693,715p`. An `--at N-M` flag would
-  close the loop, and would make the note the machine-readable half of a
-  two-step workflow rather than a hint. This is the largest remaining gap: the
-  note is now a precise instruction that nothing can execute.
+- **An address names one file.** In a pipe the note prints `path:(item
+  693-715, …)`, and `--at` reads only the numbers, so a run over several files
+  is several runs — or a plan, whose entries carry a `"path"` each. `--at
+  PATH:N-M` is the obvious closing of that gap, and is left out here only
+  because the syntax wants deciding beside `--exec`'s quoting rather than in
+  passing.
+- **`--at` does not combine with `--outline`.** "The outline of these lines" is
+  a sensible question and is refused, because `--outline` supplies a pattern
+  and a kind filter of its own and an address supplies neither. Cheap to allow
+  once the two ways of filling in a missing search are one way.
 - **The ladder stops at the first section.** Outer sections are reachable by
   counting past it, but the note will not tell you they exist or what they
   cost. Defensible while sections are the unit people widen to; revisit if
