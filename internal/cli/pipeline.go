@@ -313,7 +313,14 @@ func StageFlags(fs *flag.FlagSet, i, n int) error {
 		if named := Given(fs, func(name string) bool { return pipeReads[name] }); named != "" {
 			return fmt.Errorf("a pipeline reads its files once, so %s belongs on the first stage", named)
 		}
-
+		// An address names lines of one file, and it is the first stage that
+		// says which files a run reads. Further along it would be applied to
+		// whatever the stage before it handed over, in however many files --
+		// and its two refusals, that only one file could answer and that the
+		// lines are there, are both asked where the files are named.
+		if named := Given(fs, func(name string) bool { return name == "at" }); named != "" {
+			return fmt.Errorf("%s names lines of one file, so it belongs on the stage that names the files", named)
+		}
 	}
 	if i < n-1 {
 		if named := Given(fs, func(name string) bool { return streamEdits[name] }); named != "" {

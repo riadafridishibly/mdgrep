@@ -233,8 +233,8 @@ func TestCompactKeepsOneRecordPerLine(t *testing.T) {
 		t.Errorf("the path line should have no tab in it: %q", lines[0])
 	}
 	fields := strings.Split(lines[1], "\t")
-	if len(fields) != 5 {
-		t.Fatalf("want 5 tab-separated fields, got %d: %q", len(fields), lines[1])
+	if len(fields) != 7 {
+		t.Fatalf("want 7 tab-separated fields, got %d: %q", len(fields), lines[1])
 	}
 	if fields[0] != "3-5" {
 		t.Errorf("span = %q, want 3-5", fields[0])
@@ -442,8 +442,8 @@ func TestSeparatorIsWhatTheCallerSays(t *testing.T) {
 		wants string
 		omits string
 	}{
-		{name: "default", omits: "--\n"},
-		{name: "asked for", args: []string{"--separator", "--"}, wants: "--\n"},
+		{name: "default", wants: "--\n"},
+		{name: "withdrawn", args: []string{"--separator", ""}, omits: "--\n"},
 		{name: "chosen", args: []string{"--separator", "~~"}, wants: "~~\n", omits: "--\n"},
 	}
 	for _, tt := range tests {
@@ -464,10 +464,12 @@ func TestSeparatorIsWhatTheCallerSays(t *testing.T) {
 }
 
 // --truncate caps one node, which is the guard against a hit inside a large
-// fenced block printing the whole block.
+// fenced block printing the whole block. Printing the block is what --expand
+// asks for; without a widener the page is the matched line and there is
+// nothing to cap.
 func TestTruncateCapsOneResult(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "one", path, "--truncate", "3", "--heading")
+	stdout, _, code := capture(t, "one", path, "--expand", "--truncate", "3", "--heading")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -484,7 +486,7 @@ func TestTruncateCapsOneResult(t *testing.T) {
 // fence and printed its opening lines. It slides down to hold the hit.
 func TestTruncateKeepsTheMatchedLine(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "five", path, "--truncate", "3", "--heading")
+	stdout, _, code := capture(t, "five", path, "--expand", "--truncate", "3", "--heading")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -502,8 +504,8 @@ func TestTruncateKeepsTheMatchedLine(t *testing.T) {
 		t.Fatalf("exit = %d", code)
 	}
 	fields := strings.Split(strings.Split(stdout, "\n")[1], "\t")
-	if len(fields) != 5 || fields[3] != "4" || fields[4] != "0" {
-		t.Errorf("fields = %q, want 5 ending in 4, 0:\n%s", fields, stdout)
+	if len(fields) != 7 || fields[3] != "4" || fields[4] != "0" {
+		t.Errorf("fields = %q, want 7 with 4, 0 in the truncation counts:\n%s", fields, stdout)
 	}
 	// The window fills its budget rather than starting flush at the hit, so
 	// the text runs from start+before -- "four" -- and holds the match.
@@ -514,7 +516,7 @@ func TestTruncateKeepsTheMatchedLine(t *testing.T) {
 
 func TestTruncateSaysOneLineOnce(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "one", path, "--truncate", "6", "--heading")
+	stdout, _, code := capture(t, "one", path, "--expand", "--truncate", "6", "--heading")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -551,8 +553,8 @@ func TestTruncateStaysParseable(t *testing.T) {
 		t.Errorf("the count belongs in its own field, not in the text:\n%s", stdout)
 	}
 	fields := strings.Split(strings.Split(strings.TrimSpace(stdout), "\n")[1], "\t")
-	if len(fields) != 5 || fields[3] != "0" || fields[4] != "4" {
-		t.Errorf("truncated fields = %q, want 5 fields ending in 0, 4:\n%s", fields, stdout)
+	if len(fields) != 7 || fields[3] != "0" || fields[4] != "4" {
+		t.Errorf("truncated fields = %q, want 7 fields with 0, 4 in the counts:\n%s", fields, stdout)
 	}
 
 	stdout, _, code = capture(t, "one", path, "--truncate", "3", "--json")
@@ -628,6 +630,16 @@ func TestPipedOutputIsBareByDefault(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
+	// The span note is the one line a pipe still gets by default: it says
+	// what the result could be widened to, which is a fact about the file
+	// rather than decoration of the page. --no-span takes it back.
+	if stdout != "- [ ] thin the fruit\n(item 17-17, list 17-17, section 15-17)\n" {
+		t.Errorf("stdout = %q, want the markdown and its span note", stdout)
+	}
+	stdout, _, code = capture(t, "thin the fruit", path, "--no-span")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
 	if stdout != "- [ ] thin the fruit\n" {
 		t.Errorf("stdout = %q, want the markdown alone", stdout)
 	}
@@ -684,7 +696,7 @@ func TestHeadingChoosesWhereTheNameGoes(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if !strings.HasSuffix(stdout, "a.md:17:- [ ] thin the fruit\n") {
+	if !strings.Contains(stdout, "a.md:17:- [ ] thin the fruit\n") {
 		t.Errorf("want path:line:text on the line itself:\n%s", stdout)
 	}
 }
@@ -756,7 +768,7 @@ func TestBreadcrumbWithdrawnTakesItsHeadingWithIt(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if !strings.HasSuffix(stdout, "a.md:- [ ] thin the fruit\n") || strings.Contains(stdout, "›") {
+	if !strings.Contains(stdout, "a.md:- [ ] thin the fruit\n") || strings.Contains(stdout, "›") {
 		t.Errorf("want the piped layout and no trail:\n%s", stdout)
 	}
 }
@@ -1097,7 +1109,7 @@ func TestTruncateNoteIsPrintedOnAPipe(t *testing.T) {
 	if err := os.WriteFile(path, []byte(long), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stdout, _, code := capture(t, "^one$", path, "--truncate", "2")
+	stdout, _, code := capture(t, "^one$", path, "--expand", "--truncate", "2")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -1105,7 +1117,7 @@ func TestTruncateNoteIsPrintedOnAPipe(t *testing.T) {
 		t.Errorf("the cut was not reported:\n%s", stdout)
 	}
 
-	stdout, _, code = capture(t, "^one$", dir, "--truncate", "2")
+	stdout, _, code = capture(t, "^one$", dir, "--expand", "--truncate", "2")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}

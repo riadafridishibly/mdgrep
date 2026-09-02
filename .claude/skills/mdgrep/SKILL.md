@@ -6,14 +6,15 @@ allowed-tools: Bash(mdgrep:*), Read
 
 # mdgrep
 
-`mdgrep [OPTIONS] PATTERN [PATH...]` prints the whole node a hit lands in — the
-bullet with its children, the table row, the fence with its fences. The same
-flags select what an edit rewrites.
+`mdgrep [OPTIONS] PATTERN [PATH...]` prints the lines that matched, the way
+`grep` does, and closes each result with the spans it could be widened to — the
+bullet, the list, the section. Ask for one of those with a widener and it
+prints whole. The same flags select what an edit rewrites.
 
-PATTERN is a regexp, always required; `""` matches everything, which is how a
-filter-only query is written. It matches the markdown as written, so `^## ` is
-every second-level heading. PATH is files or directories, default cwd, stdin
-when piped. Exit **0** matched, **1** no match, **2** error.
+PATTERN is a regexp; `""` matches everything, which is how a filter-only query
+is written. It matches the markdown as written, so `^## ` is every second-level
+heading. `--outline` and `--at` take none. PATH is files or directories,
+default cwd, stdin when piped. Exit **0** matched, **1** no match, **2** error.
 
 `mdgrep --help TOPIC` (`matching`, `filters`, `selection`, `editing`, `plans`,
 `pipelines`, `output`, or any long flag name) costs 130–540 tokens against
@@ -27,10 +28,28 @@ when piped. Exit **0** matched, **1** no match, **2** error.
 | `-k KINDS` | `heading,item,list,paragraph,code,quote,table,row,cell,html,frontmatter` |
 | `--todo` / `--done` / `--task` | unticked / ticked / any checkbox item |
 | `--section` / `--section-body` | enclosing section, with / without its heading |
-| `--expand N` | climb N ancestor levels |
+| `--expand [N]` | bare, the matched node whole; N, that many rungs up the ladder |
+| `--siblings N` | keep N sibling blocks each side |
+| `--at N-M` | take those lines of one file outright, as a span note writes them |
+| `-B` / `-A` / `-C N` | pad the page N lines before / after / both |
 
 Narrow before widening: `--section` over a tree can cost more than reading the
 file. Locate with `-l`, re-run with `--section` on the one file.
+
+A widener (`--expand`, `--section`, `--section-body`, `--siblings`) is the only
+switch between line output and node output. `-B`/`-A`/`-C` widen nothing: they
+pad the printed page, are counted in the file and clipped to it the way `grep`
+counts them, and the last of the three typed wins, so `-C 3 -B 1` is one line
+before and three after.
+
+`--at` is how a span note is said back. The numbers are the 1-based inclusive
+ones the note printed; it names lines of **one** file, so a run where more than
+one could answer is refused, and bounds are checked against the file rather
+than clipped to it. A pattern given with `-e` beside it is a **guard**, not a
+search: the address says which lines to take, the pattern says what they should
+still say, and the run is refused if it is not there. `--anchor`, `--outline`,
+`--expect`, `--multi`, `-k` and the checkbox filters are all refused beside it,
+and it belongs on the stage that names the files.
 
 ## Output
 
@@ -43,9 +62,12 @@ quarter to a half, most on short nodes. Ask for what you need: `-n` numbers,
 `-H` / `--no-filename` name the file or not, `--heading` moves that name above
 the file's results and brings the heading trail with it, `--breadcrumb` asks
 for the trail alone (refused beside `--no-heading`, which has nowhere to put
-one). Every printed line takes `:` — a node's own lines and the ones
-`--section` widened it to alike — so narrow with a filter or another stage,
-never by reading the marker.
+one). A line the matcher pointed at takes `:` and one a context flag pulled in
+takes `-`; under a widener the whole region is the answer and every line of it
+takes `:`. `--` stands between two groups of file lines that are not next to
+each other — `--separator ''` leaves none. Each result closes with its expand
+ladder, `(item 13-14, list 13-15, section 11-15)`, whose entries are what
+`--at` takes back; `--no-span` drops it.
 
 `--outline` is one indented line per heading and takes paths, not a pattern —
 the cheapest view of a tree. `--truncate N` caps one node, the guard against a
@@ -60,17 +82,25 @@ To feed another mdgrep, chain stages (below) rather than reparsing text.
 `--json` costs 2–3× as much for the breadcrumb, the score and an edit's `old`:
 
 ```
+$ mdgrep "sap|Pruning" pruning.md --format compact
 pruning.md
-1	heading	# Pruning	0	0
-5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0
+1	heading	# Pruning	0	0	1	heading:1-1,section:1-6
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0	6	paragraph:5-6,section:1-6
 ```
 
-Tab-separated `start[-end] kind text before after`, newlines escaped — in the
-path too, so a record is one line and a path is the line with no tab. The span
-is the node's, the text is what `--truncate` kept, and `before` and `after` are
-the lines it held back on each side: the text starts at start plus `before`. An
+Tab-separated `start[-end] kind text before after hits spans`, newlines escaped
+— in the path too, so a record is one line and a path is the line with no tab.
+The span is the node's, the text is what `--truncate` kept, and `before` and
+`after` are the lines it held back on each side: the text starts at start plus
+`before`. `hits` are the lines that matched, comma-separated and **empty for a
+node matcher** (`-v`, or the empty pattern behind a filter) — which is how a
+reader tells "every line" from "these lines". `spans` is the expand ladder as
+`kind:start-end`, in ladder order, so the index is the `--expand` count. An
 edit records `start[-end] op applied|dry|unchanged new`, an insertion the one
 line it lands on.
+
+Neither machine format prints a page, so `-A`, `-B`, `-C` and `--span` are
+refused beside them.
 
 ## Pipelines
 
@@ -122,7 +152,9 @@ or say `--expect N` / `--multi`. Search → `--dry-run` → `--expect N`. An edi
 reports `- ` and `+ ` lines in the search shape, `= ` for a node already as
 asked (exit 0), and `(dry run)` first under `--dry-run`. The flags that only
 report refuse an edit: `-c`, `-l`, `-m`, `--truncate`, `-A`/`-B`/`-C`,
-`--lines`, `--outline`, and stdin input.
+`--siblings`, `--outline`, and stdin input. `--at` selects the region an edit
+rewrites, which is what makes an edit by line number possible — pair it with
+`-e GUARD` so a stale address is refused rather than applied.
 
 ### `--apply` — 2 or more edits in one process
 
@@ -146,11 +178,13 @@ mdgrep "" . --todo --format compact             # every open box, parseable
 mdgrep --outline docs -N                        # what is in this tree
 mdgrep "sign the tarball" --check --expect 1    # tick exactly one task
 mdgrep "^## Changelog" --section-body --replace-from CHANGELOG.md --dry-run
+mdgrep -e "rotate the key" --at 693-715 notes.md --check   # tick a span the note gave back
 mdgrep "^## Release" --section docs --then --todo --check --multi  # tick the boxes in one section
 ```
 
 **`mdgrep --help <flag>` for:** `--anchor` / `--anchor-style` (a heading from a
 `#slug` link), `--fuzzy` / `--min-score` (typo-tolerant, best-first), `-e`
-(alternative patterns), `-w` / `-v` / `-s` / `-S`, `-B` / `-A` / `-C` /
-`--lines` (padding), `--ext` / `--hidden` / `--no-ignore`, `--color`, the four
-`--*-from FILE` edits.
+(alternative patterns), `-w` / `-v` / `-s` / `-S`, `-B` / `-A` / `-C`
+(page padding), `--at` (addresses), `--siblings`, `--span` / `--separator`,
+`--ext` / `--hidden` / `--no-ignore`, `--color`, the four `--*-from FILE`
+edits.

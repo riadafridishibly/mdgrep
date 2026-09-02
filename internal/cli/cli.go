@@ -32,7 +32,10 @@ type Config struct {
 	Checked    bool
 	Unchecked  bool
 	Opt        search.Options
-	Context    int
+	Expand     OptExpand
+	At         AtList
+	Before     int
+	After      int
 	Nums       bool
 	NoNums     bool
 	Crumb      bool
@@ -42,6 +45,8 @@ type Config struct {
 	WithName   bool
 	NoName     bool
 	Separator  OptString
+	Span       bool
+	NoSpan     bool
 	Truncate   int
 	Outline    bool
 	Color      string
@@ -184,6 +189,134 @@ func (o *OptTopic) Set(v string) error {
 	return nil
 }
 
+// OptExpand is --expand, which climbs the expand ladder and may say how far.
+// Bare --expand is the node that matched, so the count is optional:
+// IsBoolFlag is what lets the bare spelling through, and OptionalValue is what
+// tells permute to hand it a following bare integer -- which the flag package
+// will not do for a bool flag, and without which "--expand 2" would leave the
+// 2 standing where PATTERN and PATH are waiting for it.
+type OptExpand struct {
+	n   int
+	set bool
+}
+
+func (o *OptExpand) String() string      { return strconv.Itoa(o.n) }
+func (o *OptExpand) IsBoolFlag() bool    { return true }
+func (o *OptExpand) OptionalValue() bool { return true }
+
+// Count is how many rungs to climb, and Asked whether --expand was given at
+// all. The two differ under an address, where bare --expand is the block
+// holding the lines rather than the lines themselves.
+func (o OptExpand) Count() int  { return o.n }
+func (o OptExpand) Asked() bool { return o.set }
+
+func (o *OptExpand) Set(v string) error {
+	// "true" and "false" are what the flag package synthesises for a bare
+	// --expand and for --expand=false; neither is a count.
+	switch v {
+	case "true":
+		o.set = true
+		return nil
+	case "false":
+		return nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("--expand climbs a number of rungs: %q", v)
+	}
+	o.n, o.set = n, true
+	return nil
+}
+
+// AtList collects --at, which names lines of a file outright rather than
+// searching for them. It repeats, so one run can take several regions of the
+// one file, and it keeps what it was given so a refusal can quote it back.
+type AtList struct {
+	regions []search.Region
+	raw     []string
+}
+
+func (a *AtList) String() string { return strings.Join(a.raw, ",") }
+
+// Regions is the addresses, zero-based and inclusive the way a Result reports
+// a region, from the 1-based numbers a note printed.
+func (a AtList) Regions() []search.Region { return a.regions }
+
+func (a *AtList) Set(v string) error {
+	r, err := ParseAddress(v)
+	if err != nil {
+		return err
+	}
+	a.raw = append(a.raw, v)
+	a.regions = append(a.regions, r)
+	return nil
+}
+
+// ParseAddress reads an address -- "N" or "N-M", the 1-based inclusive numbers
+// a span note prints -- as the region a search selects. A plan entry spells one
+// the same way a command line does, so both read it here. The file's own
+// length is checked where the file is read, since that is where the length is
+// known.
+func ParseAddress(v string) (search.Region, error) {
+	bad := func(why string) (search.Region, error) {
+		return search.Region{}, errors.New(why)
+	}
+	shape := "an address is N or N-M, as a span note writes one"
+	first, last, ranged := strings.Cut(strings.TrimSpace(v), "-")
+	start, err := strconv.Atoi(strings.TrimSpace(first))
+	if err != nil {
+		return bad(shape)
+	}
+	end := start
+	if ranged {
+		if end, err = strconv.Atoi(strings.TrimSpace(last)); err != nil {
+			return bad(shape)
+		}
+	}
+	switch {
+	case start < 1:
+		return bad("lines are numbered from 1")
+	case end < start:
+		return bad("an address runs from its first line to its last")
+	}
+	return search.Region{Start: start - 1, End: end - 1}, nil
+}
+
+// padFlag is -B, -A or -C: how many lines to pad a page with on each side of
+// a matching line. Each writes straight through to the sides it names, so the
+// flags are read in the order they were typed and the last one wins -- which
+// is what lets "-C 3 -B 1" narrow to one line before, as it does in grep.
+// Folding the three afterwards cannot express that: the flag package reports
+// what was given, not the order it was given in.
+type padFlag struct {
+	// name is the spelling the manual documents the flag by, so a refusal
+	// answers as "--before" however short the flag was typed.
+	name          string
+	before, after *int
+}
+
+func (p padFlag) String() string { return "" }
+
+func (p padFlag) Set(v string) error {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("%s pads a page with a number of lines: %q", p.name, v)
+	}
+	// The count is checked here rather than in Validate because the three
+	// flags now share their storage: by the time Validate runs, a negative -C
+	// is indistinguishable from a negative -B.
+	if n < 0 {
+		return fmt.Errorf("%s %d: a count of lines or nodes cannot be negative", p.name, n)
+	}
+	if p.before != nil {
+		*p.before = n
+	}
+	if p.after != nil {
+		*p.after = n
+	}
+	return nil
+}
+
 // PatternList collects repeated -e flags, which are alternatives to one
 // another the way they are in grep.
 type PatternList []string
@@ -223,7 +356,8 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 	fs.BoolVar(&c.Task, "task", false, "")
 	bind(func(n string) { fs.BoolVar(&c.Checked, n, false, "") }, "checked", "done")
 	bind(func(n string) { fs.BoolVar(&c.Unchecked, n, false, "") }, "unchecked", "todo")
-	fs.IntVar(&c.Opt.Expand, "expand", 0, "")
+	fs.Var(&c.Expand, "expand", "")
+	fs.Var(&c.At, "at", "")
 	fs.BoolVar(&c.Opt.Section, "section", false, "")
 	fs.BoolVar(&c.Opt.Body, "section-body", false, "")
 	fs.BoolVar(&c.Check, "check", false, "")
@@ -242,10 +376,10 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 	fs.Var(&c.Expect, "expect", "")
 	fs.BoolVar(&c.DryRun, "dry-run", false, "")
 	fs.Var(&c.Apply, "apply", "")
-	bind(func(n string) { fs.IntVar(&c.Opt.Before, n, 0, "") }, "B", "before")
-	bind(func(n string) { fs.IntVar(&c.Opt.After, n, 0, "") }, "A", "after")
-	bind(func(n string) { fs.IntVar(&c.Context, n, 0, "") }, "C", "context")
-	fs.IntVar(&c.Opt.Lines, "lines", 0, "")
+	bind(func(n string) { fs.Var(padFlag{"--before", &c.Before, nil}, n, "") }, "B", "before")
+	bind(func(n string) { fs.Var(padFlag{"--after", nil, &c.After}, n, "") }, "A", "after")
+	bind(func(n string) { fs.Var(padFlag{"--context", &c.Before, &c.After}, n, "") }, "C", "context")
+	fs.IntVar(&c.Opt.Siblings, "siblings", 0, "")
 	bind(func(n string) { fs.IntVar(&c.Opt.Max, n, 0, "") }, "m", "max-count")
 	bind(func(n string) { fs.BoolVar(&c.NoNums, n, false, "") }, "N", "no-line-number")
 	// Numbering is already on, so -n exists first so that a grep habit does
@@ -260,6 +394,8 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 	fs.BoolVar(&c.NoName, "no-filename", false, "")
 	fs.BoolVar(&c.Outline, "outline", false, "")
 	fs.Var(&c.Separator, "separator", "")
+	fs.BoolVar(&c.Span, "span", false, "")
+	fs.BoolVar(&c.NoSpan, "no-span", false, "")
 	fs.IntVar(&c.Truncate, "truncate", 0, "")
 	fs.StringVar(&c.Color, "color", "auto", "")
 	fs.BoolVar(&c.JsonOut, "json", false, "")
@@ -301,6 +437,11 @@ func (c *Config) Matcher() (match.Matcher, error) {
 		return nil, errors.New("--min-score is the threshold --fuzzy scores against, and does nothing without it")
 	case c.AnchorSty != "" && !c.useAnchor:
 		return nil, errors.New("--anchor-style narrows the conventions --anchor tries, and does nothing without it")
+	// c.At rather than c.Opt.At: the address reaches the options in Validate,
+	// and a refusal that only fires once some other method has run is a
+	// refusal a caller can skip past without meaning to.
+	case c.useAnchor && len(c.At.Regions()) > 0:
+		return nil, errors.New("--anchor names a heading and --at names lines; ask for one")
 	case c.fuzzy:
 		mode = match.Fuzzy
 		// A fuzzy pattern is a question about which node fits best, so the
@@ -309,9 +450,6 @@ func (c *Config) Matcher() (match.Matcher, error) {
 		c.Opt.Rank = true
 	case c.fixed:
 		mode = match.Substring
-	}
-	if c.Context > 0 {
-		c.Opt.Before, c.Opt.After = c.Context, c.Context
 	}
 	if !c.useAnchor {
 		return BuildMatcher(Matching{
@@ -350,11 +488,8 @@ func (c *Config) Validate() error {
 		flag string
 		val  int
 	}{
-		{"--expand", c.Opt.Expand},
-		{"--before", c.Opt.Before},
-		{"--after", c.Opt.After},
-		{"--context", c.Context},
-		{"--lines", c.Opt.Lines},
+		{"--expand", c.Expand.Count()},
+		{"--siblings", c.Opt.Siblings},
 		{"--max-count", c.Opt.Max},
 		{"--truncate", c.Truncate},
 	} {
@@ -362,6 +497,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s %d: a count of lines or nodes cannot be negative", n.flag, n.val)
 		}
 	}
+	// The flags a search reads are settled once, here, so every stage of a
+	// pipeline carries the same answer to the same question.
+	c.Opt.Expand, c.Opt.ExpandSet = c.Expand.Count(), c.Expand.Asked()
+	c.Opt.At = c.At.Regions()
 	// The test is written the long way round because every comparison against
 	// NaN is false: "s < 0 || s > 1" lets NaN through, and a NaN threshold is
 	// not a loose filter but one that scores nothing at all, since the score
@@ -412,8 +551,15 @@ func (c *Config) Printer(w *bufio.Writer, format render.Format, pg Page) *render
 		Heading:     heading,
 		Breadcrumb:  pick(c.Crumb, c.NoCrumb, heading),
 		Format:      format,
-		Separator:   separator(c.Separator),
-		Truncate:    c.Truncate,
+		Separator:   separator(c.Separator, format),
+		Before:      c.Before,
+		After:       c.After,
+		// Asking for a widener asks to see the region whole rather than the
+		// lines that matched inside it. That is the only switch between line
+		// output and node output; there is no separate flag for it.
+		Whole:    c.Expand.Asked() || c.Opt.Section || c.Opt.Body || c.Opt.Siblings > 0,
+		Span:     pick(c.Span, c.NoSpan, true),
+		Truncate: c.Truncate,
 	}
 }
 
@@ -480,8 +626,15 @@ func (c *Config) Edit() (edit.Options, error) {
 	switch {
 	case c.Count || c.FilesOnly:
 		return e, fmt.Errorf("--%s writes files; -c and -l only report on them", e.Op)
-	case c.Opt.Before > 0 || c.Opt.After > 0 || c.Context > 0 || c.Opt.Lines > 0:
-		return e, fmt.Errorf("-A, -B, -C and --lines pad what is printed; they do not select what an edit rewrites")
+	case c.Before > 0 || c.After > 0:
+		return e, fmt.Errorf("-A, -B and -C pad a page with lines around a match; an edit reports the whole of what it wrote")
+	// --siblings widens a result to blocks the matcher never pointed at. As
+	// context that is what it is for; as the region an edit rewrites it would
+	// destroy the neighbours to write the one node that matched.
+	case c.Opt.Siblings > 0:
+		return e, fmt.Errorf("--siblings keeps the blocks either side of a match on the page; it does not select what an edit rewrites")
+	case len(c.At.Regions()) > 0 && (c.Multi || c.Expect.set):
+		return e, fmt.Errorf("--multi and --expect say how many nodes a search should have found; --at found one by saying so")
 	case c.Opt.Max > 0:
 		return e, fmt.Errorf("-m caps results; an edit wants every match it selects, or --multi")
 	case c.Truncate > 0:
@@ -674,6 +827,15 @@ func permute(fs *flag.FlagSet, args []string) []string {
 				continue
 			}
 		}
+		// An optional-valued flag is a bool flag to the flag package, which
+		// will not consume a following word -- so "--expand 2" would leave the
+		// 2 standing as a positional, where PATTERN and PATH are waiting for
+		// it. A bare integer after one is its count, and is attached here.
+		if f := fs.Lookup(name); f != nil && isOptValueFlag(f) && i+1 < len(args) && isInteger(args[i+1]) {
+			flags = append(flags, a+"="+args[i+1])
+			i++
+			continue
+		}
 		if f := fs.Lookup(name); f != nil && !isBoolFlag(f) && i+1 < len(args) {
 			flags = append(flags, a, args[i+1])
 			i++
@@ -694,6 +856,29 @@ func permute(fs *flag.FlagSet, args []string) []string {
 func isBoolFlag(f *flag.Flag) bool {
 	b, ok := f.Value.(interface{ IsBoolFlag() bool })
 	return ok && b.IsBoolFlag()
+}
+
+// isOptValueFlag reports whether a flag takes its value optionally: bare, or
+// with a count after it.
+func isOptValueFlag(f *flag.Flag) bool {
+	o, ok := f.Value.(interface{ OptionalValue() bool })
+	return ok && o.OptionalValue()
+}
+
+// isInteger reports whether a word is a count and nothing else. A negative one
+// counts: no flag is spelled "-1", and refusing "--expand -1" by name is
+// better than reading the -1 as a flag nobody has.
+func isInteger(s string) bool {
+	s = strings.TrimPrefix(s, "-")
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 var kindAliases = map[string]mdoc.Kind{
@@ -727,18 +912,30 @@ func (c *Config) TaskFilter() search.TaskFilter {
 // the document does. grep prints its "--" only where a context flag has put
 // lines between the hits that were never next to each other, which is the
 // case --separator is there to spell out.
-func separator(o OptString) string {
-	if !o.set {
-		return ""
+func separator(o OptString, f render.Format) string {
+	if o.set {
+		return o.val
 	}
-	return o.val
+	// Only a page of file lines has groups to part. An outline is one line per
+	// heading and a machine format is one record per result, so neither has
+	// anything for a separator to stand between.
+	if f == render.Plain {
+		return "--"
+	}
+	return ""
 }
 
 // widens are the flags that make a result cover more than the node that
 // matched.
 var widens = map[string]bool{
+	"siblings": true, "expand": true, "section": true, "section-body": true,
+}
+
+// contexts are the flags that pad a page with lines around a match. They widen
+// nothing: the region a result covers is the same with them as without, and
+// only the page is longer.
+var contexts = map[string]bool{
 	"B": true, "before": true, "A": true, "after": true, "C": true, "context": true,
-	"lines": true, "expand": true, "section": true, "section-body": true,
 }
 
 // OutlineFlags rejects the flags that widen a result. An outline is one line
@@ -749,6 +946,34 @@ func OutlineFlags(fs *flag.FlagSet) error {
 	if extra := Given(fs, func(name string) bool { return widens[name] }); extra != "" {
 		return fmt.Errorf("--outline is one line per heading, so there is nothing for %s to widen", extra)
 	}
+	if extra := Given(fs, func(name string) bool { return contexts[name] }); extra != "" {
+		return fmt.Errorf("--outline is one line per heading, so there is nothing for %s to pad", extra)
+	}
+	if extra := Given(fs, func(name string) bool { return name == "at" }); extra != "" {
+		return fmt.Errorf("--outline is one line per heading and %s names lines; ask for one", extra)
+	}
+	return nil
+}
+
+// selectors names the flags that say which nodes a search keeps: the kinds it
+// accepts, and the checkbox state they have to be in.
+var selectors = map[string]bool{
+	"k": true, "kind": true,
+	"task": true, "checked": true, "done": true, "unchecked": true, "todo": true,
+}
+
+// AtFlags refuses the filters an address cannot honour. --at takes its lines
+// outright and runs no matcher over them, so a filter beside it would be read
+// and then decide nothing -- which reads as if it had narrowed the answer when
+// the answer was named in full. A pattern beside an address is the one thing
+// that does still apply, and it applies as a guard rather than as a search.
+func AtFlags(fs *flag.FlagSet) error {
+	if Given(fs, func(name string) bool { return name == "at" }) == "" {
+		return nil
+	}
+	if extra := Given(fs, func(name string) bool { return selectors[name] }); extra != "" {
+		return fmt.Errorf("--at names its lines outright, so there is nothing for %s to filter", extra)
+	}
 	return nil
 }
 
@@ -757,6 +982,8 @@ func OutlineFlags(fs *flag.FlagSet) error {
 // where a result would have gone. A stream is a list of regions, so each of
 // these would be read, understood, and then change nothing the next stage sees.
 var streamIgnores = map[string]bool{
+	"B": true, "before": true, "A": true, "after": true, "C": true, "context": true,
+	"span": true, "no-span": true,
 	"truncate": true, "breadcrumb": true, "no-breadcrumb": true,
 	"heading": true, "no-heading": true, "no-filename": true,
 	"H": true, "with-filename": true,
@@ -788,6 +1015,21 @@ func StreamFlags(fs *flag.FlagSet) error {
 	return nil
 }
 
+// MachineFlags refuses the flags that describe a printed page when the output
+// is one record per result. --format json and --format compact both carry the
+// region and the lines that matched inside it as numbers, so there is no page
+// for -A, -B or -C to pad and no note for --span to write or withhold. It is
+// the rule --stream and --outline already follow, applied to the two formats
+// that were the hole in it.
+func MachineFlags(fs *flag.FlagSet) error {
+	if named := Given(fs, func(name string) bool {
+		return contexts[name] || name == "span" || name == "no-span"
+	}); named != "" {
+		return fmt.Errorf("a machine format is one record per result, so there is nothing for %s to say about it", named)
+	}
+	return nil
+}
+
 // StreamWalks refuses the flags that say which files a run reads when the
 // files were not walked for but named by a stream. They belong to the stage
 // that did the walking, and a walk described on a stage handed a stream is one
@@ -808,13 +1050,17 @@ func Given(fs *flag.FlagSet, want func(name string) bool) string {
 		if !want(f.Name) {
 			return
 		}
-		dash := "--"
-		if len(f.Name) == 1 {
-			dash = "-"
-		}
-		named = append(named, dash+f.Name)
+		named = append(named, dashed(f.Name))
 	})
 	return strings.Join(named, ", ")
+}
+
+// dashed spells a flag the way the caller would have typed it.
+func dashed(name string) string {
+	if len(name) == 1 {
+		return "-" + name
+	}
+	return "--" + name
 }
 
 // parseFormat folds --format, --json and --stream into one answer. --json

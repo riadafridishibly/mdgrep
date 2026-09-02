@@ -2,16 +2,22 @@
 
 Node-aware grep for markdown.
 
-`grep` gives you a line. Markdown is made of bullets, headings, code fences,
-quotes and tables — so `mdgrep` gives you the whole node the hit landed in.
+`grep` gives you a line and stops there. Markdown is made of bullets,
+headings, code fences, quotes and tables — so `mdgrep` gives you the line
+*and* what it sits in, and printing that whole is one flag away.
 
 ```
 $ mdgrep "brew install" notes.md
 13:  - On macOS run `brew install foo`
+(item 13-15, list 11-19, section 8-24)
 ```
 
 Matched characters are highlighted. Lines are written the way `grep` and `rg`
-write them — `path:line:text` — and on a terminal the heading trail above a
+write them — `path:line:text` for a match, `path-line-text` for a context line
+— and the note that closes a result is a cost table: 3 lines, 9 lines, 17
+lines, one rung of the expand ladder each. `--expand` takes the first,
+`--expand 1` the second, `--section` the last, and `--at 11-19` takes any of
+them back on the next command line. On a terminal the heading trail above a
 result says where you are.
 
 ## Install
@@ -128,34 +134,88 @@ A hit in a plain sub-bullet reports the checkbox item it hangs under.
 
 ### Selection — how much to print
 
-You get the matched node: a hit in a bullet's text lifts to the whole bullet
-and its children, a hit in a fenced block prints the fences.
+A result prints the lines that matched. Asking for a widener asks to see the
+region whole, and that is the only switch between line output and node output.
 
 | Flag | Meaning |
 | --- | --- |
-| `--expand N` | climb N ancestor levels from the matched node |
+| `--expand [N]` | climb the expand ladder: bare, the matched node; `N`, that many rungs up |
 | `--section` | widen to the enclosing heading section |
 | `--section-body` | that section without its heading line |
-| `-B`, `--before N` | include N sibling blocks before |
-| `-A`, `--after N` | include N sibling blocks after |
+| `--siblings N` | include N sibling blocks each side |
+| `--at N-M` | take lines N to M of one file outright; repeatable |
+| `-B`, `--before N` | print N lines before each matching line |
+| `-A`, `--after N` | print N lines after |
 | `-C`, `--context N` | shorthand for `-B N -A N` |
-| `--lines N` | pad with N raw lines on each side |
 
-`-B`/`-A`/`-C` count **blocks**, not lines; use `--lines` for raw lines.
+`-B`/`-A`/`-C` count **lines in the file**, clipped to the file the way `grep`
+counts them, and they widen nothing: the region a result covers — the one an
+edit rewrites and a `--stream` hands on — is the same with them as without.
+`--siblings` is the one that counts blocks. Each of the three writes the sides
+it names, so the last one typed wins and `-C 3 -B 1` is one line before and
+three after. Two windows reaching the same line are one group of file lines
+rather than two copies of it, and `--` stands only between groups that are not
+next to each other.
 
 ```bash
-mdgrep "brew install" notes.md              # just the nested bullet
+mdgrep "brew install" notes.md              # the line that matched
+mdgrep "brew install" notes.md --expand     # the nested bullet whole
 mdgrep "brew install" notes.md --expand 1   # its parent bullet, with siblings
 mdgrep "brew install" notes.md --section    # the whole section
-mdgrep "canary" notes.md -C2                # two blocks either side
+mdgrep "canary" notes.md -C2                # two lines either side
 ```
 
+A matcher that cannot name a line claims every line of the node instead: `-v`
+selected the node by what it does *not* hold, and the empty pattern behind
+`--todo`, `-k list` or `--outline` selected it by a filter, so no line in it is
+more the answer than another. That is what keeps `mdgrep "" --todo` printing a
+task item's sub-bullets, and why printing the whole node needs no flag of its
+own — a node whose every line matched prints contiguously, which is the node.
+
 Only the matched node is highlighted, so it stays obvious what hit.
+
+### Addresses — saying a span back
+
+The note hands out spans; `--at` is what takes one back.
+
+```
+$ mdgrep CONDSTORE tracking.md -n
+
+693:- [ ] `SELECT (CONDSTORE)` + `FETCH CHANGEDSINCE` loop against all three
+(item 693-715, list 509-722, section 507-724)
+
+$ mdgrep -e CONDSTORE --at 693-715 tracking.md --check
+```
+
+The numbers are 1-based and inclusive — the ones the note printed. An address
+selects by construction, so no matcher runs and the region prints whole.
+`--at` takes no `PATTERN`: every positional beside it is a path, and it names
+lines of one file, so a run where more than one could answer is refused.
+
+A pattern given with `-e` beside an address is a **guard**, not a search: the
+address says which lines to take, the pattern says what they should still say,
+and the run is refused if it is not there. That is the one failure a line
+number has that a pattern does not. To search *inside* an address and keep
+what the search found, use `--then`:
+
+```bash
+mdgrep --at 507-724 tracking.md --then CONDSTORE
+```
+
+Bounds are checked against the file rather than clipped to it: an address that
+does not fit is a stale note or a typo, worth being told about. An address
+belongs on the stage that names the files, so a later `--then` stage does not
+take one. `--anchor` and `--outline` are refused beside it, as are `--expect`
+and `--multi`, which state how many nodes a search should have found, and `-k`
+and the checkbox filters, which have nothing left to narrow.
 
 ### Editing
 
 The flags that decide what gets printed decide what gets rewritten. Narrow the
 search until it selects the node you mean, then say what to do with it.
+`--siblings` is the exception, and is refused beside an edit along with `-A`,
+`-B` and `-C`: it keeps the blocks either side of a match on the page, and
+rewriting them is not what asking to see them meant.
 
 | Flag | Meaning |
 | --- | --- |
@@ -214,8 +274,14 @@ printf -- '- [ ] verify checksum\n- [ ] sign the tarball\n' |
 Files are written atomically, through a temporary file renamed over the
 original; a symlinked path is followed first, so what changes is the document
 the link points at rather than the link. A checkbox that already reads the way
-you asked is left alone. `-A`, `-B`, `-C`, `--lines`, `-c`, `-l` and `-m` are
-refused with an edit.
+you asked is left alone. `-A`, `-B`, `-C`, `-c`, `-l` and `-m` are refused
+with an edit.
+
+The region an address names is the region an edit rewrites, so `--at` is the
+second half of the loop the note opens: a search reports where something is,
+and the next command rewrites it without searching for it again. That matters
+most where the pattern that found a node is not a pattern that would find it
+*only*.
 
 An edit reports what it did, one line per line: `-` before a line it removed
 and `+` before one it added, each numbered where it sits in its own version of
@@ -246,11 +312,22 @@ mdgrep --apply - <<'EOF'
 EOF
 ```
 
-An entry needs `path`, `match` and `op`, plus `text` for the four edits that
-write it. `kind`, `fixed`, `expand`, `section`, `section-body`, `expect` and
-`multi` say per entry what the flags of those names say, and an unknown key is
-an error rather than a silently different edit. The plan carries its own search,
-so it takes no PATTERN, no PATH and no other matching or editing flag.
+An entry needs `path`, `op` and one of `match` or `at`, plus `text` for the
+four edits that write it. `at` is an address in `--at`'s syntax, and `match`
+beside it is that flag's guard: the address selects, the pattern says the lines
+still read the way they did. `kind`, `fixed`, `expand`, `section`,
+`section-body`, `expect` and `multi` say per entry what the flags of those
+names say — the last two refused beside `at`, as their flags are — and an
+unknown key is an error rather than a silently different edit. The plan carries
+its own search, so it takes no PATTERN, no PATH and no other matching or
+editing flag.
+
+The reason to want an address in a plan is the reason to want one on the
+command line, doubled: a plan is generated by one run and applied by another,
+so every entry that names its node by pattern is a search repeated against a
+file that may have moved under it. An addressed entry has one node by
+construction, and `match` beside it turns the gate into a question with a
+yes-or-no answer.
 
 Each file is parsed once however many entries name it, and written once with
 every change they asked for. Every entry is planned against the file **as it was
@@ -402,7 +479,9 @@ matches", for the same reason an unreadable directory is.
 | `--breadcrumb` | print the heading trail above each result |
 | `--no-breadcrumb` | do not |
 | `--outline` | one indented line per heading, no PATTERN, no widening |
-| `--separator STR` | what goes between two results, and between two files where no heading parts them; nothing by default |
+| `--separator STR` | what goes between two groups of lines that are not next to each other in the file; `--` by default, and `--separator ''` leaves none |
+| `--span` | print the expand ladder after each result (default) |
+| `--no-span` | do not |
 | `--truncate N` | print at most N lines of any one result |
 | `--color WHEN` | `auto` (default), `always`, `never` |
 | `--format WHEN` | `plain` (default), `compact`, `json` or `stream` |
@@ -451,16 +530,43 @@ $ mdgrep "brew install" docs            # terminal
 docs/notes.md
 Install › macOS
 13:  - On macOS run `brew install foo`
+(item 13-15, list 11-19, section 8-24)
 
 $ mdgrep "brew install" docs | cat      # pipe
 docs/notes.md:  - On macOS run `brew install foo`
+docs/notes.md:(item 13-15, list 11-19, section 8-24)
 ```
 
-`grep` marks a context line with `-` where a matching line takes `:`. mdgrep
-prints nodes: every line it prints belongs to a node that matched, or to the
-region a selection flag widened that node to, and neither is context in
-`grep`'s sense — so every line takes `:` and the output keeps one shape to
-read. Narrow with a filter or another stage rather than by reading the marker.
+A line that matched takes `:` and a line `-A`, `-B` or `-C` pulled in takes
+`-`, which is `grep`'s convention and `rg`'s.
+
+### The span note
+
+Every result ends with the spans it could be widened to, one rung of the expand
+ladder per entry, from the matched node up to its enclosing section:
+
+```
+(item 693-715, list 509-722, section 507-724)
+```
+
+**Position is the `--expand` count**: the first entry is `--expand`, the second
+`--expand 1`, and the last is whatever `--section` selects. Nothing is
+numbered, because the note is printed whole or not at all — drop one rung and
+every rung after it sits at a position that is no longer its count.
+
+**It is a cost table, not a pointer.** 23 lines, 214 lines, 218 lines: one span
+would report 218 when what you want is 23, and would hide that the middle rung
+is a trap — the list is 98% of the section, so `--expand 1` costs everything
+`--section` costs and gives less. Three spans make that decidable without a
+second run.
+
+The ladder climbs block ancestors and, where those run out, carries on up the
+heading hierarchy — headings parse as flat siblings of the document, so
+climbing block parents alone never reaches one. It stops at the first section:
+past that you are reading the file, not widening a result. The note goes
+entirely when the printed lines already cover every rung, context lines
+included, or when the hit lies before the first heading and there is no
+section to widen to. `--no-span` takes it back.
 
 The heading trail has no counterpart in `grep`, so a pipe gets none until
 `--breadcrumb` asks for it. It goes wherever a heading goes, since a heading is
@@ -475,7 +581,8 @@ there the heading line never appears.
 `--outline` answers "what is in these files" rather than "where does this
 appear". It takes paths where a search takes a pattern, and it takes none of
 the selection flags: one line per heading is all it has to print, so there is
-nothing for `--section`, `-B`, `--lines` or `--expand` to widen.
+nothing for `--section`, `--siblings` or `--expand` to widen and nothing for
+`-A`, `-B` or `-C` to pad.
 
 ```
 $ mdgrep --outline docs/pruning.md -n
@@ -485,12 +592,12 @@ $ mdgrep --outline docs/pruning.md -n
 27:  ## Central Leader
 ```
 
-Nothing goes between two results of a file: they are two nodes of one
-document, and a page of them reads the way the document does. `--separator --`
-spells grep's marker, which grep itself prints only where a context flag has
-put lines between hits that were never next to each other. It goes where
-grep's does: between two results, and between two files where no heading
-parts them.
+`--` goes between two groups of file lines that are not next to each other,
+which is `grep`'s rule and `rg`'s: between two results, between two runs of
+match lines inside one result, and between two files where no heading parts
+them. The span note is a terminator rather than a group, so nothing precedes
+it. `--separator ''` leaves the groups flush, and `--separator STR` sets any
+other string.
 
 `--truncate N` caps how much of one node is printed — a hit inside a 400-line
 fenced block otherwise prints all 400 lines:
@@ -519,15 +626,26 @@ compact` and `--format json` carry the two counts as numbers.
 
 `--format compact` prints the path once per file and then one tab-separated
 record per result — the line span, the kind, the text with its newlines
-escaped, and how many lines `--truncate` held back before and after it — so a
-record is always one line and the path is the line with no tab in it:
+escaped, how many lines `--truncate` held back before and after it, the lines
+that matched, and the expand ladder as `kind:start-end` — so a record is always
+one line and the path is the line with no tab in it:
 
 ```
 $ mdgrep "" pruning.md --format compact
 pruning.md
-1	heading	# Pruning	0	0
-3	heading	## Winter Pruning	0	0
-5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0
+1	heading	# Pruning	0	0		heading:1-1,section:1-30
+3	heading	## Winter Pruning	0	0		heading:3-3,section:3-15
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0		paragraph:5-6,section:3-15
+```
+
+The hits field is empty for a node matcher — `-v`, or the empty pattern behind
+a filter, as here — which is how a reader tells "every line" from "these
+lines". A pattern that can name its lines fills it in:
+
+```
+$ mdgrep "sap" pruning.md --format compact
+pruning.md
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0	6	paragraph:5-6,section:3-15
 ```
 
 The span is the node's and the text is the window `--truncate` kept, so the
@@ -539,14 +657,22 @@ with nothing between them — are printed as a single passage in plain output,
 where the page reads as prose; the machine formats, `--outline` and `-c` keep
 them apart, so a record can be counted and a count is a count of nodes.
 
+Neither machine format prints a page, so `-A`, `-B`, `-C` and `--span` are
+refused beside them the way `--stream` and `--outline` refuse them.
+
 An edit reports the span, the operation, `applied`/`dry`/`unchanged`, and the
 new text. Compact leaves out the breadcrumb and the score; it costs about a
 third of what `--json` costs on the same results, so it is the cheaper choice
 whenever those two are not what is wanted.
 
 `--json` emits one object per line: `path`, `kind`, `score`, `start`, `end`
-(1-based, inclusive), `breadcrumb`, `text`, plus `checked` on task items and
-`truncated_before` and `truncated_after` under `--truncate`. An edit reports
+(1-based, inclusive), `breadcrumb`, `text`, `hits` and `spans`, plus `checked`
+on task items and `truncated_before` and `truncated_after` under `--truncate`.
+`hits` is the lines that matched and is empty for a node matcher; `spans` is
+the expand ladder as `{kind, start, end}` in ladder order, so the array index
+is the `--expand` count and the last entry is what `--section` selects. An
+entry of it, written `start-end`, is what `--at` consumes: a search reported in
+`--json` and an edit made with `--at` are the two halves of one workflow. An edit reports
 `op`, `old`, `new` and `applied` instead. A refused edit is one
 object on stderr — `error` (`ambiguous`, `expect`, or `nomatch` for a plan
 entry), `message`, `total`, `expected`, the capped `matches` list, and `entry`

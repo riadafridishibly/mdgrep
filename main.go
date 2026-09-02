@@ -1,6 +1,7 @@
-// Command mdgrep searches markdown by node instead of by line: a hit inside a
-// bullet prints the whole bullet, a hit in a heading can print its whole
-// section, and the surrounding context is counted in blocks rather than lines.
+// Command mdgrep searches markdown knowing what a node is: it prints the lines
+// that matched the way grep does, closes each result with the spans it could be
+// widened to -- the bullet, the list, the section -- and prints one of those
+// whole when a widener asks for it.
 package main
 
 import (
@@ -158,6 +159,20 @@ func run() (code int) {
 			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", staged(i, len(stages), err))
 			return 2
 		}
+		// An address is a selection of its own, so the flags that would have
+		// narrowed a search are refused beside it wherever it stands.
+		if err := cli.AtFlags(st.fs); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", staged(i, len(stages), err), help.Hint)
+			return 2
+		}
+	}
+	// A machine format is one record per result rather than a page, and says
+	// so before anything is printed the way a stream and an outline do.
+	if format == render.JSON || format == render.Compact {
+		if err := cli.MachineFlags(last.fs); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
+			return 2
+		}
 	}
 	// A stream is checked before anything dispatches on it, because the flags
 	// it cannot honour include the ones that would take the run elsewhere.
@@ -209,6 +224,13 @@ func run() (code int) {
 	// rather than shorten it.
 	last.c.Opt.Distinct = ed.Op != edit.OpNone || format != render.Plain ||
 		last.c.Count || last.c.Truncate > 0
+	// Which lines matched is worked out only where something reads it. A stage
+	// that hands its nodes on hands regions, and a tally, a list of file names,
+	// a yes-or-no answer, an outline and a stream all report on the region
+	// rather than inside it -- so none of them pays for a second pass of the
+	// matcher over every line of every result.
+	last.c.Opt.Hits = !last.c.Count && !last.c.FilesOnly && !last.c.Quiet &&
+		format != render.Stream && format != render.Outline
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 		return 2
@@ -219,10 +241,18 @@ func run() (code int) {
 	// an empty one matches everything, so "mdgrep '' docs --todo" scopes a
 	// filter to a directory the way grep would.
 	paths := first.fs.Args()
+	// A pattern beside an address is a guard rather than a search: the address
+	// says which lines to take, the pattern says what they should still say.
+	// It has to be read before the defaults below fill one in.
+	guard := len(first.c.Opt.At) > 0 && len(first.c.Patterns) > 0
 	if len(first.c.Patterns) == 0 {
 		switch {
 		case first.c.Outline:
 			// An outline names no pattern, so every positional is a path.
+			first.c.Patterns = cli.PatternList{""}
+		case len(first.c.Opt.At) > 0:
+			// So does an address: it selects the lines outright, so every
+			// positional beside it is a path.
 			first.c.Patterns = cli.PatternList{""}
 		case first.fs.NArg() == 0:
 			fmt.Fprintf(os.Stderr, "mdgrep: missing PATTERN\n%s\n", help.Hint)
@@ -263,8 +293,11 @@ func run() (code int) {
 	// rename names a file nothing can open, and that is an error rather than
 	// an answer about the search.
 	var unreadable atomic.Bool
+	// An address is checked against the file it names: that the lines are
+	// there, and that a guard pattern still finds what it was told to expect.
+	var addressed atomic.Bool
 	done := func(answer int) int {
-		if len(unread) > 0 || unreadable.Load() {
+		if len(unread) > 0 || unreadable.Load() || addressed.Load() {
 			return 2
 		}
 		return answer
@@ -302,6 +335,13 @@ func run() (code int) {
 			}
 			scope, files, useStdin, stdinData = sc, sc.Paths, false, nil
 		}
+	}
+	// An address names lines of one file. Applying the same numbers to each of
+	// several is not what anybody meant by them, so the run is refused rather
+	// than answered.
+	if n := len(files) + boolCount(useStdin); len(first.c.Opt.At) > 0 && n != 1 {
+		fmt.Fprintf(os.Stderr, "mdgrep: --at names lines of one file, and %d could answer\n", n)
+		return 2
 	}
 	if ed.Op != edit.OpNone && useStdin {
 		fmt.Fprintln(os.Stderr, "mdgrep: an edit needs files to write to, not stdin")
@@ -353,6 +393,10 @@ func run() (code int) {
 	reached := make([]atomic.Bool, len(stages))
 	if useStdin {
 		doc := mdoc.Parse("<stdin>", stdinData)
+		if err := atCheck(doc, first.c, first.m, guard); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+			return 2
+		}
 		emit(doc.Src, pipeline(doc, stages, nil, reached))
 	}
 
@@ -370,6 +414,11 @@ func run() (code int) {
 					continue
 				}
 				doc := mdoc.Parse(files[i], data)
+				if err := atCheck(doc, first.c, first.m, guard); err != nil {
+					fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+					addressed.Store(true)
+					continue
+				}
 				// The scope a stream handed in is the one thing that differs
 				// per file, since it is the earlier stage's answer about that
 				// file and no other.
@@ -405,6 +454,32 @@ func run() (code int) {
 		return done(1)
 	}
 	return done(0)
+}
+
+// boolCount counts a file that stdin stands in for, so an address can be held
+// to the one file it names however that file was named.
+func boolCount(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// atCheck holds an address to the file it names, in the words a command line
+// uses for the two. A plan entry asks the same of its own address and says so
+// in its own words, so the rule itself lives in one place.
+//
+// A guard is an ordinary search run inside the address, and it is only its
+// answer that matters: the address still says which lines to take. It is what
+// keeps an edit by line number honest, since a line number is the one thing
+// that cannot tell it is now pointing at something else. Without one there is
+// nothing to run, since the pattern a bare address searches with is the empty
+// one that matches anything.
+func atCheck(doc *mdoc.Doc, c *cli.Config, m match.Matcher, guard bool) error {
+	if !guard {
+		m = nil
+	}
+	return search.AddressHolds(doc, m, c.Opt, "--at", "the guard pattern")
 }
 
 // pipeline runs one document through every stage in turn. A stage searches

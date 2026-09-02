@@ -19,8 +19,9 @@ const Usage = `mdgrep — node-aware grep for markdown
 
 usage: mdgrep [OPTIONS] PATTERN [PATH...]
 
-A hit prints the markdown node it landed in — the whole bullet, row or
-paragraph — rather than the single line. PATTERN is a regular expression by
+A hit prints the lines that matched, the way grep does, and says what node
+they sit in and what it would cost to see it whole — the bullet, the row, the
+section. Asking for one of those prints it. PATTERN is a regular expression by
 default, and an empty one matches everything. With no PATH, mdgrep reads
 stdin when it is a pipe and searches the current directory otherwise.
 
@@ -56,15 +57,41 @@ A filter never stands in for the pattern: pass an empty one to select by
 filter alone, as in "mdgrep '' docs --todo".
 
 Selection
-      --expand N        climb N ancestor levels from the matched node
+      --expand [N]      climb the expand ladder from the matched node: bare,
+                        the node itself; N, that many rungs up it
       --section         widen to the enclosing heading section
       --section-body    that section without its heading line
-  -B, --before N        include N sibling blocks before
-  -A, --after N         include N sibling blocks after
+      --siblings N      include N sibling blocks each side
+      --at N-M          take lines N to M of one file outright, 1-based and
+                        inclusive, as a span note writes them; repeatable
+  -B, --before N        print N lines before each matching line
+  -A, --after N         print N lines after
   -C, --context N       shorthand for -B N -A N
-      --lines N         pad the result with N raw lines on each side
 
--B, -A and -C count sibling blocks, not lines; use --lines for raw lines.
+A result prints the lines that matched. Asking for a widener asks to see the
+region whole, which is the only switch between line output and node output.
+-B, -A and -C add no lines to that region: they pad the page, are counted in
+the file and clipped to it the way grep counts them, and carry the "-" marker.
+Each of the three writes the sides it names, so the last one typed wins and
+"-C 3 -B 1" is one line before and three after. Two windows reaching the same
+line are one group of file lines rather than two copies of it, and "--" stands
+only between groups that are not next to each other.
+
+The expand ladder climbs block ancestors and, where those run out, carries on
+up the heading hierarchy, since headings parse as flat siblings and climbing
+parents never reaches one. Depth varies with structure -- paragraph to section
+is one rung, item to list to section is two -- so --expand N is for a bit more
+context and --section is for the section.
+
+--at takes no PATTERN: every positional beside it is a path, and it names lines
+of one file, so a run where more than one could answer is refused. A pattern
+given with -e beside it is a guard rather than a search -- the address says
+which lines to take, the pattern says what they should still say, and the run
+is refused if it is not there. Bounds are checked against the file rather than
+clipped to it. It belongs on the stage that names the files, so a later --then
+stage does not take one. --anchor and --outline are refused beside it, as are
+--expect and --multi, which state how many nodes a search should have found,
+and -k and the checkbox filters, which have nothing left to narrow.
 
 Editing
       --check, --uncheck, --toggle
@@ -85,8 +112,10 @@ Editing
 
 An edit rewrites what the same flags would have printed. --check and
 --set-text act on the matched node; --replace, --delete, --append and
---prepend act on the region --section and --expand widen it to. Each file is
-written in one atomic go.
+--prepend act on the region --section and --expand widen it to. --siblings is
+refused beside an edit, along with -A, -B and -C: it keeps the blocks either
+side of a match on the page, and rewriting them is not what asking to see them
+meant. Each file is written in one atomic go.
 
 An edit reports each line it removed behind "-" and each it added behind "+",
 numbered where it sits in its own version of the file, and a node already as
@@ -102,12 +131,14 @@ Plans
   {"path":"notes.md","match":"^## Setup","op":"set-text","text":"Install"}
   $ mdgrep --apply plan.jsonl
 
-An entry takes "path", "match" and "op", plus "text" for the edits that write
-one. "kind", "fixed", "expand", "section", "section-body", "expect" and
-"multi" mean per entry what the flags of those names mean here. A plan carries
-its own search, so it takes no PATTERN and no PATH. Entries are planned
-against the files as read, so none can match what another writes, and the plan
-applies whole or not at all.
+An entry takes "path", "op" and one of "match" or "at", plus "text" for the
+edits that write one. "at" is an address in --at's syntax, and "match" beside
+it is that flag's guard. "kind", "fixed", "expand", "section", "section-body",
+"expect" and "multi" mean per entry what the flags of those names mean here,
+and the last two are refused beside "at" as their flags are, as is "kind". A
+plan carries its own search, so it takes no PATTERN and no PATH. Entries are
+planned against the files as read, so none can match what another writes, and
+the plan applies whole or not at all.
 
 Pipelines
       --then            narrow what the search before it selected: everything
@@ -164,9 +195,11 @@ Output
       --no-breadcrumb   do not
       --outline         one indented line per heading; takes paths, no
                         PATTERN, and none of the Selection flags
-      --separator STR   what to print between two results, and between two
-                        files where no heading parts them; nothing by
-                        default, so "--separator --" spells grep's
+      --separator STR   what to print between two groups of lines that are
+                        not next to each other in the file; "--" by default,
+                        which is grep's, and "--separator ''" leaves none
+      --span            print the expand ladder after each result (default)
+      --no-span         do not
       --truncate N      print at most N lines of a result, keeping the
                         matched node, then a count of what was held back.
                         Results that touch stay apart under it, since a cap
@@ -201,11 +234,26 @@ file's results rather than in front of each line, when stdout is a terminal.
 So a terminal shows a heading, the trail and numbers, and a pipe gets the
 markdown alone unless it asks for more.
 
-grep marks a context line with "-" where a matching line takes ":". mdgrep
-prints nodes: every line it prints belongs to a node that matched or to the
-region a Selection flag widened that node to, and neither is context in grep's
-sense -- so every line takes ":" and the output keeps one shape to read. Narrow
-with a filter or another stage rather than by reading the marker. The heading
+A line that matched takes ":" and a line -A, -B or -C pulled in takes "-",
+which is grep's convention and rg's. A matcher that cannot name a line claims
+every line of the node instead: -v selected the node by what it does not hold,
+and the empty pattern behind --todo, -k list or --outline selected it by a
+filter, so no line in it is more the answer than another. That is what keeps
+"mdgrep '' --todo" printing a task item's sub-bullets, and why printing the
+whole node needs no flag of its own.
+
+Every result ends with the spans it could be widened to, one rung of the
+expand ladder per entry from the matched node up to its enclosing section:
+
+  (item 693-715, list 509-722, section 507-724)
+
+Position is the --expand count -- the first entry is --expand, the second
+--expand 1, the last what --section selects -- so the note is printed whole or
+not at all, and it is a cost table rather than a pointer: 23 lines, 214, 218,
+which is what says the middle rung costs everything the section costs and
+gives less. --at takes an entry of it back. The note goes when the printed
+lines already cover every rung, or when the hit lies before the first heading
+and there is no section to widen to. The heading
 trail has no counterpart in grep, so a pipe gets none until --breadcrumb asks;
 it goes wherever a heading goes, since a heading is what says a person is
 reading, and --no-breadcrumb leaves it out. Having nowhere to stand but above
@@ -215,12 +263,16 @@ names its file the way every other line does and takes no line number, having
 none. --format compact and --format json carry the two counts as numbers.
 
 compact is one tab-separated record per result under the path — "start[-end]
-kind text before after", newlines escaped — for a fraction of what json costs.
-before and after are the lines --truncate held back on each side; the span is
-the node's, so the text starts at start plus before. json adds the breadcrumb
-and the score. Both keep touching nodes apart where plain runs them into one
-passage -- as --truncate does too -- and both report a refusal in their own
-shape. Colour is off when stdout is not a terminal, NO_COLOR is set or
+kind text before after hits spans", newlines escaped — for a fraction of what
+json costs. before and after are the lines --truncate held back on each side;
+the span is the node's, so the text starts at start plus before. hits are the
+lines that matched, comma-separated and empty for a node matcher, and spans is
+the ladder as "kind:start-end" in ladder order. json carries the same two as
+"hits" and "spans", and adds the breadcrumb and the score. Both keep touching
+nodes apart where plain runs them into one passage -- as --truncate does too --
+and both report a refusal in their own shape. Neither prints a page, so -A, -B,
+-C and --span are refused beside them the way --stream and --outline refuse
+them. Colour is off when stdout is not a terminal, NO_COLOR is set or
 TERM=dumb.
 
 A short flag takes its value attached or apart: -C2 and -C 2 are the same.

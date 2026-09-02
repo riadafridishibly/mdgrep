@@ -33,7 +33,11 @@ type planEntry struct {
 	// Match and Text are pointers because leaving a key out and giving it an
 	// empty string are different instructions, the way --replace "" asks for
 	// an empty replacement rather than for nothing.
-	Match   *string `json:"match"`
+	Match *string `json:"match"`
+	// At is the address, in --at's syntax: "693-715" or "700". An entry names
+	// its node one way or the other; "match" beside it is a guard rather than
+	// the selection.
+	At      *string `json:"at"`
 	Op      edit.Op `json:"op"`
 	Text    *string `json:"text"`
 	Kind    string  `json:"kind"`
@@ -266,6 +270,9 @@ func planOne(n int, e planEntry, cache *docCache, format render.Format) ([]planC
 	if err != nil {
 		return fail("file", err)
 	}
+	if err := search.AddressHolds(doc, matcher, opt, `"at"`, `"match"`); err != nil {
+		return fail("entry", err)
+	}
 	res := search.File(doc, matcher, opt)
 	if why, code := report.Gate(len(res), e.Expect, e.Multi, report.PlanWords); code != 0 {
 		why.Entry = n
@@ -294,10 +301,17 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	switch {
 	case e.Path == "":
 		return bad(`no "path": an entry says which file it edits`)
-	case e.Match == nil:
-		return bad(`no "match": the pattern that selects the node to edit`)
+	case e.Match == nil && e.At == nil:
+		return bad(`no "match" or "at": the pattern or the address that selects the node to edit`)
 	case e.Op == edit.OpNone:
 		return bad(`no "op": one of %s`, planOpNames())
+	case e.At != nil && (e.Multi || e.Expect != nil):
+		return bad(`"multi" and "expect" say how many nodes a search should have found; "at" found one by saying so`)
+	// An address takes its lines outright and runs no matcher over them, so a
+	// filter beside it would be read and then decide nothing -- the refusal a
+	// command line makes in its own words.
+	case e.At != nil && e.Kind != "":
+		return bad(`"at" names its lines outright, so there is nothing for "kind" to filter`)
 	}
 	takesText, ok := planOp(e.Op)
 	switch {
@@ -319,20 +333,41 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	if err != nil {
 		return bad("%v", err)
 	}
+	if e.At != nil {
+		at, err := cli.ParseAddress(*e.At)
+		if err != nil {
+			return bad(`"at" %q: %v`, *e.At, err)
+		}
+		opt.At = []search.Region{at}
+	}
 	opt = search.Options{
-		Kinds:   kinds,
-		Expand:  e.Expand,
-		Section: e.Section,
-		Body:    e.Body,
+		Kinds:     kinds,
+		At:        opt.At,
+		Expand:    e.Expand,
+		ExpandSet: e.Expand > 0,
+		Section:   e.Section,
+		Body:      e.Body,
 		// Each entry names one node, so neighbouring hits stay apart rather
 		// than being run together the way printing runs them.
 		Distinct: true,
+		// A refusal prints the nodes an entry found, so which of their lines
+		// matched is read the way it is on a printed page.
+		Hits: true,
 	}
 	switch e.Op {
 	case edit.OpCheck, edit.OpUncheck, edit.OpToggle:
 		opt.Task = search.TaskAny
 	}
 
+	ed = edit.Options{Op: e.Op}
+	if takesText {
+		ed.Text = *e.Text
+	}
+	// An entry that names its node by address alone has no pattern to build a
+	// matcher from, and needs none: the address is the selection.
+	if e.Match == nil {
+		return opt, ed, nil, nil
+	}
 	mode := match.Regexp
 	if e.Fixed {
 		mode = match.Substring
@@ -348,10 +383,6 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	})
 	if err != nil {
 		return bad("%v", err)
-	}
-	ed = edit.Options{Op: e.Op}
-	if takesText {
-		ed.Text = *e.Text
 	}
 	return opt, ed, matcher, nil
 }

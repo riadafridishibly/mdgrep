@@ -155,7 +155,7 @@ func TestOutlineRefusesTheFlagsThatWidenAResult(t *testing.T) {
 	path := doc(t, widened)
 	for _, args := range [][]string{
 		{"-B", "1"}, {"-A", "1"}, {"-C", "1"},
-		{"--lines", "2"}, {"--expand", "1"}, {"--section"}, {"--section-body"},
+		{"--siblings", "2"}, {"--expand", "1"}, {"--section"}, {"--section-body"},
 	} {
 		stdout, stderr, code := capture(t, append([]string{"--outline", path}, args...)...)
 		if code != 2 {
@@ -258,8 +258,11 @@ func TestHelpPrintsTheManualDespiteAPattern(t *testing.T) {
 // context and leave out what the caller searched for.
 func TestTruncateKeepsTheMatchedNode(t *testing.T) {
 	path := doc(t, buried)
+	// --siblings is the flag that widens the region, so it is the one every
+	// format reads. -B pads only a printed page, and is refused where there
+	// is no page to pad.
 	for _, format := range [][]string{nil, {"--format", "compact"}, {"--json"}} {
-		args := append([]string{"needle", path, "-B", "3", "--truncate", "2"}, format...)
+		args := append([]string{"needle", path, "--siblings", "3", "--truncate", "2"}, format...)
 		stdout, stderr, code := capture(t, args...)
 		if code != 0 {
 			t.Fatalf("%v: exit = %d, want 0 (%s)", format, code, stderr)
@@ -267,6 +270,13 @@ func TestTruncateKeepsTheMatchedNode(t *testing.T) {
 		if !strings.Contains(stdout, "needle here") {
 			t.Errorf("%v: the match was truncated away:\n%s", format, stdout)
 		}
+	}
+	stdout, stderr, code := capture(t, "needle", path, "-B", "3", "--truncate", "2")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (%s)", code, stderr)
+	}
+	if !strings.Contains(stdout, "needle here") {
+		t.Errorf("the match was padded off the page:\n%s", stdout)
 	}
 }
 
@@ -467,8 +477,8 @@ func TestCompactSaysHowMuchItTruncated(t *testing.T) {
 	}
 	record := strings.Split(strings.TrimSpace(stdout), "\n")[1]
 	fields := strings.Split(record, "\t")
-	if len(fields) != 5 {
-		t.Fatalf("want 5 fields, got %d: %q", len(fields), record)
+	if len(fields) != 7 {
+		t.Fatalf("want 7 fields, got %d: %q", len(fields), record)
 	}
 	if fields[3] != "0" || fields[4] != "3" {
 		t.Errorf("before, after = %q, %q, want 0, 3: %q", fields[3], fields[4], record)
@@ -484,14 +494,14 @@ func TestCompactSaysHowMuchItTruncated(t *testing.T) {
 func TestCompactPlacesTheTruncatedWindow(t *testing.T) {
 	path := doc(t, "# Doc\n\nalpha\n\nbeta\n\ngamma\n\ndelta\n")
 	stdout, stderr, code := capture(t,
-		"delta", path, "-B", "2", "--format", "compact", "--truncate", "2")
+		"delta", path, "--siblings", "2", "--format", "compact", "--truncate", "2")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
 	record := strings.Split(strings.TrimSpace(stdout), "\n")[1]
 	fields := strings.Split(record, "\t")
-	if len(fields) != 5 {
-		t.Fatalf("want 5 fields, got %d: %q", len(fields), record)
+	if len(fields) != 7 {
+		t.Fatalf("want 7 fields, got %d: %q", len(fields), record)
 	}
 	if fields[0] != "5-9" {
 		t.Errorf("span = %q, want the region's 5-9: %q", fields[0], record)
@@ -796,7 +806,7 @@ func TestNegativeCountsAreRefused(t *testing.T) {
 		{"-B", "--before"},
 		{"-A", "--after"},
 		{"-C", "--context"},
-		{"--lines", "--lines"},
+		{"--siblings", "--siblings"},
 		{"-m", "--max-count"},
 		{"--truncate", "--truncate"},
 	} {

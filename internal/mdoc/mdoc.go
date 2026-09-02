@@ -33,6 +33,13 @@ const (
 	KindCell        Kind = "cell"
 	KindBreak       Kind = "break"
 	KindFrontmatter Kind = "frontmatter"
+	// KindSection is a heading and everything under it. No parse produces
+	// one -- headings are flat siblings of the document -- but it is the rung
+	// the expand ladder ends on and the region --section selects.
+	KindSection Kind = "section"
+	// KindRegion is a run of lines the document does not itself draw. Only
+	// --at can select one, and only where the lines it names are no node.
+	KindRegion Kind = "region"
 )
 
 // Block is one addressable markdown node.
@@ -410,16 +417,7 @@ func maskLines(data []byte, src *Source, from, to int) []byte {
 
 // Breadcrumb returns the heading trail enclosing the given line.
 func (d *Doc) Breadcrumb(line int) []string {
-	var stack []*Block
-	for _, h := range d.Headings {
-		if h.Start > line {
-			break
-		}
-		for len(stack) > 0 && stack[len(stack)-1].Level >= h.Level {
-			stack = stack[:len(stack)-1]
-		}
-		stack = append(stack, h)
-	}
+	stack := d.HeadingStack(line)
 	out := make([]string, 0, len(stack))
 	for _, h := range stack {
 		out = append(out, strings.TrimSpace(strings.ReplaceAll(h.Text, "\n", " ")))
@@ -475,4 +473,38 @@ func sectionEnd(d *Doc, line int) (idx, end int, ok bool) {
 		}
 	}
 	return idx, end, true
+}
+
+// HeadingStack is the trail of headings enclosing a line, outermost first: the
+// nearest preceding heading and every heading of higher rank still open above
+// it. Breadcrumb is its text, and the expand ladder is its line ranges.
+func (d *Doc) HeadingStack(line int) []*Block {
+	var stack []*Block
+	for _, h := range d.Headings {
+		if h.Start > line {
+			break
+		}
+		for len(stack) > 0 && stack[len(stack)-1].Level >= h.Level {
+			stack = stack[:len(stack)-1]
+		}
+		stack = append(stack, h)
+	}
+	return stack
+}
+
+// Enclosing is the smallest located block holding every line of start..end, or
+// the document root where no smaller one does. It is what names a region the
+// document did not itself draw: the lines several merged results cover
+// together, or the ones an address asked for.
+func (d *Doc) Enclosing(start, end int) *Block {
+	best := d.Root
+	for _, b := range d.Blocks {
+		if !b.Located || b.Start > start || b.End < end {
+			continue
+		}
+		if b.Depth > best.Depth {
+			best = b
+		}
+	}
+	return best
 }

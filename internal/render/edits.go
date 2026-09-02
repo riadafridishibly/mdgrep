@@ -73,7 +73,7 @@ func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) 
 func (p *Printer) editLine(path, color, mark string, num int, line string) {
 	p.W.WriteString(p.paint(color, mark))
 	p.W.WriteByte(' ')
-	p.writeLine(path, num, line)
+	p.writeLine(path, num, line, ":")
 }
 
 // printEditCompact reports a change the way printCompact reports a result:
