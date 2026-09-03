@@ -23,13 +23,13 @@ result says where you are.
 ## Install
 
 ```bash
-go install github.com/riadafridishibly/mdgrep@latest
+go install github.com/riadafridishibly/mdgrep/cmd/mdgrep@latest
 ```
 
 Or from a clone:
 
 ```bash
-go install .    # or: go build -o mdgrep .
+go install ./cmd/mdgrep    # or: go build -o mdgrep ./cmd/mdgrep
 ```
 
 Go 1.26+, one dependency ([goldmark](https://github.com/yuin/goldmark)).
