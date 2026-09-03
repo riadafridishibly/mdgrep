@@ -249,6 +249,17 @@ checkbox, fences — where `--replace-node` keeps nothing. Inserted text is
 indented to match what it lands beside, and blank lines are added only where
 they will not loosen a list or break a table.
 
+The region ops write lines, and a line is read as markup wherever it lands, so
+they are refused where writing one would rewrite structure the edit was never
+asked to touch. Only a row goes inside a table — `--replace-node 'a|b'` over a
+cell would open a column that was not asked for, and `--replace` is the op that
+knows the text is text. No line that closes a fence goes inside a fenced block,
+where it would end the block and leave the rest of the document as code. And a
+table's header and the line under it cannot be deleted out of it — GFM reads
+the columns off those two lines, and the rows left behind would be read as a
+paragraph full of pipes. An edit that cannot be made without changing what the
+document is fails and writes nothing.
+
 `--delete` takes the blank line the region would otherwise leave behind: a
 region parted from what follows it by one blank line, and from what precedes
 it by a blank line or the start of the file, is removed together with that

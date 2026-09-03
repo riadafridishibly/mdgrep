@@ -110,6 +110,9 @@ func plan(doc *mdoc.Doc, r search.Result, opt Options) ([]Change, error) {
 		return subst(doc, opt, c)
 	case OpReplaceNode:
 		c.New = lines(opt.Text)
+		if err := fitsInside(doc, r.Start, r.End, c.New); err != nil {
+			return nil, err
+		}
 		if c.End < c.Start {
 			// The region is an insertion point — an empty section body — so
 			// the text has to be parted from what surrounds it.
@@ -117,8 +120,14 @@ func plan(doc *mdoc.Doc, r search.Result, opt Options) ([]Change, error) {
 			c.Old = []string{}
 		}
 	case OpDelete:
+		if err := keepsTable(doc, c.Start, c.End); err != nil {
+			return nil, err
+		}
 		c.End = swallowBlank(src, c.Start, c.End)
 	case OpAppend, OpPrepend:
+		if err := fitsInside(doc, r.Start, r.End, lines(opt.Text)); err != nil {
+			return nil, err
+		}
 		return one(insert(src, r, opt, c))
 	default:
 		return nil, fmt.Errorf("unknown edit %q", opt.Op)
@@ -219,9 +228,90 @@ func setText(src *mdoc.Source, r search.Result, text string, c Change) (Change, 
 	case mdoc.KindParagraph, mdoc.KindTextBlock:
 		c.New = body
 	default:
+		// A cell and a row are made of the text inside them, and --replace is
+		// the op that rewrites text knowing it is text. Sending them to
+		// --replace-node instead offers a region op a line of table syntax to
+		// write blind.
+		if r.Kind == mdoc.KindCell || r.Kind == mdoc.KindRow {
+			return c, fmt.Errorf("--set-text does not apply to a %s; use --replace", r.Kind)
+		}
 		return c, fmt.Errorf("--set-text does not apply to a %s; use --replace-node", r.Kind)
 	}
 	return c, nil
+}
+
+// tableRow is what a line has to look like to stand as a row: the pipes at
+// both ends. GFM would take a bare "a|b" as a row too, which is the reason to
+// insist -- text that was never meant as markup reads as markup there, and
+// silently.
+var tableRow = regexp.MustCompile(`^\s*\|.*\|\s*$`)
+
+// fitsInside refuses text that would be read as markup where it lands rather
+// than as the content it was meant to be. A pipe there opens a column and a
+// line break ends the row, so a region op writing "a|b" over a cell gives back
+// two columns where one was asked for, and two lines give back two rows.
+// --replace escapes what it writes because its matcher told it the text is
+// text; a region op is handed lines and has to be told. Replacing a table
+// whole is left alone: what follows it is a document, not a row.
+func fitsInside(doc *mdoc.Doc, start, end int, body []string) error {
+	if table := within(doc, start, end, mdoc.KindTable); table != nil {
+		for _, line := range body {
+			if tableRow.MatchString(line) {
+				continue
+			}
+			return fmt.Errorf(
+				"%s:%d: only a row belongs inside a table, and %q is not one; "+
+					"write the pipes, or use --replace to rewrite the text in a cell",
+				doc.Src.Path, start+1, line)
+		}
+	}
+	if code := within(doc, start, end, mdoc.KindCode); code != nil {
+		for _, line := range body {
+			if !isFence(line) {
+				continue
+			}
+			// A fence written inside a fenced block closes it, and everything
+			// under it -- the rest of the document -- becomes code.
+			return fmt.Errorf(
+				"%s:%d: %q would close the fenced block it is written into; "+
+					"replace the block itself, or use --replace to rewrite the text in it",
+				doc.Src.Path, start+1, line)
+		}
+	}
+	return nil
+}
+
+// keepsTable refuses a deletion that would take a table's header or the
+// delimiter under it. GFM reads the columns off those two lines, and without
+// them there is no table: the rows left behind are read as a paragraph full of
+// pipes. Deleting the table whole is another matter, and allowed.
+func keepsTable(doc *mdoc.Doc, start, end int) error {
+	table := within(doc, start, end, mdoc.KindTable)
+	if table == nil || start > table.Start+1 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s:%d: a table is built on its header and the line under it, and "+
+			"deleting either leaves the rows behind as text; delete the table "+
+			"itself, or empty the cells with --replace",
+		doc.Src.Path, start+1)
+}
+
+// within is the block of the given kind a region sits strictly inside, or nil
+// where the region sits in none or covers the whole of one. Replacing a node
+// whole is always allowed: what goes in its place answers to whatever holds
+// the node, not to the node being replaced.
+func within(doc *mdoc.Doc, start, end int, kind mdoc.Kind) *mdoc.Block {
+	for b := doc.Enclosing(start, end); b != nil; b = b.Parent {
+		if b.Kind != kind {
+			continue
+		}
+		if start <= b.Start && end >= b.End {
+			return nil
+		}
+		return b
+	}
+	return nil
 }
 
 // subst rewrites the text a matcher pointed at and leaves everything else on

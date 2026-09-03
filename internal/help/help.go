@@ -105,6 +105,13 @@ What it writes is fitted to where it lands: a pipe written into a table cell
 leaves escaped, and a line break written into a cell or a heading is refused
 rather than allowed to end the row.
 
+The region ops write lines rather than text, and a line is read as markup
+wherever it lands. So they are refused where that would rewrite the structure
+the edit was not asked to touch: only a row goes inside a table, no line
+that closes a fence goes inside a fenced block, and a table's header and the
+line under it cannot be deleted out of it. An edit that cannot be made without
+changing what the document is fails and writes nothing.
+
 An edit prints the lines it would remove behind "-" and add behind "+";
 --format diff prints a patch instead, and --format doc the whole document it
 produced.
