@@ -774,7 +774,8 @@ the line that says what went wrong and points at `--help`.
 `--help` takes a topic, so remembering one flag does not cost the whole manual:
 
 ```bash
-mdgrep --help editing   # matching, filters, selection, editing, plans, output
+mdgrep --help editing   # matching, filters, selection, editing, plans,
+                        # pipelines, output, examples
 mdgrep --help=editing   # the same, as one word
 mdgrep --help anchor    # or any flag name
 ```
