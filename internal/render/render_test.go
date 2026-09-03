@@ -14,20 +14,12 @@ func TestWindowKeepsTheMatchedLine(t *testing.T) {
 	r := search.Result{Start: 0, End: 9, HitStart: 0, HitEnd: 9, Hits: []int{6}}
 	p := &Printer{Truncate: 3}
 
-	first, last, before, after := p.window(r)
+	first, last := p.window(r)
 	if first > 6 || last < 6 {
 		t.Errorf("window = [%d,%d], want it to hold the match on line 6", first, last)
 	}
 	if last-first+1 > 3 {
 		t.Errorf("window = [%d,%d], want at most 3 lines", first, last)
-	}
-	if before != first || after != 9-last {
-		t.Errorf("before, after = %d, %d, want %d, %d", before, after, first, 9-last)
-	}
-	// start plus before is the line the text begins on, which is the whole
-	// reason the two counts are reported separately.
-	if got := r.Start + before; got != first {
-		t.Errorf("start+before = %d, want %d", got, first)
 	}
 }
 
@@ -37,9 +29,9 @@ func TestWindowStartsAtTheRegionWhenTheHitIsInReach(t *testing.T) {
 	r := search.Result{Start: 0, End: 9, HitStart: 0, HitEnd: 9, Hits: []int{1}}
 	p := &Printer{Truncate: 3}
 
-	first, _, before, _ := p.window(r)
-	if first != 0 || before != 0 {
-		t.Errorf("first, before = %d, %d, want 0, 0", first, before)
+	first, _ := p.window(r)
+	if first != 0 {
+		t.Errorf("first = %d, want 0", first)
 	}
 }
 
@@ -50,26 +42,26 @@ func TestWindowFallsBackToTheBlockStart(t *testing.T) {
 	r := search.Result{Start: 0, End: 9, HitStart: 0, HitEnd: 9}
 	p := &Printer{Truncate: 3}
 
-	first, last, before, after := p.window(r)
-	if first != 0 || last != 2 || before != 0 || after != 7 {
-		t.Errorf("window = [%d,%d] %d/%d, want [0,2] 0/7", first, last, before, after)
+	first, last := p.window(r)
+	if first != 0 || last != 2 {
+		t.Errorf("window = [%d,%d], want [0,2]", first, last)
 	}
 }
 
-// A region inside the budget is printed whole, and reports nothing held back.
+// A region inside the budget is printed whole.
 func TestWindowLeavesAShortRegionAlone(t *testing.T) {
 	r := search.Result{Start: 0, End: 2, HitStart: 0, HitEnd: 2, Hits: []int{1}}
 	p := &Printer{Truncate: 5}
 
-	first, last, before, after := p.window(r)
-	if first != 0 || last != 2 || before != 0 || after != 0 {
-		t.Errorf("window = [%d,%d] %d/%d, want [0,2] 0/0", first, last, before, after)
+	first, last := p.window(r)
+	if first != 0 || last != 2 {
+		t.Errorf("window = [%d,%d], want [0,2]", first, last)
 	}
 }
 
-// The note is printed whole or not at all: rungs the page already covers are
-// never dropped one at a time, because position is the --expand count.
-func TestSpanNoteIsWholeOrNothing(t *testing.T) {
+// A rung the page already covers has nothing left to give, so it is left out
+// and the note names only what widening would still buy.
+func TestSpanNoteDropsTheRungsThePageCovers(t *testing.T) {
 	r := search.Result{
 		HitStart: 12, HitEnd: 13,
 		Rungs: []search.Rung{
@@ -80,10 +72,18 @@ func TestSpanNoteIsWholeOrNothing(t *testing.T) {
 	}
 	p := &Printer{Span: true}
 
+	// The page holds the item whole, so the item rung goes and the two rungs
+	// with lines left to show stay.
 	shown := []outLine{{12, true}, {13, true}}
-	want := "(item 13-14, list 13-15, section 11-15)"
+	want := "(list 13-15, section 11-15)"
 	if got := p.spanNote(r, shown); got != want {
 		t.Errorf("note = %q, want %q", got, want)
+	}
+	// A page short of the item keeps every rung.
+	part := []outLine{{12, true}}
+	wantAll := "(item 13-14, list 13-15, section 11-15)"
+	if got := p.spanNote(r, part); got != wantAll {
+		t.Errorf("note = %q, want %q", got, wantAll)
 	}
 	// Every rung covered by what printed drops the note entirely.
 	whole := []outLine{{10, true}, {11, true}, {12, true}, {13, true}, {14, true}}

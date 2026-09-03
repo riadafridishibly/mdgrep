@@ -233,8 +233,8 @@ func TestCompactKeepsOneRecordPerLine(t *testing.T) {
 		t.Errorf("the path line should have no tab in it: %q", lines[0])
 	}
 	fields := strings.Split(lines[1], "\t")
-	if len(fields) != 7 {
-		t.Fatalf("want 7 tab-separated fields, got %d: %q", len(fields), lines[1])
+	if len(fields) != 5 {
+		t.Fatalf("want 5 tab-separated fields, got %d: %q", len(fields), lines[1])
 	}
 	if fields[0] != "3-5" {
 		t.Errorf("span = %q, want 3-5", fields[0])
@@ -476,8 +476,13 @@ func TestTruncateCapsOneResult(t *testing.T) {
 	if strings.Contains(stdout, "five") {
 		t.Errorf("printed past the cap:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "… +4 lines") {
-		t.Errorf("want the count of what was held back:\n%s", stdout)
+	// The page is the code rung whole, so the note's own numbers are the
+	// count and the count is not written twice.
+	if !strings.Contains(stdout, "(code 7-13, section 3-13)") {
+		t.Errorf("want the note to say where the rest is:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "… +") {
+		t.Errorf("the note already gives the count:\n%s", stdout)
 	}
 }
 
@@ -493,35 +498,48 @@ func TestTruncateKeepsTheMatchedLine(t *testing.T) {
 	if !strings.Contains(stdout, "five") {
 		t.Errorf("truncated away the line that matched:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "\u2026 +4 lines") {
-		t.Errorf("want the count of what was skipped to reach it:\n%s", stdout)
+	if !strings.Contains(stdout, "(code 7-13, section 3-13)") {
+		t.Errorf("want the note to say where the rest is:\n%s", stdout)
 	}
 
-	// The machine formats report the same two counts, and start plus before
-	// is the line the text begins on.
+	// The machine formats keep the same line.
 	stdout, _, code = capture(t, "five", path, "--truncate", "3", "--format", "compact")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
 	fields := strings.Split(strings.Split(stdout, "\n")[1], "\t")
-	if len(fields) != 7 || fields[3] != "4" || fields[4] != "0" {
-		t.Errorf("fields = %q, want 7 with 4, 0 in the truncation counts:\n%s", fields, stdout)
+	if len(fields) != 5 {
+		t.Errorf("fields = %q, want 5:\n%s", fields, stdout)
 	}
 	// The window fills its budget rather than starting flush at the hit, so
-	// the text runs from start+before -- "four" -- and holds the match.
+	// the text runs from "four" and holds the match.
 	if !strings.HasPrefix(fields[2], "four") || !strings.Contains(fields[2], "five") {
 		t.Errorf("text = %q, want it to run from line 11 and hold the match", fields[2])
 	}
 }
 
-func TestTruncateSaysOneLineOnce(t *testing.T) {
+// A capped page says nothing about the count. The span note names the node
+// and says where it runs, which is what a reader does next, and a count
+// measured over a region no rung names cannot even be placed: --section-body
+// runs to the end of the section, so a page ending at the paragraph's last
+// line would say "+2" for lines nothing on the page points at.
+func TestTruncateWritesNoCount(t *testing.T) {
 	path := doc(t, long)
-	stdout, _, code := capture(t, "one", path, "--expand", "--truncate", "6", "--heading")
-	if code != 0 {
-		t.Fatalf("exit = %d", code)
-	}
-	if !strings.Contains(stdout, "… +1 line\n") {
-		t.Errorf("want a singular line count:\n%s", stdout)
+	for _, args := range [][]string{
+		{"--expand", "--truncate", "3"},
+		{"--section-body", "--truncate", "8"},
+		{"--section", "--truncate", "3"},
+	} {
+		stdout, _, code := capture(t, append([]string{"^one$", path, "--heading"}, args...)...)
+		if code != 0 {
+			t.Fatalf("%v: exit = %d", args, code)
+		}
+		if strings.Contains(stdout, "… +") {
+			t.Errorf("%v: wrote a count:\n%s", args, stdout)
+		}
+		if !strings.Contains(stdout, "(code 7-13, section 3-13)") {
+			t.Errorf("%v: want the note to say where the rest is:\n%s", args, stdout)
+		}
 	}
 }
 
@@ -537,8 +555,9 @@ func TestTruncateLeavesAShortResultAlone(t *testing.T) {
 }
 
 // The machine formats have to stay machine-readable when they truncate:
-// compact keeps its one record per line, and json says how much it held back
-// rather than hiding it inside the text.
+// compact keeps its one record per line, and neither format lets a display
+// marker into the text. What was held back is not counted out -- the spans
+// field names the region, and --at takes it back whole.
 func TestTruncateStaysParseable(t *testing.T) {
 	path := doc(t, long)
 
@@ -550,11 +569,11 @@ func TestTruncateStaysParseable(t *testing.T) {
 		t.Errorf("want a path line and one record, got %d newlines:\n%s", lines, stdout)
 	}
 	if strings.Contains(stdout, "…") {
-		t.Errorf("the count belongs in its own field, not in the text:\n%s", stdout)
+		t.Errorf("a display marker leaked into the record:\n%s", stdout)
 	}
 	fields := strings.Split(strings.Split(strings.TrimSpace(stdout), "\n")[1], "\t")
-	if len(fields) != 7 || fields[3] != "0" || fields[4] != "4" {
-		t.Errorf("truncated fields = %q, want 7 fields with 0, 4 in the counts:\n%s", fields, stdout)
+	if len(fields) != 5 {
+		t.Errorf("record = %q, want 5 fields:\n%s", fields, stdout)
 	}
 
 	stdout, _, code = capture(t, "one", path, "--truncate", "3", "--json")
@@ -562,15 +581,13 @@ func TestTruncateStaysParseable(t *testing.T) {
 		t.Fatalf("exit = %d", code)
 	}
 	var got struct {
-		Text   string `json:"text"`
-		Before int    `json:"truncated_before"`
-		After  int    `json:"truncated_after"`
+		Text string `json:"text"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
 		t.Fatalf("json: %v\n%s", err, stdout)
 	}
-	if got.Before != 0 || got.After != 4 {
-		t.Errorf("truncated_before, truncated_after = %d, %d, want 0, 4", got.Before, got.After)
+	if strings.Contains(stdout, "truncated_") {
+		t.Errorf("json still counts out what it held back:\n%s", stdout)
 	}
 	if strings.Contains(got.Text, "…") {
 		t.Errorf("json text carries a display marker: %q", got.Text)
@@ -601,8 +618,12 @@ func TestTruncateCapsEachTouchingResultOnItsOwn(t *testing.T) {
 			t.Errorf("printed past the cap of one line (%q):\n%s", unwanted, stdout)
 		}
 	}
-	if n := strings.Count(stdout, "… +1 line"); n != 3 {
-		t.Errorf("held-back counts = %d, want one per result:\n%s", n, stdout)
+	// Each result carries its own note, naming its own item, which is how a
+	// reader sees three capped results rather than one.
+	for _, want := range []string{"(item 3-4,", "(item 5-6,", "(item 7-8,"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("want a note per result, missing %q:\n%s", want, stdout)
+		}
 	}
 }
 
@@ -633,7 +654,7 @@ func TestPipedOutputIsBareByDefault(t *testing.T) {
 	// The span note is the one line a pipe still gets by default: it says
 	// what the result could be widened to, which is a fact about the file
 	// rather than decoration of the page. --no-span takes it back.
-	if stdout != "- [ ] thin the fruit\n(item 17-17, list 17-17, section 15-17)\n" {
+	if stdout != "- [ ] thin the fruit\n(section 15-17)\n" {
 		t.Errorf("stdout = %q, want the markdown and its span note", stdout)
 	}
 	stdout, _, code = capture(t, "thin the fruit", path, "--no-span")
@@ -1100,9 +1121,9 @@ func TestAnEditAlreadyAsAskedIsMarkedEquals(t *testing.T) {
 	}
 }
 
-// What --truncate held back is said wherever it was held back, and the note
-// names its file the way every other line does: a pipe that cut a node and
-// said nothing would hand on a short node.
+// What --truncate held back is said by the span note, and the note names its
+// file the way every other line does: a pipe that cut a node and said nothing
+// would hand on a short node.
 func TestTruncateNoteIsPrintedOnAPipe(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.md")
@@ -1113,7 +1134,7 @@ func TestTruncateNoteIsPrintedOnAPipe(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if !strings.Contains(stdout, "\n… +") {
+	if !strings.Contains(stdout, "\n(code 7-13, section 3-13)") {
 		t.Errorf("the cut was not reported:\n%s", stdout)
 	}
 
@@ -1121,7 +1142,7 @@ func TestTruncateNoteIsPrintedOnAPipe(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if !strings.Contains(stdout, "a.md:… +") {
+	if !strings.Contains(stdout, "a.md:(code 7-13, section 3-13)") {
 		t.Errorf("want the note to name its file like any other line:\n%s", stdout)
 	}
 }

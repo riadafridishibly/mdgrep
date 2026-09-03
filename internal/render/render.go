@@ -87,8 +87,10 @@ type Printer struct {
 	// the only switch between line output and node output.
 	Whole bool
 	// Truncate caps how many lines of any one result are printed, so that a
-	// hit inside a 400-line fenced block does not print 400 lines. Zero means
-	// print all of them.
+	// hit inside a 400-line fenced block does not print 400 lines. It caps
+	// node output alone -- see nodePage -- since the lines a matcher pointed
+	// at are the answer and holding one back is the one thing a search must
+	// not do. Zero means print all of them.
 	Truncate int
 
 	wroteAny bool
@@ -232,17 +234,7 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 	var shown []string
 	for _, r := range results {
 		full := p.page(src, r)
-		window, before, after := p.cap(full, r)
-		// The note writes out the spans a result could be widened to, so where
-		// the page it capped is one of them the note's own numbers are the
-		// count: "item 495-505" beside a printed 495 says the ten lines held
-		// back as plainly as "… +10 lines" does. It takes the numbers to say
-		// it, though -- they are what places the window inside the span -- and
-		// a page of match lines is no span at all, so there the counts are the
-		// only thing that says lines were cut.
-		if p.LineNumbers && named(full, r.Rungs) && p.spanNote(r, window) != "" {
-			before, after = 0, 0
-		}
+		window := p.cap(full, r)
 		// Context is counted in the file and clipped to it, so two windows
 		// reaching the same line are one group of file lines rather than two
 		// copies of it. The lines a widener asked for are the region itself
@@ -262,13 +254,6 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 			fmt.Fprintln(p.W, p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
 		}
 		shown = r.Breadcrumb
-		// What --truncate held back is said wherever it was held back: a
-		// window with nothing to say it is short is a short node to whoever
-		// reads it. --format compact and --format json carry the same two
-		// counts as numbers.
-		if before > 0 {
-			p.writeNote(src.Path, elision(before))
-		}
 		for j, l := range lines {
 			if j > 0 && lines[j-1].n != l.n-1 {
 				p.separate()
@@ -282,9 +267,6 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 		if len(lines) > 0 {
 			last = lines[len(lines)-1].n
 		}
-		if after > 0 {
-			p.writeNote(src.Path, elision(after))
-		}
 		// The note is a terminator rather than a group of file lines, so no
 		// separator stands in front of it. It is measured against the whole
 		// window rather than what was left of it: the lines dropped are on the
@@ -293,21 +275,6 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 			p.writeNote(src.Path, note)
 		}
 	}
-}
-
-// named reports whether a page is exactly one of the spans the note writes
-// out. The page is sorted and holds each line once, so covering the span's
-// count from its first line to its last is the whole of it.
-func named(page []outLine, rungs []search.Rung) bool {
-	if len(page) == 0 {
-		return false
-	}
-	for _, g := range rungs {
-		if len(page) == g.End-g.Start+1 && page[0].n == g.Start && page[len(page)-1].n == g.End {
-			return true
-		}
-	}
-	return false
 }
 
 // past drops the lines a group already printed, so a window reaching back into
@@ -370,11 +337,24 @@ func (p *Printer) page(src *mdoc.Source, r search.Result) []outLine {
 // cap applies --truncate to a page. The cap is a budget of lines and the
 // matched line is the one thing the caller asked for, so the window starts at
 // the top of what would have printed and slides down only as far as it must to
-// hold that line, spending what is left of the budget below it. before is
-// therefore what was skipped to reach the hit, not context kept above it.
-func (p *Printer) cap(lines []outLine, r search.Result) (kept []outLine, before, after int) {
-	if p.Truncate <= 0 || len(lines) <= p.Truncate {
-		return lines, 0, 0
+// hold that line, spending what is left of the budget below it.
+//
+// What it held back it does not count out. The span note is already the whole
+// of what a reader does next -- it names the node and says where it runs, and
+// --at takes it back -- while a count is only a count, and one measured over a
+// region no rung names cannot even be placed: --section-body 12-20 printed to
+// 18 says "+2" for lines a page showing "paragraph 12-18" has no way to point
+// at. --format compact and --format json carry the two counts as numbers, for
+// a caller that is doing arithmetic rather than reading.
+//
+// It caps node output alone. A page of match lines is already as short as the
+// answer is, and cutting it holds back lines that matched -- three hits in a
+// fence under --truncate 1 printed one of them and counted the other two as
+// held back, which is a search failing to answer rather than a page being
+// shortened.
+func (p *Printer) cap(lines []outLine, r search.Result) []outLine {
+	if p.Truncate <= 0 || !p.nodePage(r) || len(lines) <= p.Truncate {
+		return lines
 	}
 	hit := 0
 	for i, l := range lines {
@@ -388,54 +368,76 @@ func (p *Printer) cap(lines []outLine, r search.Result) (kept []outLine, before,
 		first = min(hit, len(lines)-p.Truncate)
 	}
 	last := min(first+p.Truncate-1, len(lines)-1)
-	return lines[first : last+1], first, len(lines) - 1 - last
+	return lines[first : last+1]
+}
+
+// nodePage reports whether a page is a node's length rather than an answer's,
+// which is what --truncate caps. A widener asks for the region whole, and a
+// node matcher -- --todo, -k, -v, --outline, an empty pattern -- points at no
+// line at all, so the node claims every line it has. Everything else is the
+// lines the matcher pointed at, and those are the result.
+func (p *Printer) nodePage(r search.Result) bool {
+	return p.Whole || len(r.Hits) == 0
 }
 
 // spanNote is the expand ladder written out: one rung per entry, in ladder
-// order, so position is the --expand count. It is printed whole or not at all
-// -- drop one rung and every rung after it sits at a position that is no
-// longer its count -- and it drops when the page already covers every rung, or
-// when the hit lies before the first heading and there is no section to widen
-// to.
+// order, widest last. A rung the printed lines already cover is left out --
+// the page is showing that region entire, so naming it offers the reader
+// nothing back -- and a note whose every rung is covered goes altogether.
+// Rungs nest, so what drops is always a prefix of the ladder, and what is
+// left is what there is still to gain; --at takes an entry of it back. That
+// costs the plain note the --expand count, which position carried while every
+// rung was printed: --format compact and --format json carry the ladder whole
+// and in order, for a caller counting rather than reading.
+//
+// A ladder that runs out before a section is still a ladder: a hit above the
+// first heading has no section to widen to, but the fence or the list around
+// it is a rung, --expand climbs it, and the machine formats name it, so the
+// note names it too.
 func (p *Printer) spanNote(r search.Result, shown []outLine) string {
 	if !p.Span || len(r.Rungs) == 0 {
-		return ""
-	}
-	if r.Rungs[len(r.Rungs)-1].Kind != mdoc.KindSection {
 		return ""
 	}
 	on := make(map[int]bool, len(shown))
 	for _, l := range shown {
 		on[l.n] = true
 	}
-	covered := true
-	parts := make([]string, len(r.Rungs))
-	for i, g := range r.Rungs {
-		parts[i] = fmt.Sprintf("%s %d-%d", g.Kind, g.Start+1, g.End+1)
-		for n := g.Start; n <= g.End && covered; n++ {
-			covered = on[n]
+	var parts []string
+	for _, g := range r.Rungs {
+		if onPage(on, g) {
+			continue
 		}
+		parts = append(parts, fmt.Sprintf("%s %d-%d", g.Kind, g.Start+1, g.End+1))
 	}
-	if covered {
+	if len(parts) == 0 {
 		return ""
 	}
 	return "(" + strings.Join(parts, ", ") + ")"
 }
 
+// onPage reports whether every line of a rung was printed.
+func onPage(on map[int]bool, g search.Rung) bool {
+	for n := g.Start; n <= g.End; n++ {
+		if !on[n] {
+			return false
+		}
+	}
+	return true
+}
+
 // window applies Truncate to the whole region a machine format reports. A
 // record carries the node, so the window is measured over Start..End rather
 // than over the lines a page would have printed.
-func (p *Printer) window(r search.Result) (first, last, before, after int) {
+func (p *Printer) window(r search.Result) (first, last int) {
 	if p.Truncate <= 0 || r.End-r.Start+1 <= p.Truncate {
-		return r.Start, r.End, 0, 0
+		return r.Start, r.End
 	}
 	hit := hitLine(r)
 	first = r.Start
 	if hit > first+p.Truncate-1 {
 		first = min(hit, r.End-p.Truncate+1)
 	}
-	last = min(first+p.Truncate-1, r.End)
-	return first, last, first - r.Start, r.End - last
+	return first, min(first+p.Truncate-1, r.End)
 }
 
 // hitLine is the line a window has to keep. A block is scored whole -- the
@@ -451,13 +453,6 @@ func hitLine(r search.Result) int {
 		return r.Hits[0]
 	}
 	return r.HitStart
-}
-
-func elision(cut int) string {
-	if cut == 1 {
-		return "… +1 line"
-	}
-	return fmt.Sprintf("… +%d lines", cut)
 }
 
 func (p *Printer) highlight(line string, m match.Matcher) string {
@@ -486,27 +481,25 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 
 // printCompact writes the path once and then one record per result:
 //
-//	start[-end] <TAB> kind <TAB> text <TAB> before <TAB> after <TAB> hits <TAB> spans
+//	start[-end] <TAB> kind <TAB> text <TAB> hits <TAB> spans
 //
 // The text is escaped so a record is always one line, which is the whole point
 // of the format — a reader splits on newline and then on tab, and a path is
 // the line that has no tab in it. The path is escaped for the same reason: a
 // filename may hold a tab or a newline, and the format has to survive one.
 //
-// before and after are how many lines --truncate held back on each side, so
-// the count is read as a number rather than out of an English notice inside
-// the text, which a document that says the same thing would be
-// indistinguishable from. They are two fields and not their sum because the
-// span is the node's and the text is the window: a reader adds before to
-// start to find the line the text begins on, which one total cannot say.
+// Under --truncate the span is still the node's and the text is only the
+// window kept, and the record says nothing about how much was held back: the
+// spans field already names the regions to ask for, and --at takes one back
+// whole.
 func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
 	p.wroteAny = true
 	fmt.Fprintln(p.W, Escape(src.Path))
 	for _, r := range results {
-		first, last, before, after := p.window(r)
+		first, last := p.window(r)
 		text := strings.Join(src.Lines(first, last), "\n")
-		fmt.Fprintf(p.W, "%s\t%s\t%s\t%d\t%d\t%s\t%s\n",
-			lineSpan(r.Start, r.End), r.Kind, Escape(text), before, after,
+		fmt.Fprintf(p.W, "%s\t%s\t%s\t%s\t%s\n",
+			lineSpan(r.Start, r.End), r.Kind, Escape(text),
 			hitList(r.Hits), rungList(r.Rungs))
 	}
 }
@@ -552,13 +545,6 @@ type jsonResult struct {
 	Checked    *bool    `json:"checked,omitempty"`
 	Breadcrumb []string `json:"breadcrumb,omitempty"`
 	Text       string   `json:"text"`
-	// TruncatedBefore and TruncatedAfter count the lines --truncate held back
-	// on each side, so a reader can tell a short node from a capped one
-	// without measuring the text against start and end -- and, since start is
-	// the node's and text is the window, can place the window by adding
-	// TruncatedBefore to start.
-	TruncatedBefore int `json:"truncated_before,omitempty"`
-	TruncatedAfter  int `json:"truncated_after,omitempty"`
 	// Hits are the lines that matched, 1-based. Empty for a node matcher,
 	// which is how a reader tells "every line" from "these lines".
 	Hits []int `json:"hits"`
@@ -631,20 +617,18 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 		if r.Task {
 			checked = &r.Checked
 		}
-		first, last, before, after := p.window(r)
+		first, last := p.window(r)
 		enc.Encode(jsonResult{
-			Path:            r.Path,
-			Kind:            string(r.Kind),
-			Score:           r.Score,
-			Start:           r.Start + 1,
-			End:             max(r.End, r.Start) + 1,
-			Checked:         checked,
-			Breadcrumb:      r.Breadcrumb,
-			Text:            strings.Join(src.Lines(first, last), "\n"),
-			TruncatedBefore: before,
-			TruncatedAfter:  after,
-			Hits:            oneBased(r.Hits),
-			Spans:           ladderOf(r.Rungs),
+			Path:       r.Path,
+			Kind:       string(r.Kind),
+			Score:      r.Score,
+			Start:      r.Start + 1,
+			End:        max(r.End, r.Start) + 1,
+			Checked:    checked,
+			Breadcrumb: r.Breadcrumb,
+			Text:       strings.Join(src.Lines(first, last), "\n"),
+			Hits:       oneBased(r.Hits),
+			Spans:      ladderOf(r.Rungs),
 		})
 	}
 }

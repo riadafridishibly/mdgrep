@@ -45,7 +45,7 @@ func TestAResultPrintsTheLinesThatMatched(t *testing.T) {
 	path := doc(t, notes)
 	want := strings.Join([]string{
 		"3:Intro paragraph about foo.",
-		"(paragraph 3-3, section 1-15)",
+		"(section 1-15)",
 		"--",
 		"7:Install foo, then run foo doctor.",
 		"--",
@@ -70,7 +70,7 @@ func TestANodeWhoseEveryLineMatchedPrintsWhole(t *testing.T) {
 		"7:Install foo, then run foo doctor.",
 		"8:Check the log.",
 		"9:Then foo again.",
-		"(paragraph 7-9, section 5-9)",
+		"(section 5-9)",
 		"",
 	}, "\n")
 	if got := page(t, "-e", "Install", "-e", "Check", "-e", "Then", path, "-n"); got != want {
@@ -86,7 +86,7 @@ func TestAMatcherWithNoLineToNameClaimsThemAll(t *testing.T) {
 	path := doc(t, notes)
 	want := strings.Join([]string{
 		"15:- [ ] archive the logs",
-		"(item 15-15, list 13-15, section 11-15)",
+		"(list 13-15, section 11-15)",
 		"",
 	}, "\n")
 	if got := page(t, "-v", "vault", "-k", "item", path, "-n"); got != want {
@@ -94,12 +94,13 @@ func TestAMatcherWithNoLineToNameClaimsThemAll(t *testing.T) {
 	}
 
 	// The two items merge into one result, so the ladder starts at the
-	// smallest block containing all of it and one note closes three lines.
+	// smallest block containing all of it -- and all of it printed, so the
+	// list rung goes too and one note names the section alone.
 	want = strings.Join([]string{
 		"13:- [ ] rotate the foo key",
 		"14:      the old key is in the vault",
 		"15:- [ ] archive the logs",
-		"(list 13-15, section 11-15)",
+		"(section 11-15)",
 		"",
 	}, "\n")
 	if got := page(t, "", "--todo", path, "-n"); got != want {
@@ -107,14 +108,15 @@ func TestAMatcherWithNoLineToNameClaimsThemAll(t *testing.T) {
 	}
 }
 
-// Asking for a widener asks to see the region whole. --section covers every
-// rung of the ladder, which is the one case the note drops entirely.
+// Asking for a widener asks to see the region whole, and a rung the page now
+// covers goes: --expand leaves the item out, and --section covers every rung
+// and drops the note entirely.
 func TestAWidenerPrintsTheRegionWhole(t *testing.T) {
 	path := doc(t, notes)
 	want := strings.Join([]string{
 		"13:- [ ] rotate the foo key",
 		"14:      the old key is in the vault",
-		"(item 13-14, list 13-15, section 11-15)",
+		"(list 13-15, section 11-15)",
 		"",
 	}, "\n")
 	if got := page(t, "vault", path, "-n", "--expand"); got != want {
@@ -142,7 +144,7 @@ func TestContextLinesTakeTheDash(t *testing.T) {
 		"13-- [ ] rotate the foo key",
 		"14:      the old key is in the vault",
 		"15-- [ ] archive the logs",
-		"(item 13-14, list 13-15, section 11-15)",
+		"(section 11-15)",
 		"",
 	}, "\n")
 	if got := page(t, "vault", path, "-n", "-C", "1"); got != want {
@@ -151,10 +153,11 @@ func TestContextLinesTakeTheDash(t *testing.T) {
 }
 
 // An anchor selects its heading outright, so its match line is the heading's
-// own first line and the ladder is two rungs.
+// own first line. The ladder is two rungs, and the heading printed whole
+// leaves the section as the only one worth naming.
 func TestAnAnchorNamesItsMatchLine(t *testing.T) {
 	path := doc(t, notes)
-	want := "11:## Tasks\n(heading 11-11, section 11-15)\n"
+	want := "11:## Tasks\n(section 11-15)\n"
 	if got := page(t, "--anchor", "#tasks", path, "-n"); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -212,7 +215,7 @@ func TestAtSelectsTheLinesItNames(t *testing.T) {
 	want := strings.Join([]string{
 		"13:- [ ] rotate the foo key",
 		"14:      the old key is in the vault",
-		"(item 13-14, list 13-15, section 11-15)",
+		"(list 13-15, section 11-15)",
 		"",
 	}, "\n")
 	if got := page(t, "--at", "13-14", path, "-n"); got != want {
@@ -356,11 +359,11 @@ func TestASeparatorStandsOnlyBetweenGroupsThatAreApart(t *testing.T) {
 	path := doc(t, bullets)
 	want := strings.Join([]string{
 		"3:- alpha",
-		"(item 3-3, list 3-5, section 1-7)",
+		"(list 3-5, section 1-7)",
 		"4:- beta",
-		"(item 4-4, list 3-5, section 1-7)",
+		"(list 3-5, section 1-7)",
 		"5:- gamma",
-		"(item 5-5, list 3-5, section 1-7)",
+		"(list 3-5, section 1-7)",
 		"",
 	}, "\n")
 	if got := page(t, "^- ", path, "-n", "--truncate", "1"); got != want {
@@ -380,7 +383,7 @@ func TestOverlappingContextPrintsALineOnce(t *testing.T) {
 		"4-",
 		"5-## Setup",
 		"6-",
-		"(paragraph 3-3, section 1-15)",
+		"(section 1-15)",
 		"7:Install foo, then run foo doctor.",
 		"8-Check the log.",
 		"9:Then foo again.",
@@ -508,28 +511,62 @@ func TestMachineFormatsRefuseThePageFlags(t *testing.T) {
 
 // --truncate says what it held back, and the span note says how long the node
 // was. Where the page it capped is one of the spans the note writes out, those
-// are the same fact twice: the note's own numbers are the count. Where it is
-// not -- a page of match lines, which no span names -- the count is the only
-// thing that says lines were cut, and it stays.
-func TestTruncateSaysWhatTheNoteDoesNot(t *testing.T) {
+// are the same fact twice: the note's own numbers are the count, and they say
+// where the rest is, which is what a reader does next. Those numbers are file
+// lines rather than output lines, so the note reads the same whether or not
+// the page is numbered and -n has no bearing on the count.
+func TestTruncateLeavesTheCountToTheNote(t *testing.T) {
 	path := doc(t, notes)
-	// The page is the task item whole, which the note's first span names.
+	// The page is one line of the item, which the note's first span names.
 	want := strings.Join([]string{
 		"13:- [ ] rotate the foo key",
 		"(item 13-14, list 13-15, section 11-15)",
 		"--",
 		"15:- [ ] archive the logs",
-		"(item 15-15, list 13-15, section 11-15)",
+		"(list 13-15, section 11-15)",
 		"",
 	}, "\n")
 	if got := page(t, "", path, "--todo", "-n", "--truncate", "1"); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
-	// The page is the two lines of the paragraph that matched, and no span
-	// says there were two rather than three.
+	// The same page unnumbered says the same thing: the note carried the
+	// count when the lines were numbered and carries it now.
 	want = strings.Join([]string{
+		"- [ ] rotate the foo key",
+		"(item 13-14, list 13-15, section 11-15)",
+		"--",
+		"- [ ] archive the logs",
+		"(list 13-15, section 11-15)",
+		"",
+	}, "\n")
+	if got := page(t, "", path, "--todo", "-N", "--truncate", "1"); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	// --no-span turns the hints off. A reader who asked for no hints is not
+	// asking for this one either, so nothing stands in the note's place.
+	want = strings.Join([]string{
+		"13:- [ ] rotate the foo key",
+		"--",
+		"15:- [ ] archive the logs",
+		"",
+	}, "\n")
+	if got := page(t, "", path, "--todo", "-n", "--no-span", "--truncate", "1"); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// --truncate caps node output alone. A line matcher's page is the lines it
+// pointed at, and those are the answer rather than the node they sit in, so
+// the cap does not reach them: capping a page of match lines holds back lines
+// that matched, which is a search failing to answer rather than a page being
+// shortened. Two matched lines of a three-line paragraph print under
+// --truncate 1, and no count stands between them.
+func TestTruncateLeavesMatchedLinesWhole(t *testing.T) {
+	path := doc(t, notes)
+	want := strings.Join([]string{
 		"7:Install foo, then run foo doctor.",
-		"… +1 line",
+		"--",
+		"9:Then foo again.",
 		"(paragraph 7-9, section 5-9)",
 		"",
 	}, "\n")

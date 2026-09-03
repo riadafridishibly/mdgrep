@@ -15,9 +15,9 @@ $ mdgrep "brew install" notes.md
 Matched characters are highlighted. Lines are written the way `grep` and `rg`
 write them — `path:line:text` for a match, `path-line-text` for a context line
 — and the note that closes a result is a cost table: 3 lines, 9 lines, 17
-lines, one rung of the expand ladder each. `--expand` takes the first,
-`--expand 1` the second, `--section` the last, and `--at 11-19` takes any of
-them back on the next command line. On a terminal the heading trail above a
+lines, one rung of the expand ladder each, and `--at 11-19` takes any of them
+back on the next command line. A rung the page already printed whole is left
+out, having nothing left to give. On a terminal the heading trail above a
 result says where you are.
 
 ## Install
@@ -482,7 +482,7 @@ matches", for the same reason an unreadable directory is.
 | `--separator STR` | what goes between two groups of lines that are not next to each other in the file; `--` by default, and `--separator ''` leaves none |
 | `--span` | print the expand ladder after each result (default) |
 | `--no-span` | do not |
-| `--truncate N` | print at most N lines of any one result |
+| `--truncate N` | cap node output at N lines; matched lines are never capped |
 | `--color WHEN` | `auto` (default), `always`, `never` |
 | `--format WHEN` | `plain` (default), `compact`, `json` or `stream` |
 | `--json` | one JSON object per result (same as `--format json`) |
@@ -549,23 +549,27 @@ ladder per entry, from the matched node up to its enclosing section:
 (item 693-715, list 509-722, section 507-724)
 ```
 
-**Position is the `--expand` count**: the first entry is `--expand`, the second
-`--expand 1`, and the last is whatever `--section` selects. Nothing is
-numbered, because the note is printed whole or not at all — drop one rung and
-every rung after it sits at a position that is no longer its count.
-
 **It is a cost table, not a pointer.** 23 lines, 214 lines, 218 lines: one span
 would report 218 when what you want is 23, and would hide that the middle rung
 is a trap — the list is 98% of the section, so `--expand 1` costs everything
 `--section` costs and gives less. Three spans make that decidable without a
-second run.
+second run. Nothing is numbered: `--at 509-722` takes an entry back by its own
+numbers, which is what a reader does with one.
+
+**A rung the page already covers is left out.** Printing a region entire is
+already showing it, so naming it costs a line and gives nothing back — a
+heading printed whole closes with `(section 46-48)`, not `(heading 46-46,
+section 46-48)`. Rungs nest, so what drops is a prefix of the ladder and what
+is left is what widening would still buy. That is why the plain note is not
+counted for `--expand`; `--format compact` and `--format json` carry the
+ladder whole and in order for a caller doing that arithmetic.
 
 The ladder climbs block ancestors and, where those run out, carries on up the
 heading hierarchy — headings parse as flat siblings of the document, so
 climbing block parents alone never reaches one. It stops at the first section:
 past that you are reading the file, not widening a result. The note goes
-entirely when the printed lines already cover every rung, context lines
-included, or when the hit lies before the first heading and there is no
+entirely when the printed lines cover every rung — context lines count as
+printed — or when the hit lies before the first heading and there is no
 section to widen to. `--no-span` takes it back.
 
 The heading trail has no counterpart in `grep`, so a pipe gets none until
@@ -599,17 +603,40 @@ them. The span note is a terminator rather than a group, so nothing precedes
 it. `--separator ''` leaves the groups flush, and `--separator STR` sets any
 other string.
 
-`--truncate N` caps how much of one node is printed — a hit inside a 400-line
-fenced block otherwise prints all 400 lines:
+`--truncate N` caps node output — a page that is a node's length rather than
+an answer's. That is what a widener asks for whole, and what a node matcher
+(`--todo`, `-k`, `-v`, `--outline`, an empty pattern) claimed whole, having
+pointed at no line of it. A hit inside a 400-line fence otherwise prints all
+400 lines:
 
 ```
-$ mdgrep "orchard survey" docs --truncate 3 -n
+$ mdgrep "block 20" docs --expand --truncate 3
 docs/pruning.md
 Pruning › Survey
-8:orchard survey --block 03
-9:orchard survey --block 04
-10:orchard survey --block 05
-… +38 lines
+orchard survey --block 20
+orchard survey --block 21
+orchard survey --block 22
+(code 7-49, section 3-49)
+```
+
+The cap does not reach the lines a line matcher pointed at. Those are the
+answer rather than the node they sit in, and holding one back is a search
+failing to answer, not a page being shortened, so the same fence under the
+same cap prints every line it found:
+
+```
+$ mdgrep "block 0" docs --truncate 3 -n
+docs/pruning.md
+Pruning › Survey
+8:orchard survey --block 01
+9:orchard survey --block 02
+10:orchard survey --block 03
+11:orchard survey --block 04
+12:orchard survey --block 05
+13:orchard survey --block 06
+14:orchard survey --block 07
+15:orchard survey --block 08
+16:orchard survey --block 09
 (code 7-49, section 3-49)
 ```
 
@@ -618,40 +645,30 @@ way the file does — but not under `--truncate`, where the cap would be spent
 on the first of them and the rest would drop off the page rather than be
 shortened. Under `--truncate` each node is capped on its own.
 
-The `… +N lines` note is printed wherever lines were held back, on a line of
-its own that names its file the way every other line does and takes no line
-number, having none — `docs/pruning.md:… +38 lines` on a pipe. `--format
-compact` and `--format json` carry the two counts as numbers.
+Three lines of `code 7-49` printed is forty held back, and the span note is
+what says so — it names the node, says where it runs, and `--at 7-49` takes
+the rest back, which is the whole of what a reader does next. So a capped page
+does not also count the lines out. A count is only a count, and one measured
+over a region no rung names cannot even be placed: `--section-body` runs to
+the end of the section, so a page ending at the paragraph's last line would
+report lines that nothing on the page points at.
 
-It is left out where the span note already says it. Above, the page is the
-lines that matched and no span names it, so the count is the only thing that
-says lines were cut. Where the page is one of the spans — a widener asked for
-the region, or a node matcher claimed it whole — the note's own numbers are
-the count, and repeating it would be saying the same thing twice:
-
-```
-$ mdgrep "" notes.md --todo --truncate 1 -n
-495:- [ ] What the shell draws while a body is coming — the header costs
-(item 495-505, list 443-505, section 423-505)
-```
-
-It takes the line numbers to say it, since they are what places the window
-inside the span, so with `-N` the counts come back.
+The machine formats hold to the same line: the span stays the node's, the text
+is the window, and `spans` names the region to ask for.
 
 ### Machine-readable output
 
 `--format compact` prints the path once per file and then one tab-separated
 record per result — the line span, the kind, the text with its newlines
-escaped, how many lines `--truncate` held back before and after it, the lines
-that matched, and the expand ladder as `kind:start-end` — so a record is always
-one line and the path is the line with no tab in it:
+escaped, the lines that matched, and the expand ladder as `kind:start-end` —
+so a record is always one line and the path is the line with no tab in it:
 
 ```
 $ mdgrep "" pruning.md --format compact
 pruning.md
-1	heading	# Pruning	0	0		heading:1-1,section:1-30
-3	heading	## Winter Pruning	0	0		heading:3-3,section:3-15
-5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0		paragraph:5-6,section:3-15
+1	heading	# Pruning		heading:1-1,section:1-30
+3	heading	## Winter Pruning		heading:3-3,section:3-15
+5-6	paragraph	Cut back the leader\nbefore the sap rises.		paragraph:5-6,section:3-15
 ```
 
 The hits field is empty for a node matcher — `-v`, or the empty pattern behind
@@ -661,12 +678,12 @@ lines". A pattern that can name its lines fills it in:
 ```
 $ mdgrep "sap" pruning.md --format compact
 pruning.md
-5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0	6	paragraph:5-6,section:3-15
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	6	paragraph:5-6,section:3-15
 ```
 
-The span is the node's and the text is the window `--truncate` kept, so the
-two counts are what places one in the other: the text begins on the span's
-start plus the lines held back before it.
+The span is the node's and the text is the window `--truncate` kept. The
+record does not say how much was held back: `spans` names the regions, and
+`--at` takes one back whole.
 
 One record is one node. Two hits that touch — neighbouring checkboxes, headings
 with nothing between them — are printed as a single passage in plain output,
@@ -683,7 +700,7 @@ whenever those two are not what is wanted.
 
 `--json` emits one object per line: `path`, `kind`, `score`, `start`, `end`
 (1-based, inclusive), `breadcrumb`, `text`, `hits` and `spans`, plus `checked`
-on task items and `truncated_before` and `truncated_after` under `--truncate`.
+on task items.
 `hits` is the lines that matched and is empty for a node matcher; `spans` is
 the expand ladder as `{kind, start, end}` in ladder order, so the array index
 is the `--expand` count and the last entry is what `--section` selects. An

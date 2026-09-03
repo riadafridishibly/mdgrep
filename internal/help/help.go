@@ -200,11 +200,14 @@ Output
                         which is grep's, and "--separator ''" leaves none
       --span            print the expand ladder after each result (default)
       --no-span         do not
-      --truncate N      print at most N lines of a result, keeping the
-                        matched node, then a count of what was held back
-                        unless the span note already says it. Results that
-                        touch stay apart under it, since a cap spent on the
-                        first of them would drop the rest
+      --truncate N      cap node output at N lines, keeping the matched
+                        line, then a count of what was held back. Node
+                        output is a region a widener asked for whole and a
+                        node a node matcher claimed whole; the lines a line
+                        matcher pointed at are the answer and are never
+                        capped. Results that touch stay apart under it,
+                        since a cap spent on the first of them would drop
+                        the rest
       --color WHEN      auto, always or never (default auto)
       --format WHEN     plain (default), compact, json or stream
       --json            one JSON object per result (same as --format json)
@@ -248,30 +251,32 @@ expand ladder per entry from the matched node up to its enclosing section:
 
   (item 693-715, list 509-722, section 507-724)
 
-Position is the --expand count -- the first entry is --expand, the second
---expand 1, the last what --section selects -- so the note is printed whole or
-not at all, and it is a cost table rather than a pointer: 23 lines, 214, 218,
-which is what says the middle rung costs everything the section costs and
-gives less. --at takes an entry of it back. The note goes when the printed
-lines already cover every rung, or when the hit lies before the first heading
-and there is no section to widen to. The heading
-trail has no counterpart in grep, so a pipe gets none until --breadcrumb asks;
-it goes wherever a heading goes, since a heading is what says a person is
-reading, and --no-breadcrumb leaves it out. Having nowhere to stand but above
-a file's results, it is refused beside --no-heading. What --truncate held back
-is noted where it was held back: "… +N lines" on a line of its own, which
-names its file the way every other line does and takes no line number, having
-none. It is left out where the page it capped is one of the spans the note
-writes out and the lines are numbered, since the span and the numbers are the
-count. --format compact and --format json carry the two as numbers always.
+It is a cost table rather than a pointer: 23 lines, 214, 218, which is what
+says the middle rung costs everything the section costs and gives less. --at
+takes an entry of it back. A rung the printed lines already cover is left out,
+having nothing left to give -- printing a heading whole leaves "(section
+46-48)" and nothing about the heading -- and the note goes altogether when the
+page covers every rung. That is why the plain note is no longer counted for
+--expand; --format compact and --format json carry the ladder whole and in
+order, so the first entry is bare --expand, the second --expand 1, and the last
+what --section selects. The heading trail has no counterpart in grep,
+so a pipe gets none until --breadcrumb asks; it goes wherever a heading goes,
+since a heading is what says a person is reading, and --no-breadcrumb leaves
+it out. Having nowhere to stand but above a file's results, it is refused
+beside --no-heading. What --truncate held back a page does not count out. The
+span note already names the node and says where it runs, which is what a
+reader does next and what --at takes back, and a count measured over a region
+no rung names cannot be placed at all: --section-body runs to the end of the
+section, so a page ending at the paragraph's last line would report lines
+nothing on the page points at. The machine formats count it out no more than
+a page does: the span stays the node's, the text is the window, and spans
+names the region to ask for.
 
 compact is one tab-separated record per result under the path — "start[-end]
-kind text before after hits spans", newlines escaped — for a fraction of what
-json costs. before and after are the lines --truncate held back on each side;
-the span is the node's, so the text starts at start plus before. hits are the
-lines that matched, comma-separated and empty for a node matcher, and spans is
-the ladder as "kind:start-end" in ladder order. json carries the same two as
-"hits" and "spans", and adds the breadcrumb and the score. Both keep touching
+kind text hits spans", newlines escaped — for a fraction of what json costs.
+hits are the lines that matched, comma-separated and empty for a node matcher,
+and spans is the ladder as "kind:start-end" in ladder order. json carries the
+same two as "hits" and "spans", and adds the breadcrumb and the score. Both keep touching
 nodes apart where plain runs them into one passage -- as --truncate does too --
 and both report a refusal in their own shape. Neither prints a page, so -A, -B,
 -C and --span are refused beside them the way --stream and --outline refuse

@@ -113,9 +113,9 @@ type Result struct {
 	// another.
 	Hits []int
 	// Rungs is the expand ladder, the matched node first and the enclosing
-	// section last. It is always the whole ladder; leaving out the rungs a
-	// page already covered is the printer's business, because position is
-	// what carries the --expand count.
+	// section last. It is always the whole ladder, and position in it is the
+	// --expand count; leaving out the rungs a page already printed whole is
+	// the printer's business, and costs the plain note that count.
 	Rungs      []Rung
 	Task       bool
 	Checked    bool

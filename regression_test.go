@@ -466,32 +466,12 @@ func TestMachineFormatsDropTheRedundantTrail(t *testing.T) {
 	}
 }
 
-// A compact record is read by splitting on tabs. A count of held-back lines
-// spelled in English inside the text field cannot be told apart from a
-// document that says the same words, so it gets a field of its own.
-func TestCompactSaysHowMuchItTruncated(t *testing.T) {
-	path := doc(t, "# Doc\n\nalpha\nbeta\ngamma\ndelta\nepsilon\n")
-	stdout, stderr, code := capture(t, "alpha", path, "--format", "compact", "--truncate", "2")
-	if code != 0 {
-		t.Fatalf("exit = %d (%s)", code, stderr)
-	}
-	record := strings.Split(strings.TrimSpace(stdout), "\n")[1]
-	fields := strings.Split(record, "\t")
-	if len(fields) != 7 {
-		t.Fatalf("want 7 fields, got %d: %q", len(fields), record)
-	}
-	if fields[3] != "0" || fields[4] != "3" {
-		t.Errorf("before, after = %q, %q, want 0, 3: %q", fields[3], fields[4], record)
-	}
-	if strings.Contains(fields[2], "…") {
-		t.Errorf("the notice is still inside the text: %q", record)
-	}
-}
-
-// The span is the node's and the text is the window --truncate kept, so one
-// count of the lines held back leaves a reader unable to say which line the
-// text starts on. Held back on each side, start plus before is that line.
-func TestCompactPlacesTheTruncatedWindow(t *testing.T) {
+// A compact record is read by splitting on tabs, and --truncate must not put
+// an English notice about held-back lines inside the text field: a document
+// that says the same words could not be told from it. The record says nothing
+// about the cap at all -- the span stays the node's, the text is the window,
+// and the spans field is what --at takes back whole.
+func TestCompactTruncatesWithoutANotice(t *testing.T) {
 	path := doc(t, "# Doc\n\nalpha\n\nbeta\n\ngamma\n\ndelta\n")
 	stdout, stderr, code := capture(t,
 		"delta", path, "--siblings", "2", "--format", "compact", "--truncate", "2")
@@ -500,8 +480,8 @@ func TestCompactPlacesTheTruncatedWindow(t *testing.T) {
 	}
 	record := strings.Split(strings.TrimSpace(stdout), "\n")[1]
 	fields := strings.Split(record, "\t")
-	if len(fields) != 7 {
-		t.Fatalf("want 7 fields, got %d: %q", len(fields), record)
+	if len(fields) != 5 {
+		t.Fatalf("want 5 fields, got %d: %q", len(fields), record)
 	}
 	if fields[0] != "5-9" {
 		t.Errorf("span = %q, want the region's 5-9: %q", fields[0], record)
@@ -509,11 +489,11 @@ func TestCompactPlacesTheTruncatedWindow(t *testing.T) {
 	if fields[2] != `\ndelta` {
 		t.Errorf("text = %q, want the last two lines of it: %q", fields[2], record)
 	}
-	// 5 (the span's start) plus 3 held back before is line 8, where the text
-	// begins. Their sum, 3, would have said the same for a window anywhere in
-	// the region.
-	if fields[3] != "3" || fields[4] != "0" {
-		t.Errorf("before, after = %q, %q, want 3, 0: %q", fields[3], fields[4], record)
+	if strings.Contains(fields[2], "…") {
+		t.Errorf("a notice is inside the text: %q", record)
+	}
+	if fields[4] != "paragraph:9-9,section:1-9" {
+		t.Errorf("spans = %q, want the ladder to name the region: %q", fields[4], record)
 	}
 }
 

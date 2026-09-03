@@ -54,15 +54,13 @@ only when it has something to say, exactly as today.
 | --- | --- | --- |
 | match | `path:line:text` | the line matched |
 | context | `path-line-text` | `-A`, `-B` or `-C` pulled the line in |
-| span note | `path:(item N-M, list N-M, section N-M)` | closes a result |
+| span note | `path:(list N-M, section N-M)` | closes a result |
 
 The colon and the dash are grep's and ripgrep's. The span note is mdgrep's
-own; it takes the colon and stands where a line number would otherwise be,
-which is what the existing `--truncate` note already does.
+own; it takes the colon and stands where a line number would otherwise be.
 
 A note is told from a match line by its parentheses, and by holding prose
-where a line number belongs — the same convention `--truncate`'s "… +N lines"
-already relies on.
+where a line number belongs.
 
 ### 1.2 Which lines match
 
@@ -104,10 +102,10 @@ expand ladder per entry, from the matched node up to its enclosing section:
 (item 13-14, list 13-15, section 11-15)
 ```
 
-Rungs appear in ladder order, so **position is the `--expand` count**: the
-first entry is `--expand`, the second `--expand 1`, and the last is whatever
-`--section` selects. Nothing is numbered, because nothing has to be — see
-§1.3.1 for the rule that keeps position honest.
+Rungs appear in ladder order, widest last, and the last is whatever
+`--section` selects. Nothing is numbered: `--at` takes an entry back by its
+own numbers, which is what a reader does with one. §1.3.1 says which rungs
+reach the note at all.
 
 **The note is a cost table, not a pointer.** One span cannot do that job. On a
 766-line tracking document, a hit at line 693 sits in:
@@ -127,31 +125,35 @@ still reachable by counting further, but nobody chooses between "218 lines"
 and "the whole document"; past the first section you are reading the file, not
 widening a result.
 
-#### 1.3.1 All rungs or none
+#### 1.3.1 A rung the page already covers is left out
 
-The note prints the **whole** ladder or nothing. Individual rungs are never
-dropped.
+The note is a cost table, and a rung whose every line already printed costs
+nothing and gives nothing: the reader is looking at that region entire.
+So it is dropped, and a heading printed whole closes with `(section 46-48)`
+rather than `(heading 46-46, section 46-48)`.
 
-This is what lets the numbers go. Drop one rung and every rung after it sits
-at a position that is no longer its `--expand` count, so the note has to
-number itself to stay executable. Keep them all and position carries the count
-for free.
+Coverage counts every line that reached the page, context lines included.
+Rungs nest, so what drops is always a prefix of the ladder and what is left is
+in ladder order still — the note names what widening would still buy, from the
+cheapest such rung up.
 
 The note disappears entirely when:
 
-- the printed lines cover every rung — context lines included, since coverage
-  is about what reached the page. This is what keeps `--section` from printing
-  a note about the section it just printed; or
+- the printed lines cover every rung. This is what keeps `--section` from
+  printing a note about the section it just printed; or
 - the hit lies before the first heading, so there is no section to report.
 
-The cost is mild repetition: after `--expand`, the note still lists the node
-you were just handed (§3.4). That is the price of a note whose shape does not
-change with the flags — the containment chain of a hit is a fact about the
-document, and reads the same however you arrived at it.
+What this costs is the `--expand` count. While every rung printed, position
+was the count — first entry `--expand`, second `--expand 1` — and a plain note
+no longer carries that, because its first entry is at whatever count the
+dropped prefix ended on. `--format compact` and `--format json` carry the
+ladder whole and in order (§4), for a caller counting rather than reading; a
+person reading gets `--at`, which needs no count.
 
-A rung that spans exactly what the rung before it spans is still listed. It is
-a real rung of the ladder — see §2.3 on why degenerate rungs are kept — and
-hiding it would break position just as surely.
+A rung that spans exactly what the rung before it spans is still a rung of the
+ladder — see §2.3 on why degenerate rungs are kept. It is listed whenever the
+page has not covered it, which given nesting means whenever the rung before it
+is listed too.
 
 The note carries no heading text. `--breadcrumb` prints the heading trail and
 already suppresses a repeat; duplicating it here would put the same string on
@@ -368,7 +370,7 @@ once above its results at a terminal and on every line in a pipe, unchanged.
 $ mdgrep foo spec.md -n
 
 3:Intro paragraph about foo.
-(paragraph 3-3, section 1-15)
+(section 1-15)
 --
 7:Install foo, then run foo doctor.
 --
@@ -384,9 +386,10 @@ Three results. The middle one is one node, paragraph `7-9`, whose lines 7 and
 closing it. Line 14 does not print: it is part of the item that matched, but
 it does not hold the pattern.
 
-The first two notes list a rung the page already covered — `paragraph 3-3` is
-just line 3, which printed. That is §1.3.1 holding: the ladder is listed
-whole, so the second entry is always `--expand 1` and never has to say so.
+The first note is one rung short of the third's shape: `paragraph 3-3` is just
+line 3, which printed, so §1.3.1 drops it and only the section is left to ask
+for. The second keeps its paragraph rung — line 8 did not print, so the node
+still has something to give.
 
 The third note shows all three rungs nearly equal, which is the honest answer
 for a document this small, and the reason §3.8 uses a real one.
@@ -399,7 +402,7 @@ $ mdgrep -e Install -e Check -e Then spec.md -n
 7:Install foo, then run foo doctor.
 8:Check the log.
 9:Then foo again.
-(paragraph 7-9, section 5-9)
+(section 5-9)
 ```
 
 The node prints whole, with no rule saying it should. Nothing was skipped, so
@@ -425,12 +428,12 @@ $ mdgrep vault spec.md -n --expand
 
 13:- [ ] rotate the foo key
 14:      the old key is in the vault
-(item 13-14, list 13-15, section 11-15)
+(list 13-15, section 11-15)
 ```
 
-The note is unchanged from §3.3 — it lists the node you were just handed. That
-is the cost of §1.3.1: the ladder describes where the hit sits, not what you
-have yet to ask for, so it reads the same however you got here.
+The item is on the page whole now, so §1.3.1 drops it and the note is what
+there is left to widen to. §3.3 printed line 14 alone and named the item
+first; the two notes differ by exactly the rung the page took over.
 
 ```
 $ mdgrep vault spec.md -n --section
@@ -453,11 +456,11 @@ $ mdgrep vault spec.md -n -C 1
 13-- [ ] rotate the foo key
 14:      the old key is in the vault
 15-- [ ] archive the logs
-(item 13-14, list 13-15, section 11-15)
+(section 11-15)
 ```
 
-Context counts as printed, so lines 13 and 15 cover the item and the list —
-but not the section, so the note stays, whole.
+Context counts as printed, so lines 13 and 15 cover the item and the list, and
+§1.3.1 drops both. The section is not covered, so the note stays and names it.
 
 `13--` is the dash prefix in front of a line whose text opens with `-`. This
 is what ripgrep prints, and it is why the prefix is worth keeping identical to
@@ -469,11 +472,12 @@ ripgrep's rather than invented afresh.
 $ mdgrep -v vault -k item spec.md -n
 
 15:- [ ] archive the logs
-(item 15-15, list 13-15, section 11-15)
+(list 13-15, section 11-15)
 ```
 
 Item `13-14` holds "vault" and is rejected. Item `15-15` matched by not
-holding it, so every line of it is a match line.
+holding it, so every line of it is a match line — which is also why the note
+opens at the list: the item printed whole, and §1.3.1 drops it.
 
 ```
 $ mdgrep '' --todo spec.md -n
@@ -481,11 +485,13 @@ $ mdgrep '' --todo spec.md -n
 13:- [ ] rotate the foo key
 14:      the old key is in the vault
 15:- [ ] archive the logs
-(list 13-15, section 11-15)
+(section 11-15)
 ```
 
 The ladder starts at the list, not at either item: a merged result has no
 single node, so the first rung is the smallest block containing all of it.
+All three of its lines printed, so §1.3.1 drops it too and only the section
+is named.
 
 The empty pattern claims every line, and the two items — `13-14` and `15-15` —
 merge into one result, so one note closes all three lines. The sub-bullet on
@@ -498,14 +504,15 @@ line) would have dropped.
 $ mdgrep --anchor '#tasks' spec.md -n
 
 11:## Tasks
-(heading 11-11, section 11-15)
+(section 11-15)
 ```
 
-The match line is the heading; the note gives the spans without repeating its
+The match line is the heading; the note gives the span without repeating its
 text. A heading's block parent is the document, so there is no rung between it
-and its section — the ladder is two rungs, and `--expand 1` is already
-`--section`. `--anchor '#tasks' --section` prints the section and drops
-the note.
+and its section — the ladder is two rungs, `heading 11-11` and the section —
+and `--expand 1` is already `--section`. The heading printed whole, so §1.3.1
+leaves only the section in the note. `--anchor '#tasks' --section` prints the
+section and drops the note altogether.
 
 ### 3.8 Why the ladder, not one span
 
@@ -537,12 +544,12 @@ $ mdgrep --at 13-14 spec.md -n
 
 13:- [ ] rotate the foo key
 14:      the old key is in the vault
-(item 13-14, list 13-15, section 11-15)
+(list 13-15, section 11-15)
 ```
 
-The same lines `--expand` printed in §3.4, without the search that found them.
-The note is unchanged again, for the reason §1.3.1 gives: it says where the
-lines sit, not how they were reached.
+The same lines `--expand` printed in §3.4, without the search that found them,
+and the same note: it says where the lines sit, not how they were reached, and
+§1.3.1 drops the item rung here for the same reason it dropped it there.
 
 ```
 $ mdgrep -e vault --at 13-14 spec.md --check
@@ -626,8 +633,9 @@ type Rung struct {
 }
 ```
 
-There is no count on a `Rung`. Position is the count, which is exactly what
-§1.3.1 buys by refusing to drop rungs individually.
+There is no count on a `Rung`. Position is the count in the ladder `search`
+hands over, which the machine formats print whole; the plain note drops the
+rungs the page covered (§1.3.1) and gives the count up in exchange.
 
 `Hits` is computed in `File`, where the matcher and the block are both in
 hand: `anchorHits` sets `[]int{HitStart}` directly, `matchHits` scans
@@ -689,9 +697,9 @@ whole, which is the current behaviour.
 which now has a clear home, since node output is what a widener asks for and
 what every `-v` and empty-pattern search produces.
 
-The note is rendered whole or not at all: if every rung is covered by what
-printed, nothing is written; otherwise every rung is. There is no per-rung
-filtering, which is what keeps position meaningful.
+The note leaves out every rung whose lines all reached the page, and is not
+written at all when that is every rung. `Rungs` itself is untouched: the
+machine formats print the ladder whole, and dropping is the printer's.
 
 ### 5.3 `internal/cli`
 

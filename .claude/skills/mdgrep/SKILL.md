@@ -67,16 +67,19 @@ takes `-`; under a widener the whole region is the answer and every line of it
 takes `:`. `--` stands between two groups of file lines that are not next to
 each other — `--separator ''` leaves none. Each result closes with its expand
 ladder, `(item 13-14, list 13-15, section 11-15)`, whose entries are what
-`--at` takes back; `--no-span` drops it.
+`--at` takes back — a rung the page already printed whole is left out, so a
+heading printed whole closes with `(section 46-48)` alone; `--no-span` drops
+the note.
 
 `--outline` is one indented line per heading and takes paths, not a pattern —
-the cheapest view of a tree. `--truncate N` caps one node, the guard against a
-hit inside a 400-line fence; under it two results that touch stay apart rather
-than sharing one cap, and its `… +N lines` note is a line of its own with the
-file name and no line number — left out where the page it capped is one of the
-spans the note writes out and the lines are numbered, since the span and the
-numbers already say it (`--format compact` and `--format json` carry the counts
-as numbers always). `-l` names files, `-c` counts, `-m N` caps per file, `-q`
+the cheapest view of a tree. `--truncate N` caps node output — what a widener
+asked for whole, and what a node matcher claimed whole — and is the guard
+against a hit inside a 400-line fence; the lines a line matcher pointed at are
+the answer and are never capped. Under it two results that touch stay apart
+rather than sharing one cap, and a capped page does not count the held-back
+lines out: the span note already names the node and says where it runs, which
+is what `--at` takes back (`--format compact` and `--format json` carry the
+counts as numbers for a caller doing arithmetic). `-l` names files, `-c` counts, `-m N` caps per file, `-q`
 answers in the exit status alone.
 
 To feed another mdgrep, chain stages (below) rather than reparsing text.
@@ -86,15 +89,15 @@ To feed another mdgrep, chain stages (below) rather than reparsing text.
 ```
 $ mdgrep "sap|Pruning" pruning.md --format compact
 pruning.md
-1	heading	# Pruning	0	0	1	heading:1-1,section:1-6
-5-6	paragraph	Cut back the leader\nbefore the sap rises.	0	0	6	paragraph:5-6,section:1-6
+1	heading	# Pruning	1	heading:1-1,section:1-6
+5-6	paragraph	Cut back the leader\nbefore the sap rises.	6	paragraph:5-6,section:1-6
 ```
 
-Tab-separated `start[-end] kind text before after hits spans`, newlines escaped
+Tab-separated `start[-end] kind text hits spans`, newlines escaped
 — in the path too, so a record is one line and a path is the line with no tab.
-The span is the node's, the text is what `--truncate` kept, and `before` and
-`after` are the lines it held back on each side: the text starts at start plus
-`before`. `hits` are the lines that matched, comma-separated and **empty for a
+The span is the node's and the text is what `--truncate` kept; the record does
+not count out what it held back — `spans` names the region and `--at` takes it
+back whole. `hits` are the lines that matched, comma-separated and **empty for a
 node matcher** (`-v`, or the empty pattern behind a filter) — which is how a
 reader tells "every line" from "these lines". `spans` is the expand ladder as
 `kind:start-end`, in ladder order, so the index is the `--expand` count. An
