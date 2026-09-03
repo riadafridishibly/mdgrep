@@ -249,6 +249,13 @@ checkbox, fences — where `--replace-node` keeps nothing. Inserted text is
 indented to match what it lands beside, and blank lines are added only where
 they will not loosen a list or break a table.
 
+`--delete` takes the blank line the region would otherwise leave behind: a
+region parted from what follows it by one blank line, and from what precedes
+it by a blank line or the start of the file, is removed together with that
+trailing blank. `--at 5-5 --delete` on a heading at line 5 therefore removes
+lines 5 and 6, so two blank lines do not collect where a block used to be.
+A plan that computes line numbers of its own should count on it.
+
 ### `--replace` substitutes text
 
 `--replace` is the odd one out: it rewrites **the text the pattern matched**

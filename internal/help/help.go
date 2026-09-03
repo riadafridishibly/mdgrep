@@ -81,7 +81,8 @@ Editing
                         expand as they do in a regexp replacement
       --replace-node TEXT
                         replace the whole selected region with TEXT
-      --delete          remove the selected region
+      --delete          remove the selected region, and the blank line it
+                        would otherwise leave stacked on another
       --append TEXT     insert TEXT after the selected region
       --prepend TEXT    insert TEXT before it
       --replace-from FILE, --replace-node-from FILE, --set-text-from FILE,

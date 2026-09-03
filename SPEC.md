@@ -137,11 +137,13 @@ Rungs nest, so what drops is always a prefix of the ladder and what is left is
 in ladder order still — the note names what widening would still buy, from the
 cheapest such rung up.
 
-The note disappears entirely when:
+The note disappears entirely when the printed lines cover every rung. This is
+what keeps `--section` from printing a note about the section it just printed.
 
-- the printed lines cover every rung. This is what keeps `--section` from
-  printing a note about the section it just printed; or
-- the hit lies before the first heading, so there is no section to report.
+A hit before the first heading has no section, so the ladder ends at the
+outermost block that holds it and the note stops there — `(paragraph 1-2)`, or
+`(item 4-5, list 4-5)`. Those rungs are still worth naming: they are what
+widening would buy, and `--at` takes them back like any other.
 
 What this costs is the `--expand` count. While every rung printed, position
 was the count — first entry `--expand`, second `--expand 1` — and a plain note
