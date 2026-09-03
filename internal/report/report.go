@@ -113,8 +113,17 @@ func Refused(w io.Writer, files []File, total int, why Reason, f render.Format) 
 				fmt.Fprintf(w, "  … and %d more\n", total-shownMatches)
 				return
 			}
-			fmt.Fprintf(w, "  %s:%d: %s\n", r.Src.Path, res.Start+1,
-				strings.TrimSpace(r.Src.Line(res.Start)))
+			// Two cells of one row are two matches on one line, and the
+			// line cannot tell them apart. Name the cell instead.
+			text := strings.TrimSpace(r.Src.Line(res.Start))
+			if res.Cell() {
+				// Two cells of one row can hold the same text, so the column
+				// they start at is what actually tells them apart.
+				text = fmt.Sprintf("%s  (cell %q at column %d)",
+					text, r.Src.Bytes(res.Lo, res.Hi),
+					res.Lo-r.Src.LineStart(res.Start)+1)
+			}
+			fmt.Fprintf(w, "  %s:%d: %s\n", r.Src.Path, res.Start+1, text)
 			n++
 		}
 	}

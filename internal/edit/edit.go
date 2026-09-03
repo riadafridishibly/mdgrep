@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -66,6 +67,17 @@ type Change struct {
 	Old, New   []string
 	Breadcrumb []string
 	NoOp       bool // the file already reads the way the edit asks
+	// cells are the cell rewrites this change carries, as byte offsets into
+	// the original line. Several cells of one row are one change to that
+	// line, so they are collected rather than each rewriting the line from
+	// what it said before the run -- which would keep only the last of them.
+	cells []cellEdit
+}
+
+// cellEdit is one cell's new text, placed by its byte range in the line.
+type cellEdit struct {
+	lo, hi int
+	text   string
 }
 
 // Plan turns search results into changes without touching the file, so a run
@@ -82,10 +94,44 @@ func Plan(doc *mdoc.Doc, results []search.Result, opt Options) ([]Change, error)
 			if c.Old == nil {
 				c.Old = src.Lines(c.Start, c.End)
 			}
+			if at, ok := sameLineCell(out, c); ok {
+				out[at].cells = append(out[at].cells, c.cells...)
+				out[at].New = []string{applyCells(src.Line(c.Start), out[at].cells)}
+				continue
+			}
 			out = append(out, c)
 		}
 	}
 	return out, nil
+}
+
+// sameLineCell finds a change already rewriting cells of the same line, which
+// is the one a further cell of that row belongs to.
+func sameLineCell(out []Change, c Change) (int, bool) {
+	if len(c.cells) == 0 {
+		return 0, false
+	}
+	for i := range out {
+		if len(out[i].cells) > 0 && out[i].Path == c.Path && out[i].Start == c.Start {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// applyCells writes every cell edit into the line it came from. They are
+// disjoint by construction -- a cell is a cell's worth of bytes -- so writing
+// them from the right leaves the offsets of the ones still to come alone.
+func applyCells(line string, cells []cellEdit) string {
+	sorted := append([]cellEdit(nil), cells...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].lo > sorted[j].lo })
+	for _, e := range sorted {
+		if e.lo < 0 || e.hi > len(line) || e.lo > e.hi {
+			continue
+		}
+		line = line[:e.lo] + e.text + line[e.hi:]
+	}
+	return line
 }
 
 // one adapts the edits that rewrite a single range. Only a substitution
@@ -105,7 +151,7 @@ func plan(doc *mdoc.Doc, r search.Result, opt Options) ([]Change, error) {
 	case OpCheck, OpUncheck, OpToggle:
 		return one(checkbox(src, r, opt.Op, c))
 	case OpSetText:
-		return one(setText(src, r, opt.Text, c))
+		return one(setText(doc, r, opt.Text, c))
 	case OpReplace:
 		return subst(doc, opt, c)
 	case OpReplaceNode:
@@ -176,7 +222,8 @@ var (
 // setText rewrites what a node says while leaving the markdown that makes it
 // that kind of node in place: a heading keeps its level, a task item keeps its
 // marker and its checkbox, a fenced block keeps its fences.
-func setText(src *mdoc.Source, r search.Result, text string, c Change) (Change, error) {
+func setText(doc *mdoc.Doc, r search.Result, text string, c Change) (Change, error) {
+	src := doc.Src
 	body := lines(text)
 	c.Start, c.End = r.HitStart, r.HitEnd
 
@@ -225,6 +272,24 @@ func setText(src *mdoc.Source, r search.Result, text string, c Change) (Change, 
 			return c, nil
 		}
 		c.New = prefixAll(indentOf(src.Line(r.HitStart)), body)
+	case mdoc.KindCell:
+		// A cell owns bytes rather than lines, so what is rewritten is the
+		// span inside the row it holds; the pipes and the cells beside it
+		// stay where they are. Fit escapes a pipe in the text and refuses a
+		// line break, either of which would rewrite the row's columns.
+		fitted, err := doc.BlockAt(r.HitStart, r.Lo).Constraint().Fit(text)
+		if err != nil {
+			return c, fmt.Errorf("%s:%d: %v", src.Path, r.HitStart+1, err)
+		}
+		line := src.Line(r.HitStart)
+		base := src.LineStart(r.HitStart)
+		lo, hi := r.Lo-base, r.Hi-base+1
+		if lo < 0 || hi > len(line) || lo > hi {
+			return c, fmt.Errorf("%s:%d: the cell is not on the line it names", src.Path, r.HitStart+1)
+		}
+		c.End = r.HitStart
+		c.cells = []cellEdit{{lo: lo, hi: hi, text: fitted}}
+		c.New = []string{applyCells(line, c.cells)}
 	case mdoc.KindParagraph, mdoc.KindTextBlock:
 		c.New = body
 	default:
@@ -232,8 +297,10 @@ func setText(src *mdoc.Source, r search.Result, text string, c Change) (Change, 
 		// the op that rewrites text knowing it is text. Sending them to
 		// --replace-node instead offers a region op a line of table syntax to
 		// write blind.
-		if r.Kind == mdoc.KindCell || r.Kind == mdoc.KindRow {
-			return c, fmt.Errorf("--set-text does not apply to a %s; use --replace", r.Kind)
+		if r.Kind == mdoc.KindRow {
+			return c, fmt.Errorf(
+				"--set-text does not apply to a row; use --replace-node to write " +
+					"a row, or -k cell to name one cell of it")
 		}
 		return c, fmt.Errorf("--set-text does not apply to a %s; use --replace-node", r.Kind)
 	}
@@ -247,12 +314,12 @@ func setText(src *mdoc.Source, r search.Result, text string, c Change) (Change, 
 var tableRow = regexp.MustCompile(`^\s*\|.*\|\s*$`)
 
 // fitsInside refuses text that would be read as markup where it lands rather
-// than as the content it was meant to be. A pipe there opens a column and a
-// line break ends the row, so a region op writing "a|b" over a cell gives back
-// two columns where one was asked for, and two lines give back two rows.
-// --replace escapes what it writes because its matcher told it the text is
-// text; a region op is handed lines and has to be told. Replacing a table
-// whole is left alone: what follows it is a document, not a row.
+// than as the content it was meant to be. A pipe there opens a column and a line break ends the row, so a region
+// op writing "a|b" over a cell gives back two columns where one was asked for,
+// and two lines give back two rows. --replace escapes what it writes because
+// its matcher told it the text is text; a region op is handed lines and has to
+// be told. Replacing a table whole is left alone: what follows it is a
+// document, not a row.
 func fitsInside(doc *mdoc.Doc, start, end int, body []string) error {
 	if table := within(doc, start, end, mdoc.KindTable); table != nil {
 		for _, line := range body {

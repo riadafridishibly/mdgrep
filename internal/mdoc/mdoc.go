@@ -515,6 +515,13 @@ func (d *Doc) Enclosing(start, end int) *Block {
 		if !b.Located || b.Start > start || b.End < end {
 			continue
 		}
+		// A cell is drawn in bytes, not lines: every cell of a row covers the
+		// row's line, so lines cannot pick one out and naming one here would
+		// be naming whichever came last. A range of lines inside a table is
+		// the row.
+		if b.Kind == KindCell {
+			continue
+		}
 		if b.Depth > best.Depth {
 			best = b
 		}

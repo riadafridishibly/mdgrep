@@ -52,6 +52,12 @@ Filters
       --unchecked       only unticked task items (alias --todo)
       --checked         only ticked task items (alias --done)
 
+A row and a cell are two ways of reading one line. -k row matches the line as
+written, pipes and all; -k cell matches inside one cell, so a pattern that
+spans a pipe finds a row and never a cell. Both print the row -- a line is what
+a page shows -- but a cell result names the cell it matched, which is what -c
+counts, what a highlight marks, and what --set-text rewrites.
+
 A filter never stands in for the pattern: pass an empty one to select by
 filter alone, as in "mdgrep '' docs --todo".
 
@@ -107,7 +113,7 @@ rather than allowed to end the row.
 
 The region ops write lines rather than text, and a line is read as markup
 wherever it lands. So they are refused where that would rewrite the structure
-the edit was not asked to touch: only a row goes inside a table, no line
+the edit was not asked to touch: only a row goes inside a table, and no line
 that closes a fence goes inside a fenced block, and a table's header and the
 line under it cannot be deleted out of it. An edit that cannot be made without
 changing what the document is fails and writes nothing.

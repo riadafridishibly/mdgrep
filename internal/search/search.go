@@ -120,7 +120,18 @@ type Result struct {
 	Task       bool
 	Checked    bool
 	Breadcrumb []string
+	// Lo, Hi are the byte range of the matched node's own text, and are set
+	// only for a cell, which is the one node a line cannot name: its
+	// neighbours share the line with it. Everything else is -1, and is named
+	// by its lines. The range is what tells two cells of one row apart, what
+	// clips a highlight to the cell that matched, and what an edit rewrites
+	// when it is asked for the cell rather than the row.
+	Lo, Hi int
 }
+
+// Cell reports whether the result is one cell of a table row rather than a
+// node that owns its lines.
+func (r Result) Cell() bool { return r.Lo >= 0 }
 
 // MatchLines is the lines a result claims, with the empty Hits of a node
 // matcher spelled out as the lines it stands for.
@@ -216,6 +227,8 @@ func result(doc *mdoc.Doc, m match.Matcher, opt Options, sel rung, lad []rung, s
 	r := Result{
 		Path:       doc.Src.Path,
 		Kind:       sel.kind,
+		Lo:         -1,
+		Hi:         -1,
 		Score:      score,
 		Start:      start,
 		End:        end,
@@ -229,6 +242,9 @@ func result(doc *mdoc.Doc, m match.Matcher, opt Options, sel rung, lad []rung, s
 		r.Level = sel.block.Level
 		if sel.kind == sel.block.Kind {
 			r.Task, r.Checked = sel.block.Task, sel.block.Checked
+			if sel.kind == mdoc.KindCell {
+				r.Lo, r.Hi = sel.block.Lo, sel.block.Hi
+			}
 		}
 	}
 	return r
@@ -443,7 +459,7 @@ func matchHits(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
 		// Blocks are matched against the markdown as written, so anchors,
 		// list markers, table pipes and emphasis are all searchable, and a
 		// highlight found in a printed line is the same hit that was scored.
-		raw := doc.Src.Slice(b.Start, b.End)
+		raw := blockText(doc, b)
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
@@ -470,6 +486,18 @@ func matchHits(doc *mdoc.Doc, m match.Matcher, opt Options) []hit {
 		}
 	}
 	return out
+}
+
+// blockText is what a block is matched against. It is the lines the block
+// covers everywhere a block owns its lines, and the block's own bytes in a
+// table row, where the cells share one line: matching a cell against the line
+// would have "alpha | one" match a cell, though that text spans a pipe and
+// sits in no cell at all.
+func blockText(doc *mdoc.Doc, b *mdoc.Block) string {
+	if b.Kind == mdoc.KindCell {
+		return doc.Src.Bytes(b.Lo, b.Hi)
+	}
+	return doc.Src.Slice(b.Start, b.End)
 }
 
 // searchable reports whether a block is one the kind filter admits. A bullet's
@@ -619,13 +647,24 @@ func mergeOverlapping(doc *mdoc.Doc, rs []Result, distinct bool) []Result {
 		if rs[i].Start != rs[j].Start {
 			return rs[i].Start < rs[j].Start
 		}
-		return rs[i].End > rs[j].End
+		if rs[i].End != rs[j].End {
+			return rs[i].End > rs[j].End
+		}
+		// Cells of one row share its line, so bytes are what order them.
+		return rs[i].Lo < rs[j].Lo
 	})
 	out := rs[:1]
 	joined := map[int]bool{}
 	for _, r := range rs[1:] {
 		last := &out[len(out)-1]
 		if r.Start > last.End+gap {
+			out = append(out, r)
+			continue
+		}
+		// Two cells of one row cover the same line and are still two nodes.
+		// Running them together would answer "how many cells" with the number
+		// of rows, and would offer an edit a row where it asked for a cell.
+		if distinct && r.Cell() && last.Cell() && r.Lo != last.Lo {
 			out = append(out, r)
 			continue
 		}
@@ -639,6 +678,11 @@ func mergeOverlapping(doc *mdoc.Doc, rs []Result, distinct bool) []Result {
 		// paragraph somewhere else -- and the trail then had a real ancestor
 		// stripped from it as though it were the heading's own name.
 		last.Score = max(last.Score, r.Score)
+		// A merged region is no longer one cell, so it claims no cell's bytes:
+		// what it covers is the line, and the highlight follows.
+		if last.Lo != r.Lo || last.Hi != r.Hi {
+			last.Lo, last.Hi = -1, -1
+		}
 		// Two nodes run together are two sets of match lines, not one node
 		// spanning both: taking HitEnd from the second while keeping the
 		// first's Hits would claim every line between them. Only where both

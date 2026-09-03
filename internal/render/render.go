@@ -270,7 +270,11 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 			}
 			mark, body := "-", src.Line(l.n)
 			if l.match || hit[l.n] {
-				mark, body = ":", p.highlight(body, m)
+				// A cell shares its line with its neighbours, so the
+				// highlight is held to the bytes the cell owns: the row
+				// prints whole, and what is marked in it is what matched.
+				lo, hi := cellRange(r, src, l.n)
+				mark, body = ":", p.highlight(body, m, lo, hi)
 			}
 			p.writeLine(src.Path, l.n, body, mark)
 		}
@@ -465,9 +469,26 @@ func hitLine(r search.Result) int {
 	return r.HitStart
 }
 
-func (p *Printer) highlight(line string, m match.Matcher) string {
+// cellRange is the part of a line a cell result owns, as offsets into that
+// line, or the whole line for every other kind. It is what keeps a highlight
+// inside the cell that matched.
+func cellRange(r search.Result, src *mdoc.Source, n int) (int, int) {
+	if !r.Cell() {
+		return 0, -1
+	}
+	base := src.LineStart(n)
+	return r.Lo - base, r.Hi - base + 1
+}
+
+func (p *Printer) highlight(line string, m match.Matcher, lo, hi int) string {
 	if !p.Color {
 		return line
+	}
+	if hi < 0 || hi > len(line) {
+		hi = len(line)
+	}
+	if lo < 0 {
+		lo = 0
 	}
 	spans := m.Spans(line)
 	if len(spans) == 0 {
@@ -477,6 +498,9 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 	prev := 0
 	for _, s := range spans {
 		if s.Start < prev || s.End > len(line) {
+			continue
+		}
+		if s.Start < lo || s.End > hi {
 			continue
 		}
 		sb.WriteString(line[prev:s.Start])
@@ -555,6 +579,11 @@ type jsonResult struct {
 	Checked    *bool    `json:"checked,omitempty"`
 	Breadcrumb []string `json:"breadcrumb,omitempty"`
 	Text       string   `json:"text"`
+	// Cell is the byte range of the cell that matched, 1-based and inclusive,
+	// present only on a cell result. Two cells of one row report the same
+	// lines and the same text, and this is what tells them apart -- and what
+	// an edit takes back to rewrite one of them.
+	Cell *jsonCell `json:"cell,omitempty"`
 	// Hits are the lines that matched, 1-based. Empty for a node matcher,
 	// which is how a reader tells "every line" from "these lines".
 	Hits []int `json:"hits"`
@@ -563,6 +592,14 @@ type jsonResult struct {
 	// including where the plain note would have dropped the lot for being
 	// wholly covered.
 	Spans []jsonRung `json:"spans"`
+}
+
+// jsonCell is where in the line a cell's own text lies, and the text itself,
+// which is what the pattern was matched against.
+type jsonCell struct {
+	Lo   int    `json:"lo"`
+	Hi   int    `json:"hi"`
+	Text string `json:"text"`
 }
 
 // jsonRung is one rung of the ladder. An entry of it, written "start-end", is
@@ -628,6 +665,10 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 			checked = &r.Checked
 		}
 		first, last := p.window(r)
+		var cell *jsonCell
+		if r.Cell() {
+			cell = &jsonCell{Lo: r.Lo + 1, Hi: r.Hi + 1, Text: src.Bytes(r.Lo, r.Hi)}
+		}
 		enc.Encode(jsonResult{
 			Path:       r.Path,
 			Kind:       string(r.Kind),
@@ -637,6 +678,7 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 			Checked:    checked,
 			Breadcrumb: r.Breadcrumb,
 			Text:       strings.Join(src.Lines(first, last), "\n"),
+			Cell:       cell,
 			Hits:       oneBased(r.Hits),
 			Spans:      ladderOf(r.Rungs),
 		})

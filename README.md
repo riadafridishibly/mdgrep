@@ -132,6 +132,34 @@ mdgrep "" docs --todo                      # every open box under docs/
 
 A hit in a plain sub-bullet reports the checkbox item it hangs under.
 
+#### A row and a cell
+
+A row and a cell are two readings of one line. `-k row` matches the line as
+written, pipes and all; `-k cell` matches inside a single cell, so a pattern
+that spans a pipe finds a row and never a cell:
+
+```bash
+mdgrep -F "alpha | one" t.md -k row     # the row
+mdgrep -F "alpha | one" t.md -k cell    # nothing: that text is in no cell
+```
+
+Both print the row — a line is what a page shows — and they differ in what the
+result *is*. A cell result names the cell it matched, which is what `-c`
+counts, what a highlight marks, and what `--set-text` rewrites:
+
+```bash
+mdgrep "" t.md -k cell -c               # 6, the cells
+mdgrep "" t.md -k row  -c               # 3, the rows
+mdgrep "one" t.md -k cell --set-text "x|y"
+#  - | alpha | one |
+#  + | alpha | x\|y |
+```
+
+`--format json` carries the cell's byte range and its own text under `"cell"`,
+which is what tells two cells of one row apart when their lines and their text
+are the same. Where several cells of one row are rewritten in a single run,
+they are one change to that line rather than several, so each lands.
+
 ### Selection — how much to print
 
 A result prints the lines that matched. Asking for a widener asks to see the
