@@ -47,7 +47,7 @@ func apply(t *testing.T, text, pattern string, opt search.Options, e Options) st
 	if len(res) == 0 {
 		t.Fatalf("pattern %q matched nothing", pattern)
 	}
-	changes, err := Plan(d.Src, res, e)
+	changes, err := Plan(d, res, e)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestCheckingATickedBoxChangesNothing(t *testing.T) {
 	d := mdoc.Parse("t.md", []byte(doc))
 	m, _ := match.New("write the notes", match.Options{Mode: match.Substring, IgnoreCase: true})
 	res := search.File(d, m, search.Options{Task: search.TaskAny, Distinct: true})
-	changes, err := Plan(d.Src, res, Options{Op: OpCheck})
+	changes, err := Plan(d, res, Options{Op: OpCheck})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestCheckRefusesANodeWithNoCheckbox(t *testing.T) {
 	d := mdoc.Parse("t.md", []byte(doc))
 	m, _ := match.New("plain bullet", match.Options{Mode: match.Substring, IgnoreCase: true})
 	res := search.File(d, m, search.Options{Distinct: true})
-	if _, err := Plan(d.Src, res, Options{Op: OpCheck}); err == nil {
+	if _, err := Plan(d, res, Options{Op: OpCheck}); err == nil {
 		t.Fatal("want an error for an item with no checkbox")
 	}
 }
@@ -140,14 +140,14 @@ func TestSetTextRefusesAHeadingWithSeveralLines(t *testing.T) {
 	d := mdoc.Parse("t.md", []byte(doc))
 	m, _ := match.New("## Setup", match.Options{Mode: match.Substring, IgnoreCase: true})
 	res := search.File(d, m, search.Options{Distinct: true})
-	if _, err := Plan(d.Src, res, Options{Op: OpSetText, Text: "one\ntwo"}); err == nil {
+	if _, err := Plan(d, res, Options{Op: OpSetText, Text: "one\ntwo"}); err == nil {
 		t.Fatal("want an error for a two-line heading")
 	}
 }
 
 func TestReplaceSectionRewritesTheWholeRegion(t *testing.T) {
 	got := apply(t, doc, "## Tasks", search.Options{Section: true},
-		Options{Op: OpReplace, Text: "## Tasks\n\n- [ ] start over\n"})
+		Options{Op: OpReplaceNode, Text: "## Tasks\n\n- [ ] start over\n"})
 	wantLines(t, got, "## Tasks", "- [ ] start over", "## Setup")
 	if strings.Contains(got, "ship the docs") {
 		t.Fatalf("old section survived:\n%s", got)
@@ -156,7 +156,7 @@ func TestReplaceSectionRewritesTheWholeRegion(t *testing.T) {
 
 func TestReplaceSectionBodyLeavesTheHeading(t *testing.T) {
 	got := apply(t, doc, "## Setup", search.Options{Body: true},
-		Options{Op: OpReplace, Text: "Nothing to do."})
+		Options{Op: OpReplaceNode, Text: "Nothing to do."})
 	wantLines(t, got, "## Setup", "Nothing to do.", "## Empty")
 	if strings.Contains(got, "echo old") {
 		t.Fatalf("old body survived:\n%s", got)
@@ -165,7 +165,7 @@ func TestReplaceSectionBodyLeavesTheHeading(t *testing.T) {
 
 func TestReplaceAnEmptySectionBodyInsertsBetweenTheHeadings(t *testing.T) {
 	got := apply(t, doc, "## Empty", search.Options{Body: true},
-		Options{Op: OpReplace, Text: "filled in."})
+		Options{Op: OpReplaceNode, Text: "filled in."})
 	want := "## Empty\n\nfilled in.\n\nTrailer\n"
 	if !strings.Contains(got, want) {
 		t.Fatalf("want %q in:\n%s", want, got)
@@ -441,7 +441,7 @@ func TestApplyKeepsTheLineEndingTheFileHad(t *testing.T) {
 				t.Fatal(err)
 			}
 			res := search.File(doc, m, search.Options{Task: search.TaskAny})
-			changes, err := Plan(doc.Src, res, Options{Op: OpCheck})
+			changes, err := Plan(doc, res, Options{Op: OpCheck})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -451,7 +451,7 @@ func TestApplyKeepsTheLineEndingTheFileHad(t *testing.T) {
 
 			// The same file with nothing to do keeps every byte, which is the
 			// promise an edit that reports no change is making.
-			noop, err := Plan(doc.Src, res, Options{Op: OpUncheck})
+			noop, err := Plan(doc, res, Options{Op: OpUncheck})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -473,7 +473,7 @@ func TestApplyKeepsRepeatedCarriageReturns(t *testing.T) {
 			t.Fatal(err)
 		}
 		res := search.File(doc, m, search.Options{Task: search.TaskAny})
-		changes, err := Plan(doc.Src, res, Options{Op: OpUncheck})
+		changes, err := Plan(doc, res, Options{Op: OpUncheck})
 		if err != nil {
 			t.Fatal(err)
 		}

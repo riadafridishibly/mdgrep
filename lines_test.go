@@ -297,7 +297,7 @@ func TestAtRefusesTheFlagsThatSelectAnotherWay(t *testing.T) {
 // words it already uses.
 func TestAtIsWhatAnEditRewrites(t *testing.T) {
 	path := doc(t, notes)
-	if _, stderr, code := capture(t, "--at", "15", path, "--replace", "- [x] archived", "-W"); code != 0 {
+	if _, stderr, code := capture(t, "--at", "15", path, "--replace-node", "- [x] archived", "-W"); code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
 	if got := read(t, path); !strings.Contains(got, "- [x] archived\n") {
@@ -429,7 +429,7 @@ func TestTheLastContextFlagWins(t *testing.T) {
 // one, the way its predecessor spelling was.
 func TestSiblingsDoesNotSelectWhatAnEditRewrites(t *testing.T) {
 	path := doc(t, bullets)
-	_, stderr, code := capture(t, "alpha", path, "--siblings", "1", "--replace", "ZZZ")
+	_, stderr, code := capture(t, "alpha", path, "--siblings", "1", "--replace-node", "ZZZ")
 	if code != 2 || !strings.Contains(stderr, "--siblings") {
 		t.Errorf("exit = %d, want 2 and a refusal naming --siblings:\n%s", code, stderr)
 	}

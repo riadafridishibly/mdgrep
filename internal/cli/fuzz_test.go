@@ -42,8 +42,8 @@ var editFlags = []struct {
 // never quietly resolved to the wrong one.
 func FuzzBuildEdit(f *testing.F) {
 	f.Add(uint16(0), "text", 0, false, false)
-	f.Add(uint16(1<<4), "text", 0, false, false)       // --replace
-	f.Add(uint16(1<<4|1<<5), "text", 0, false, false)  // --replace and --replace-from
+	f.Add(uint16(1<<4), "text", 0, false, false)       // --replace-node
+	f.Add(uint16(1<<4|1<<5), "text", 0, false, false)  // --replace-node and --replace-from
 	f.Add(uint16(1<<8|1<<10), "text", 0, false, false) // --append and --prepend
 	f.Add(uint16(1<<9), "", 3, false, true)            // --append-from --expect 3
 	f.Add(uint16(0), "", 2, true, true)                // --expect with no edit
@@ -131,7 +131,7 @@ var wordSeeds = []string{
 	`""`,
 	`''`,
 	`-k"heading"`,
-	`--replace "say \"hi\""`,
+	`--replace-node "say \"hi\""`,
 	`"a\\b"`,
 	"a\tb\nc\r d",
 	`unclosed "quote`,

@@ -1,0 +1,29 @@
+-- notes.md --
+| Tool | Note       | N |
+|:-----|:----------:|--:|
+| grep | line based | 1 |
+
+A paragraph about line based tools.
+
+# line based heading
+-- args --
+mdgrep "line based" --replace "line|stream" --multi -W notes.md
+-- stdout --
+- | grep | line based | 1 |
++ | grep | line\|stream | 1 |
+--
+- A paragraph about line based tools.
++ A paragraph about line|stream tools.
+--
+- # line based heading
++ # line|stream heading
+-- exit --
+0
+-- notes.md.after --
+| Tool | Note       | N |
+|:-----|:----------:|--:|
+| grep | line\|stream | 1 |
+
+A paragraph about line|stream tools.
+
+# line|stream heading

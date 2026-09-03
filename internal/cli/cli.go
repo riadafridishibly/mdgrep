@@ -68,6 +68,8 @@ type Config struct {
 	Del       bool
 	Replace   OptString
 	ReplFrom  OptString
+	ReplNode  OptString
+	NodeFrom  OptString
 	SetText   OptString
 	SetFrom   OptString
 	AppendTo  OptString
@@ -328,6 +330,17 @@ func (p *PatternList) Set(v string) error {
 	return nil
 }
 
+// Empty reports whether the patterns say nothing, which is what makes a search
+// a filter over every node rather than a match on text inside one.
+func (p PatternList) Empty() bool {
+	for _, s := range p {
+		if s != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // Parse reads a command line into a Config. The FlagSet comes back with it
 // because what is left over -- the positionals, and which flags were given at
 // all -- is part of the answer.
@@ -366,6 +379,8 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 	fs.BoolVar(&c.Del, "delete", false, "")
 	fs.Var(&c.Replace, "replace", "")
 	fs.Var(&c.ReplFrom, "replace-from", "")
+	fs.Var(&c.ReplNode, "replace-node", "")
+	fs.Var(&c.NodeFrom, "replace-node-from", "")
 	fs.Var(&c.SetText, "set-text", "")
 	fs.Var(&c.SetFrom, "set-text-from", "")
 	fs.Var(&c.AppendTo, "append", "")
@@ -644,7 +659,12 @@ func (c *Config) Edit() (edit.Options, error) {
 	case c.Expect.set && c.Expect.val < 1:
 		return e, fmt.Errorf("--expect states how many nodes the search should find, so it wants a count above zero")
 	case e.Op.Node() && (c.Opt.Section || c.Opt.Body):
-		return e, fmt.Errorf("--%s edits the matched node, so --section has nothing to widen; use --replace", e.Op)
+		return e, fmt.Errorf("--%s edits the matched node, so --section has nothing to widen; use --replace-node", e.Op)
+	}
+	if e.Op == edit.OpReplace {
+		if err := c.substMatcher(); err != nil {
+			return e, err
+		}
 	}
 	// A checkbox edit is about task items, so it says so on the search's
 	// behalf: the hit climbs to the item owning it the way --task does.
@@ -655,6 +675,37 @@ func (c *Config) Edit() (edit.Options, error) {
 		}
 	}
 	return e, nil
+}
+
+// substMatcher refuses the searches that select nodes without pointing at text
+// inside them. A substitution stands its replacement in for what the pattern
+// matched, so a search that matched by not matching, by scattering a fuzzy
+// score across a block, or by naming lines outright has nothing for it to
+// stand in for -- and would otherwise rewrite every line it selected into
+// itself and report an edit that did nothing.
+func (c *Config) substMatcher() error {
+	switch {
+	case c.Invert:
+		return errors.New("-v selects what a pattern did not match, so --replace has no matched text to stand in for; use --replace-node")
+	case c.fuzzy:
+		return errors.New("--fuzzy scores a block on characters spread across it rather than on a run of text, so --replace has nothing whole to stand in for; use --fixed-strings or a regexp")
+	case c.useAnchor:
+		return errors.New("--anchor selects a heading by its link anchor rather than by text on the line, so --replace has nothing to stand in for; use --set-text")
+	case len(c.At.Regions()) > 0:
+		return errors.New("--at names lines outright and consults no pattern, so --replace has nothing to stand in for; use --replace-node")
+	}
+	return nil
+}
+
+// SubstPattern refuses a substitution with no pattern to substitute for. It is
+// apart from substMatcher because a bare word on the command line could be a
+// path, so which stage has which pattern is not settled until the paths are:
+// this is asked once they are, and once the matchers are built from them.
+func (c *Config) SubstPattern() error {
+	if c.Patterns.Empty() {
+		return errors.New("--replace stands its text in for what a pattern matched, so it wants a pattern; --replace-node rewrites a node the filters alone selected")
+	}
+	return nil
 }
 
 // textOp pairs an edit that takes text with the two flags that can carry it.
@@ -668,6 +719,7 @@ type textOp struct {
 func (c *Config) textOps() []textOp {
 	return []textOp{
 		{edit.OpReplace, "replace", &c.Replace, &c.ReplFrom},
+		{edit.OpReplaceNode, "replace-node", &c.ReplNode, &c.NodeFrom},
 		{edit.OpSetText, "set-text", &c.SetText, &c.SetFrom},
 		{edit.OpAppend, "append", &c.AppendTo, &c.AppFrom},
 		{edit.OpPrepend, "prepend", &c.PrependTo, &c.PreFrom},
@@ -998,7 +1050,9 @@ var streamIgnores = map[string]bool{
 // one is a search whose later stages read something nobody asked for.
 var streamEdits = map[string]bool{
 	"check": true, "uncheck": true, "toggle": true, "delete": true,
-	"replace": true, "replace-from": true, "set-text": true, "set-text-from": true,
+	"replace": true, "replace-from": true,
+	"replace-node": true, "replace-node-from": true,
+	"set-text": true, "set-text-from": true,
 	"append": true, "append-from": true, "prepend": true, "prepend-from": true,
 	"multi": true, "expect": true, "write": true, "W": true, "apply": true,
 }

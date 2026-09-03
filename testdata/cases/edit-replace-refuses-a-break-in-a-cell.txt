@@ -1,0 +1,12 @@
+-- notes.md --
+| Tool | Note       |
+|:-----|:----------:|
+| grep | line based |
+-- args --
+mdgrep "line based" --replace "line
+stream" -W notes.md
+-- stdout --
+-- stderr --
+mdgrep: notes.md:3: a cell holds one line, and the replacement carries a line break
+-- exit --
+2

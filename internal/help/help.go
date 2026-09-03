@@ -76,23 +76,37 @@ Editing
                         set the state of the selected task item
       --set-text TEXT   change what the matched node says, keeping the markup
                         that makes it a heading, an item or a fenced block
-      --replace TEXT    replace the selected region with TEXT
+      --replace TEXT    rewrite the text the pattern matched with TEXT,
+                        leaving the rest of the line alone; "$1" and friends
+                        expand as they do in a regexp replacement
+      --replace-node TEXT
+                        replace the whole selected region with TEXT
       --delete          remove the selected region
       --append TEXT     insert TEXT after the selected region
       --prepend TEXT    insert TEXT before it
-      --replace-from FILE, --set-text-from FILE, --append-from FILE,
-      --prepend-from FILE
-                        the same four edits, TEXT read from a file ("-" is
+      --replace-from FILE, --replace-node-from FILE, --set-text-from FILE,
+      --append-from FILE, --prepend-from FILE
+                        the same five edits, TEXT read from a file ("-" is
                         stdin)
       --multi           edit every match; without it, more than one is an error
       --expect N        edit only if exactly N nodes matched, else fail
   -W, --write           write the edit to the file; without it the edit is
                         only shown
 
---check and --set-text act on the matched node; --replace, --delete, --append
-and --prepend act on the region a widener selected. An edit prints the lines
-it would remove behind "-" and add behind "+"; --format diff prints a patch
-instead, and --format doc the whole document it produced.
+--check and --set-text act on the matched node; --replace-node, --delete,
+--append and --prepend act on the region a widener selected. --replace acts on
+neither: it rewrites the matched text wherever it falls inside that region, so
+--section widens what it reaches rather than what it overwrites.
+
+--replace needs a pattern that points at text, so it is refused beside -v,
+--fuzzy, --anchor and --at, which select nodes without naming text in them.
+What it writes is fitted to where it lands: a pipe written into a table cell
+leaves escaped, and a line break written into a cell or a heading is refused
+rather than allowed to end the row.
+
+An edit prints the lines it would remove behind "-" and add behind "+";
+--format diff prints a patch instead, and --format doc the whole document it
+produced.
 
 Plans
       --apply FILE      carry out a plan of edits read from FILE ("-" is
@@ -164,6 +178,7 @@ Examples
   mdgrep "" docs --todo
   mdgrep "#install" --anchor --section README.md
   mdgrep "old text" --replace "new text" notes.md -W
+  mdgrep "^## Changelog" --section-body --replace-node-from new.md notes.md -W
   mdgrep "^## Release" --section docs --then -k list --then --todo --check
   mdgrep --exec '"^## Release" --section | -k list | --todo --check' docs
   cat notes.md | mdgrep "old" --replace "new" --format doc > out.md

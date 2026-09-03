@@ -55,7 +55,8 @@ var planOps = []struct {
 	text bool
 }{
 	{edit.OpCheck, false}, {edit.OpUncheck, false}, {edit.OpToggle, false},
-	{edit.OpReplace, true}, {edit.OpSetText, true}, {edit.OpDelete, false},
+	{edit.OpReplace, true}, {edit.OpReplaceNode, true},
+	{edit.OpSetText, true}, {edit.OpDelete, false},
 	{edit.OpAppend, true}, {edit.OpPrepend, true},
 }
 
@@ -298,10 +299,10 @@ func planOne(n int, e planEntry, cache *docCache, format render.Format) ([]planC
 	res := search.File(doc, matcher, opt)
 	if why, code := report.Gate(len(res), e.Expect, e.Multi, report.PlanWords); code != 0 {
 		why.Entry = n
-		report.Refused(os.Stderr, []report.File{{Src: doc.Src, Res: res}}, len(res), why, format)
+		report.Refused(os.Stderr, []report.File{{Doc: doc, Src: doc.Src, Res: res}}, len(res), why, format)
 		return nil, "", false
 	}
-	changes, err := edit.Plan(doc.Src, res, ed)
+	changes, err := edit.Plan(doc, res, ed)
 	if err != nil {
 		return fail("edit", err)
 	}
@@ -348,7 +349,7 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	case e.Expand < 0:
 		return bad(`"expand" is how many levels to climb from the matched node, so it cannot be negative`)
 	case e.Op.Node() && (e.Section || e.Body):
-		return bad(`op %q edits the matched node, so "section" has nothing to widen; use "replace"`, e.Op)
+		return bad(`op %q edits the matched node, so "section" has nothing to widen; use "replace-node"`, e.Op)
 	}
 
 	kinds, err := cli.ParseKinds(e.Kind)
@@ -388,6 +389,9 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	// An entry that names its node by address alone has no pattern to build a
 	// matcher from, and needs none: the address is the selection.
 	if e.Match == nil {
+		if e.Op == edit.OpReplace {
+			return bad(`op "replace" stands its text in for what a pattern matched, so it wants "match"; use "replace-node" to rewrite the node an address names`)
+		}
 		return opt, ed, nil, nil
 	}
 	mode := match.Regexp
@@ -406,6 +410,9 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	if err != nil {
 		return bad("%v", err)
 	}
+	// A substitution stands its text in for what this entry's own matcher
+	// found, so the matcher travels with the edit rather than beside it.
+	ed.Matcher = matcher
 	return opt, ed, matcher, nil
 }
 

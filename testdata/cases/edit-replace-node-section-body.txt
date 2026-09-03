@@ -9,7 +9,7 @@ old entry
 
 text
 -- args --
-mdgrep "^## Changelog" --section-body --replace "new entry" -W notes.md
+mdgrep "^## Changelog" --section-body --replace-node "new entry" -W notes.md
 -- stdout --
 - old entry
 + new entry

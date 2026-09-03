@@ -114,7 +114,7 @@ func TestKindItemSelectsOnlyItems(t *testing.T) {
 // scoped to bullets must not rewrite prose.
 func TestApplyKindItemDoesNotEditAParagraph(t *testing.T) {
 	path := doc(t, mixed)
-	p := planFile(t, `{"path":`+quote(path)+`,"match":"Some paragraph","kind":"item","op":"replace","text":"REWRITTEN"}`)
+	p := planFile(t, `{"path":`+quote(path)+`,"match":"Some paragraph","kind":"item","op":"replace-node","text":"REWRITTEN"}`)
 	stdout, _, code := capture(t, "--apply", p)
 	if code == 0 {
 		t.Errorf("an entry scoped to \"item\" matched a paragraph:\n%s", stdout)
@@ -502,7 +502,7 @@ func TestCompactTruncatesWithoutANotice(t *testing.T) {
 // match a regular expression against English is not being told anything.
 func TestCompactRefusalIsRecords(t *testing.T) {
 	path := doc(t, "# Doc\n\nalpha one\n\nalpha two\n")
-	_, stderr, code := capture(t, "alpha", path, "--replace", "x", "--format", "compact")
+	_, stderr, code := capture(t, "alpha", path, "--replace-node", "x", "--format", "compact")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}

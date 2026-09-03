@@ -190,7 +190,7 @@ func TestExecReadsWordsTheWayAShellWould(t *testing.T) {
 		{"empty word", `"" --todo`, []string{"", "--todo"}},
 		{"empty single", `'' --todo`, []string{"", "--todo"}},
 		{"joined pieces", `-k"heading"`, []string{"-kheading"}},
-		{"quote inside a word", `--replace "say \"hi\""`, []string{"--replace", `say "hi"`}},
+		{"quote inside a word", `--replace-node "say \"hi\""`, []string{"--replace-node", `say "hi"`}},
 		{"backslash kept", `-F "a\\b"`, []string{"-F", `a\b`}},
 		{"single quotes are literal", `-F 'a\b'`, []string{"-F", `a\b`}},
 		{"tabs and newlines divide", "a\tb\nc", []string{"a", "b", "c"}},

@@ -7,6 +7,7 @@
 package mdoc
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -51,6 +52,7 @@ type Block struct {
 	Level    int      // heading level, else 0
 	Depth    int      // nesting depth below the document root
 	Text     string   // headings only: plain text, used for breadcrumbs
+	Lo, Hi   int      // byte range of the node's own text, -1 when not Located
 	Parent   *Block
 	Children []*Block
 	Located  bool // false when goldmark exposed no offsets for this node
@@ -82,7 +84,14 @@ var parser = goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser()
 func Parse(path string, data []byte) *Doc {
 	src := NewSource(path, data)
 	d := &Doc{Src: src, data: data}
-	d.Root = &Block{Kind: KindDocument, Start: 0, End: src.NumLines() - 1, Located: true}
+	d.Root = &Block{
+		Kind:    KindDocument,
+		Start:   0,
+		End:     src.NumLines() - 1,
+		Lo:      0,
+		Hi:      max(0, len(data)-1),
+		Located: true,
+	}
 
 	scan := data
 	if end, ok := frontmatterEnd(src); ok {
@@ -90,6 +99,8 @@ func Parse(path string, data []byte) *Doc {
 			Kind:    KindFrontmatter,
 			Start:   0,
 			End:     end,
+			Lo:      0,
+			Hi:      src.LineEnd(end),
 			Depth:   1,
 			Parent:  d.Root,
 			Located: true,
@@ -136,11 +147,13 @@ func (d *Doc) build(n ast.Node, parent *Block, data []byte) {
 			b.Task, b.Checked = taskState(c)
 		}
 		if lo, hi, ok := nodeRange(c); ok {
+			b.Lo, b.Hi = lo, hi
 			b.Start, b.End = d.Src.LineIndex(lo), d.Src.LineIndex(hi)
 			b.Located = true
 			widen(b, d.Src)
 		} else {
 			b.Start, b.End = -1, -1
+			b.Lo, b.Hi = -1, -1
 		}
 		parent.Children = append(parent.Children, b)
 		d.Blocks = append(d.Blocks, b)
@@ -507,4 +520,111 @@ func (d *Doc) Enclosing(start, end int) *Block {
 		}
 	}
 	return best
+}
+
+// BlockAt is the innermost block covering a point in the file, named by the
+// line it sits on and its byte offset. Lines settle it everywhere the document
+// is a stack of blocks; bytes settle it inside a table row, where the cells all
+// share one line and only their byte ranges tell them apart.
+//
+// The two are needed together because neither is right on its own. A block's
+// line range is widened back over the syntax that introduced it -- the "#" of a
+// heading, the fences around a code block -- and its byte range is not, so a
+// point in that syntax is inside the block by line and outside it by byte.
+func (d *Doc) BlockAt(line, off int) *Block {
+	cur := d.Root
+	for {
+		var next *Block
+		for _, c := range cur.Children {
+			if !c.Located {
+				continue
+			}
+			if c.Kind == KindCell {
+				// A cell is narrower than the line it sits on. A point in the
+				// padding or on a delimiting pipe belongs to no cell and stops
+				// at the row, which asks for the same care anyway.
+				if c.Lo <= off && off <= c.Hi {
+					next = c
+				}
+				continue
+			}
+			if c.Start <= line && line <= c.End {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			return cur
+		}
+		cur = next
+	}
+}
+
+// Constraint is what the markdown at a point requires of text written there.
+// It is read off the block that owns the point rather than guessed from the
+// text around it, which is the whole reason the parse is kept after a search:
+// only the tree knows that a line is a table row rather than a paragraph that
+// happens to hold pipes.
+type Constraint struct {
+	Kind Kind
+	// SingleLine is whether a newline would end the node rather than continue
+	// it. A heading stops at one and a table row stops at one; a paragraph
+	// takes it as a soft break and a fenced block takes it as content.
+	SingleLine bool
+	// Escape is the characters that carry syntax here and have to leave
+	// backslashed to be read as text.
+	Escape string
+}
+
+// Constraint reports what a rewrite inside this block has to respect.
+func (b *Block) Constraint() Constraint {
+	switch b.Kind {
+	case KindCell, KindRow, KindTable:
+		// GFM gives a cell no way to hold a newline, and an unescaped pipe in
+		// one opens a column the header never declared -- which the parser
+		// takes silently, leaving a table that is wrong rather than refused.
+		return Constraint{Kind: b.Kind, SingleLine: true, Escape: "|"}
+	case KindHeading:
+		return Constraint{Kind: b.Kind, SingleLine: true}
+	}
+	return Constraint{Kind: b.Kind}
+}
+
+// Fit rewrites text so it reads as text at this point, and refuses what it
+// cannot rewrite. Escaping is a repair; a newline where none can go is not,
+// because the alternatives -- dropping it, or turning it into a <br> -- are
+// both decisions about the document that belong to whoever asked for the edit.
+func (c Constraint) Fit(text string) (string, error) {
+	if c.SingleLine && strings.ContainsAny(text, "\r\n") {
+		return "", fmt.Errorf("a %s holds one line, and the replacement carries a line break", c.Kind)
+	}
+	if c.Escape == "" {
+		return text, nil
+	}
+	return escape(text, c.Escape), nil
+}
+
+// escape backslashes the characters that carry syntax, leaving alone what the
+// text already escaped: a "\|" written by hand means a pipe and would come out
+// meaning a backslash if it were escaped again.
+func escape(s, chars string) string {
+	if !strings.ContainsAny(s, chars) {
+		return s
+	}
+	var sb strings.Builder
+	sb.Grow(len(s) + 4)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			sb.WriteByte(c)
+			i++
+			sb.WriteByte(s[i])
+			continue
+		}
+		if strings.IndexByte(chars, c) >= 0 {
+			sb.WriteByte('\\')
+		}
+		sb.WriteByte(c)
+	}
+	return sb.String()
 }

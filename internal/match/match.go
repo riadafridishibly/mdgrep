@@ -5,6 +5,7 @@ package match
 import (
 	"errors"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -20,6 +21,25 @@ type Matcher interface {
 	Score(text string) (float64, bool)
 	// Spans returns byte ranges in line worth highlighting.
 	Spans(line string) []Span
+}
+
+// Replacement is one match on a line and the text standing in for it.
+type Replacement struct {
+	Span
+	Text string
+}
+
+// Replacer is a matcher that can say what its matches become. Only the
+// matchers that point at the text they matched implement it: a negated matcher
+// selects a line by what is not on it and a fuzzy matcher spreads one match
+// over characters that were never a run, so neither leaves a piece of the line
+// a substitution could stand in for. A caller that needs one asks for it with
+// a type assertion, and the matchers that cannot answer fail it.
+type Replacer interface {
+	Matcher
+	// Replacements returns the matches on line, in ascending order and never
+	// overlapping, each with the text repl expands to at that match.
+	Replacements(line, repl string) []Replacement
 }
 
 type Mode int
@@ -97,7 +117,45 @@ func Any(ms []Matcher) Matcher {
 	if len(ms) == 1 {
 		return ms[0]
 	}
-	return anyMatcher(ms)
+	// A list of alternatives can be substituted into only if every alternative
+	// can be, so the two are separate types: one alternative that cannot name
+	// the text it matched leaves the whole list unable to.
+	for _, m := range ms {
+		if _, ok := m.(Replacer); !ok {
+			return anyMatcher(ms)
+		}
+	}
+	return anyReplacer{anyMatcher(ms)}
+}
+
+type anyReplacer struct{ anyMatcher }
+
+// Replacements collects what every alternative would replace and drops the
+// matches that overlap one already taken. Two patterns may both match at the
+// same place, and only one of them can have it; the leftmost wins, and the
+// longest of those starting together, which is the rule a single alternation
+// would have applied anyway.
+func (a anyReplacer) Replacements(line, repl string) []Replacement {
+	var all []Replacement
+	for _, m := range a.anyMatcher {
+		all = append(all, m.(Replacer).Replacements(line, repl)...)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Start != all[j].Start {
+			return all[i].Start < all[j].Start
+		}
+		return all[i].End > all[j].End
+	})
+	out := all[:0]
+	prev := 0
+	for _, r := range all {
+		if r.Start < prev {
+			continue
+		}
+		out = append(out, r)
+		prev = r.End
+	}
+	return out
 }
 
 type anyMatcher []Matcher
@@ -164,6 +222,23 @@ func (m *reMatcher) Score(text string) (float64, bool) {
 	return 0, false
 }
 
+// Replacements expands the replacement against each match, so "$1" and the
+// other forms a regexp replacement is written with mean what they do in
+// regexp.ReplaceAllString rather than standing as literal text.
+func (m *reMatcher) Replacements(line, repl string) []Replacement {
+	var out []Replacement
+	for _, loc := range m.re.FindAllStringSubmatchIndex(line, -1) {
+		if loc[1] <= loc[0] {
+			continue
+		}
+		out = append(out, Replacement{
+			Span: Span{loc[0], loc[1]},
+			Text: string(m.re.ExpandString(nil, repl, line, loc)),
+		})
+	}
+	return out
+}
+
 func (m *reMatcher) Spans(line string) []Span {
 	var out []Span
 	for _, loc := range m.re.FindAllStringIndex(line, -1) {
@@ -206,6 +281,18 @@ func (m *substrMatcher) index(s string, from int) (at, width int) {
 		return -1, 0
 	}
 	return from + i, w
+}
+
+// Replacements stands the replacement in for each match literally. A
+// substring pattern has no groups to expand and no metacharacters to read, so
+// a "$1" in the replacement is the three characters it looks like.
+func (m *substrMatcher) Replacements(line, repl string) []Replacement {
+	spans := m.Spans(line)
+	out := make([]Replacement, 0, len(spans))
+	for _, s := range spans {
+		out = append(out, Replacement{Span: s, Text: repl})
+	}
+	return out
 }
 
 func (m *substrMatcher) Spans(line string) []Span {

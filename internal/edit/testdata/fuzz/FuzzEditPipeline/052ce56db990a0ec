@@ -1,0 +1,5 @@
+go test fuzz v1
+string("0\r\r\n0")
+string("\r")
+int(66)
+string("0")

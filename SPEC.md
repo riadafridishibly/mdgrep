@@ -328,12 +328,14 @@ name, the other is one line per heading, and an address is neither.
 
 ### 2.7 An address as the thing an edit rewrites
 
-The region an address names is the region an edit rewrites. `--replace`,
+The region an address names is the region an edit rewrites. `--replace-node`,
 `--delete`, `--append` and `--prepend` act on exactly those lines. The node
 edits — `--check`, `--uncheck`, `--toggle`, `--set-text` — act on the node the
 address resolves to, and refuse one that resolves to none in the words they
 already use: `not a task list item`, and `--set-text does not apply to a
-region; use --replace`.
+region; use --replace-node`. `--replace` is refused outright beside an
+address: it substitutes for what a pattern matched, and an address consults no
+pattern.
 
 `--expect` and `--multi` are refused beside an address. Both state how many
 nodes a search should have found, and an address found one by saying so.

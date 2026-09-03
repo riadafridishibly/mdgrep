@@ -56,7 +56,7 @@ func found(t *testing.T, src, pat string) ([]File, int) {
 	}
 	doc := mdoc.Parse("d.md", []byte(src))
 	res := search.File(doc, m, search.Options{Distinct: true})
-	return []File{{doc.Src, res}}, len(res)
+	return []File{{doc, doc.Src, res}}, len(res)
 }
 
 // manyItems is a list long enough to run past the cap a refusal lists.

@@ -287,6 +287,15 @@ func run() (code int) {
 		}
 	}
 	matcher := last.m
+	// A substitution stands its text in for what the last stage matched, so it
+	// is that stage's matcher it needs -- the one that chose the nodes.
+	ed.Matcher = matcher
+	if ed.Op == edit.OpReplace {
+		if err := last.c.SubstPattern(); err != nil {
+			fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
+			return 2
+		}
+	}
 
 	files, useStdin, unread, err := walk.Files(paths, first.c.Exts(), first.c.Hidden, first.c.NoIgnore)
 	if err != nil {
@@ -423,7 +432,7 @@ func run() (code int) {
 		// piped document joins the files the edit is planned over instead of
 		// being written out here.
 		if ed.Op != edit.OpNone {
-			piped = &report.File{Src: doc.Src, Res: res}
+			piped = &report.File{Doc: doc, Src: doc.Src, Res: res}
 		} else {
 			emit(doc.Src, res)
 		}
@@ -451,7 +460,7 @@ func run() (code int) {
 				// The scope a stream handed in is the one thing that differs
 				// per file, since it is the earlier stage's answer about that
 				// file and no other.
-				results[i] = report.File{Src: doc.Src, Res: pipeline(doc, stages, scope.For(files[i]), reached)}
+				results[i] = report.File{Doc: doc, Src: doc.Src, Res: pipeline(doc, stages, scope.For(files[i]), reached)}
 			}
 		})
 	}
@@ -618,7 +627,7 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 		if len(r.Res) == 0 {
 			continue
 		}
-		changes, err := edit.Plan(r.Src, r.Res, e)
+		changes, err := edit.Plan(r.Doc, r.Res, e)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 			return 2

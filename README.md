@@ -220,7 +220,8 @@ rewriting them is not what asking to see them meant.
 | Flag | Meaning |
 | --- | --- |
 | `--check` / `--uncheck` / `--toggle` | set the state of the selected task item |
-| `--replace TEXT` | replace the selected region with TEXT |
+| `--replace TEXT` | rewrite the matched text with TEXT, leaving the rest of the line |
+| `--replace-node TEXT` | replace the whole selected region with TEXT |
 | `--set-text TEXT` | change what the node says, keeping its markup |
 | `--delete` | remove the selected region |
 | `--append TEXT` / `--prepend TEXT` | insert TEXT after or before it |
@@ -235,17 +236,50 @@ rewriting them is not what asking to see them meant.
 ```bash
 mdgrep "ship the docs" --check -W               # - [ ] ship the docs -> - [x]
 mdgrep --anchor "#setup" --set-text "Install" -W  # ## Setup -> ## Install
-mdgrep "^## Changelog" --section-body --replace-from new.md -W
+mdgrep "^## Changelog" --section-body --replace-node-from new.md -W
+mdgrep "v1\.2\.(\d+)" --replace "v2.0.$1" --multi -W    # substitute, keep the group
 mdgrep "obsolete note" --delete -W
 ```
 
 `--check`, `--uncheck`, `--toggle` and `--set-text` act on **the matched
-node**; `--replace`, `--delete`, `--append` and `--prepend` act on **the
+node**; `--replace-node`, `--delete`, `--append` and `--prepend` act on **the
 region** that `--section`, `--section-body` and `--expand` widen. `--set-text`
 keeps the markup that makes a node what it is — heading level, list marker,
-checkbox, fences — where `--replace` keeps nothing. Inserted text is indented
-to match what it lands beside, and blank lines are added only where they will
-not loosen a list or break a table.
+checkbox, fences — where `--replace-node` keeps nothing. Inserted text is
+indented to match what it lands beside, and blank lines are added only where
+they will not loosen a list or break a table.
+
+### `--replace` substitutes text
+
+`--replace` is the odd one out: it rewrites **the text the pattern matched**
+and leaves the rest of the line where it was, the way `s///` does in sed. The
+region still matters, but as reach rather than as target — `--section
+--replace` substitutes throughout a section and rewrites only the words that
+matched.
+
+```bash
+mdgrep "TODO" --replace "DONE" --multi -W          # every TODO in the file
+mdgrep "^## API" --section docs --then "v1" --replace "v2" --multi -W
+```
+
+A regexp replacement expands `$1` and the other forms `regexp.ReplaceAllString`
+takes; `--fixed-strings` writes them literally.
+
+Because it stands text in for a match, `--replace` needs a pattern that points
+at text, and is refused beside `-v`, `--fuzzy`, `--anchor` and `--at` — each of
+which selects nodes without naming any text inside them. Use `--replace-node`
+or `--set-text` there.
+
+What it writes is fitted to where it lands, which is what the parse is kept
+for. A pipe written into a table cell leaves escaped, so the row keeps its
+columns; the same pipe written into a paragraph is left alone, because there it
+is only a character. A line break written into a table cell or a heading is
+refused, since GFM gives neither a way to hold one:
+
+```
+$ mdgrep "line based" --replace $'line\nstream' --multi notes.md
+mdgrep: notes.md:3: a cell holds one line, and the replacement carries a line break
+```
 
 **More than one match is an error.** Nothing is written, and you get the list:
 
@@ -264,9 +298,10 @@ $ mdgrep "ship" --check notes.md --expect 3
 mdgrep: --expect 3, but 2 matched
 ```
 
-Each of the four text edits also has a `-from` spelling (`--replace-from`,
-`--set-text-from`, `--append-from`, `--prepend-from`) reading from a file, or
-stdin as `-`, so a multi-line body needs no shell quoting:
+Each of the five text edits also has a `-from` spelling (`--replace-from`,
+`--replace-node-from`, `--set-text-from`, `--append-from`, `--prepend-from`)
+reading from a file, or stdin as `-`, so a multi-line body needs no shell
+quoting:
 
 ```bash
 printf -- '- [ ] verify checksum\n- [ ] sign the tarball\n' |

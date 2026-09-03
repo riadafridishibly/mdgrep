@@ -115,3 +115,22 @@ func (s *Source) Lines(start, end int) []string {
 	}
 	return out
 }
+
+// LineStart returns the byte offset a zero-based line begins at, which is what
+// turns a column within a line into an offset the block tree can be addressed
+// by. A line past the end of the file starts at its end.
+func (s *Source) LineStart(i int) int {
+	if i < 0 {
+		return 0
+	}
+	if i >= len(s.lineStart) {
+		return len(s.text)
+	}
+	return s.lineStart[i]
+}
+
+// LineEnd returns the byte offset of the last byte of a zero-based line, its
+// ending excluded. It is inclusive, the way a block's byte range is.
+func (s *Source) LineEnd(i int) int {
+	return s.LineStart(i) + len(s.Line(i)) - 1
+}

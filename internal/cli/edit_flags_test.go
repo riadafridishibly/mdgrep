@@ -42,7 +42,10 @@ func TestTextFromFile(t *testing.T) {
 		set  func(*Config, string)
 		want edit.Op
 	}{
-		{"replace-from", func(c *Config, p string) { c.ReplFrom.Set(p) }, edit.OpReplace},
+		// A substitution stands its text in for a match, so it needs a pattern
+		// to have matched anything; the node rewrite needs none.
+		{"replace-from", func(c *Config, p string) { c.Patterns.Set("x"); c.ReplFrom.Set(p) }, edit.OpReplace},
+		{"replace-node-from", func(c *Config, p string) { c.NodeFrom.Set(p) }, edit.OpReplaceNode},
 		{"set-text-from", func(c *Config, p string) { c.SetFrom.Set(p) }, edit.OpSetText},
 		{"append-from", func(c *Config, p string) { c.AppFrom.Set(p) }, edit.OpAppend},
 		{"prepend-from", func(c *Config, p string) { c.PreFrom.Set(p) }, edit.OpPrepend},
@@ -158,5 +161,67 @@ func TestExpectNotANumber(t *testing.T) {
 	}
 	if o.set {
 		t.Error("a rejected value should leave --expect unset")
+	}
+}
+
+// TestSubstRefusesASearchThatNamesNoText covers the flags a substitution
+// cannot work behind. Each selects nodes without pointing at text inside them,
+// so there is nothing for a replacement to stand in for, and each is caught at
+// the flag rather than after a file has been read.
+func TestSubstRefusesASearchThatNamesNoText(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*Config)
+		says string
+	}{
+		{"invert", func(c *Config) { c.Invert = true }, "-v"},
+		{"fuzzy", func(c *Config) { c.fuzzy = true }, "--fuzzy"},
+		{"anchor", func(c *Config) { c.useAnchor = true }, "--anchor"},
+		{"address", func(c *Config) { c.At.Set("3") }, "--at"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var c Config
+			c.Patterns.Set("x")
+			c.Replace.Set("y")
+			tt.set(&c)
+			_, err := c.Edit()
+			if err == nil {
+				t.Fatal("--replace was accepted")
+			}
+			if !strings.Contains(err.Error(), tt.says) {
+				t.Errorf("error does not name %s: %v", tt.says, err)
+			}
+		})
+	}
+}
+
+// TestSubstWantsAPattern is asked apart from the rest because a bare word on
+// the command line could be a path, so which stage holds which pattern is not
+// settled when the other refusals are read.
+func TestSubstWantsAPattern(t *testing.T) {
+	var c Config
+	c.Patterns.Set("")
+	if err := c.SubstPattern(); err == nil {
+		t.Fatal("--replace was accepted with no pattern")
+	}
+	c.Patterns = PatternList{"x"}
+	if err := c.SubstPattern(); err != nil {
+		t.Fatalf("a pattern was refused: %v", err)
+	}
+}
+
+// TestReplaceNodeTakesTheFlagsSubstCannot is the other side of the split: the
+// node rewrite selects a whole region and so works behind every one of them.
+func TestReplaceNodeTakesTheFlagsSubstCannot(t *testing.T) {
+	var c Config
+	c.Invert = true
+	c.ReplNode.Set("y")
+	e, err := c.Edit()
+	if err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+	if e.Op != edit.OpReplaceNode {
+		t.Errorf("op = %v, want %v", e.Op, edit.OpReplaceNode)
 	}
 }

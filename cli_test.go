@@ -137,7 +137,7 @@ func TestExpectRefusesTheWrongCount(t *testing.T) {
 	path := doc(t, sample)
 	before := read(t, path)
 
-	_, stderr, code := capture(t, "the", path, "--replace", "X", "--expect", "5")
+	_, stderr, code := capture(t, "the", path, "--replace-node", "X", "--expect", "5")
 	if code != 2 {
 		t.Errorf("exit = %d, want 2", code)
 	}
@@ -151,7 +151,7 @@ func TestExpectRefusesTheWrongCount(t *testing.T) {
 
 func TestExpectAllowsTheCountItStates(t *testing.T) {
 	path := doc(t, sample)
-	_, stderr, code := capture(t, "the", path, "--replace", "X", "--expect", "2", "-q", "-W")
+	_, stderr, code := capture(t, "the", path, "--replace-node", "X", "--expect", "2", "-q", "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -165,7 +165,7 @@ func TestExpectAllowsTheCountItStates(t *testing.T) {
 // them rather than into the stream being parsed.
 func TestRefusalJSONGoesToStderr(t *testing.T) {
 	path := doc(t, sample)
-	stdout, stderr, code := capture(t, "the", path, "--replace", "X", "--json")
+	stdout, stderr, code := capture(t, "the", path, "--replace-node", "X", "--json")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}

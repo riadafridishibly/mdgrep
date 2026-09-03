@@ -14,8 +14,11 @@ import (
 )
 
 // File is one file's results, in the shape a refusal lists them: the source
-// to read a matched line back out of, and what matched in it.
+// to read a matched line back out of, and what matched in it. The parse comes
+// with them because a substitution asks the block tree what may be written at
+// each match, which no line range can answer.
 type File struct {
+	Doc *mdoc.Doc
 	Src *mdoc.Source
 	Res []search.Result
 }

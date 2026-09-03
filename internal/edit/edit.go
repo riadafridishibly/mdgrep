@@ -5,11 +5,13 @@
 package edit
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 	"github.com/riadafridishibly/mdgrep/internal/search"
 )
@@ -22,17 +24,26 @@ const (
 	OpCheck   Op = "check"
 	OpUncheck Op = "uncheck"
 	OpToggle  Op = "toggle"
-	OpReplace Op = "replace"
-	OpSetText Op = "set-text"
-	OpDelete  Op = "delete"
-	OpAppend  Op = "append"
-	OpPrepend Op = "prepend"
+	// OpReplace rewrites the text a matcher pointed at and leaves the rest of
+	// the node where it is, the way a substitution does in sed. OpReplaceNode
+	// is the other half of what used to be one "replace": it rewrites the
+	// whole selected node, text and syntax together.
+	OpReplace     Op = "replace"
+	OpReplaceNode Op = "replace-node"
+	OpSetText     Op = "set-text"
+	OpDelete      Op = "delete"
+	OpAppend      Op = "append"
+	OpPrepend     Op = "prepend"
 )
 
 // Options is one edit and the text it carries.
 type Options struct {
 	Op   Op
 	Text string
+	// Matcher is what OpReplace substitutes for, and nothing else reads. It is
+	// the last stage's matcher, which is the one that chose the nodes being
+	// edited.
+	Matcher match.Matcher
 }
 
 // Node reports whether the op rewrites the matched node itself rather than the
@@ -59,29 +70,45 @@ type Change struct {
 
 // Plan turns search results into changes without touching the file, so a run
 // can be rejected whole before anything is written.
-func Plan(src *mdoc.Source, results []search.Result, opt Options) ([]Change, error) {
+func Plan(doc *mdoc.Doc, results []search.Result, opt Options) ([]Change, error) {
+	src := doc.Src
 	out := make([]Change, 0, len(results))
 	for _, r := range results {
-		c, err := plan(src, r, opt)
+		cs, err := plan(doc, r, opt)
 		if err != nil {
 			return nil, err
 		}
-		if c.Old == nil {
-			c.Old = src.Lines(c.Start, c.End)
+		for _, c := range cs {
+			if c.Old == nil {
+				c.Old = src.Lines(c.Start, c.End)
+			}
+			out = append(out, c)
 		}
-		out = append(out, c)
 	}
 	return out, nil
 }
 
-func plan(src *mdoc.Source, r search.Result, opt Options) (Change, error) {
+// one adapts the edits that rewrite a single range. Only a substitution
+// produces more than one change from one result, because only it leaves the
+// lines it did not match alone.
+func one(c Change, err error) ([]Change, error) {
+	if err != nil {
+		return nil, err
+	}
+	return []Change{c}, nil
+}
+
+func plan(doc *mdoc.Doc, r search.Result, opt Options) ([]Change, error) {
+	src := doc.Src
 	c := Change{Path: src.Path, Op: opt.Op, Start: r.Start, End: r.End, Breadcrumb: r.Breadcrumb}
 	switch opt.Op {
 	case OpCheck, OpUncheck, OpToggle:
-		return checkbox(src, r, opt.Op, c)
+		return one(checkbox(src, r, opt.Op, c))
 	case OpSetText:
-		return setText(src, r, opt.Text, c)
+		return one(setText(src, r, opt.Text, c))
 	case OpReplace:
+		return subst(doc, opt, c)
+	case OpReplaceNode:
 		c.New = lines(opt.Text)
 		if c.End < c.Start {
 			// The region is an insertion point — an empty section body — so
@@ -92,11 +119,11 @@ func plan(src *mdoc.Source, r search.Result, opt Options) (Change, error) {
 	case OpDelete:
 		c.End = swallowBlank(src, c.Start, c.End)
 	case OpAppend, OpPrepend:
-		return insert(src, r, opt, c)
+		return one(insert(src, r, opt, c))
 	default:
-		return c, fmt.Errorf("unknown edit %q", opt.Op)
+		return nil, fmt.Errorf("unknown edit %q", opt.Op)
 	}
-	return c, nil
+	return one(c, nil)
 }
 
 // taskMark finds the GFM checkbox at the head of a list item, whatever marker
@@ -192,9 +219,96 @@ func setText(src *mdoc.Source, r search.Result, text string, c Change) (Change, 
 	case mdoc.KindParagraph, mdoc.KindTextBlock:
 		c.New = body
 	default:
-		return c, fmt.Errorf("--set-text does not apply to a %s; use --replace", r.Kind)
+		return c, fmt.Errorf("--set-text does not apply to a %s; use --replace-node", r.Kind)
 	}
 	return c, nil
+}
+
+// subst rewrites the text a matcher pointed at and leaves everything else on
+// the line where it was. Unlike every other edit it does not care what kind of
+// node it is standing in, only where in the document each match falls -- which
+// is what lets it run over a whole section as readily as over one bullet.
+//
+// The region it walks is the region the search reported, so what --expand and
+// --section widen a page to is what a substitution reaches. Its own node is
+// the default, and that is the only difference from a page.
+func subst(doc *mdoc.Doc, opt Options, c Change) ([]Change, error) {
+	rp, ok := opt.Matcher.(match.Replacer)
+	if !ok {
+		return nil, errNoSubstText
+	}
+	old := doc.Src.Lines(c.Start, c.End)
+	out := make([]string, len(old))
+	for i, line := range old {
+		rewritten, err := substLine(doc, c.Start+i, line, rp, opt.Text)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = rewritten
+	}
+	// One change per run of lines that moved, so a substitution across a whole
+	// section reports the lines it rewrote rather than the section it walked.
+	// The lines between two runs matched nothing and are not part of the edit.
+	var changes []Change
+	for i := 0; i < len(old); {
+		if old[i] == out[i] {
+			i++
+			continue
+		}
+		j := i
+		for j+1 < len(old) && old[j+1] != out[j+1] {
+			j++
+		}
+		run := c
+		run.Start, run.End = c.Start+i, c.Start+j
+		run.Old, run.New = old[i:j+1], out[i:j+1]
+		changes = append(changes, run)
+		i = j + 1
+	}
+	if len(changes) == 0 {
+		// Nothing moved. The result is still reported, as a no-op, so a run
+		// that selected a node and left it alone says so rather than going
+		// quiet.
+		c.Old, c.New, c.NoOp = old, out, true
+		return []Change{c}, nil
+	}
+	return changes, nil
+}
+
+// errNoSubstText is the refusal for a search that selected its nodes without
+// pointing at any text inside them. It is exported through Plan rather than
+// checked at the flag, because a pipeline's last stage is what decides it.
+var errNoSubstText = errors.New(
+	"--replace rewrites the text a pattern matched, and this search matched " +
+		"nodes without pointing at text in them; use --replace-node to rewrite the node")
+
+// substLine rewrites one line, asking the document at every match what may be
+// written there. That question is the reason a substitution needs the parse and
+// not just the matcher: a pipe is a character in a paragraph and a column
+// boundary in a table row, and only the tree knows which line is which.
+func substLine(doc *mdoc.Doc, n int, line string, rp match.Replacer, repl string) (string, error) {
+	reps := rp.Replacements(line, repl)
+	if len(reps) == 0 {
+		return line, nil
+	}
+	base := doc.Src.LineStart(n)
+	var sb strings.Builder
+	sb.Grow(len(line))
+	prev := 0
+	for _, m := range reps {
+		if m.Start < prev || m.End > len(line) {
+			continue
+		}
+		text, err := doc.BlockAt(n, base+m.Start).Constraint().Fit(m.Text)
+		if err != nil {
+			return "", fmt.Errorf("%s:%d: %v", doc.Src.Path, n+1, err)
+		}
+		sb.WriteString(line[prev:m.Start])
+		sb.WriteString(text)
+		prev = m.End
+	}
+	sb.WriteString(line[prev:])
+	return sb.String(), nil
 }
 
 // insert places text beside a node. It is indented to match, so a bullet
@@ -289,16 +403,41 @@ func Apply(src *mdoc.Source, changes []Change) string {
 		}
 		for i, line := range c.New {
 			sb.WriteString(line)
-			if i < len(c.New)-1 {
-				sb.WriteString(eol)
-			} else {
+			switch {
+			case i == len(c.New)-1:
 				sb.WriteString(last)
+			case c.Start+i <= c.End:
+				// A line that stands where an original one stood takes back
+				// that line's own ending rather than the file's commonest, so
+				// a document whose endings are not all alike keeps them.
+				sb.WriteString(ending(src, text, c.Start+i, hi))
+			default:
+				// A line the edit added stood where nothing did, so it takes
+				// the ending the rest of the file is written with.
+				sb.WriteString(eol)
 			}
 		}
 		prev = hi
 	}
 	sb.WriteString(text[prev:])
 	return sb.String()
+}
+
+// ending is what Source.Line trimmed from one line: the bytes between the end
+// of its text and the start of the next, clamped to the range being rewritten.
+// Reading it per line is what keeps a file whose endings are not uniform -- a
+// stray carriage return inside an otherwise LF document -- from having them
+// levelled to whichever one the file has most of.
+func ending(src *mdoc.Source, text string, n, hi int) string {
+	from := src.LineStart(n) + len(src.Line(n))
+	to := src.LineStart(n + 1)
+	if to > hi {
+		to = hi
+	}
+	if from > to || to > len(text) {
+		return ""
+	}
+	return text[from:to]
 }
 
 // trimmedEnding is what Source.Line trimmed from the last line of a replaced

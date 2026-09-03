@@ -29,7 +29,7 @@ zeta
 // context around them, numbered against the file they were planned on.
 func TestDiffIsAUnifiedPatch(t *testing.T) {
 	path := doc(t, ladder)
-	stdout, stderr, code := capture(t, "alpha", path, "--replace", "REPL", "--format", "diff")
+	stdout, stderr, code := capture(t, "alpha", path, "--replace-node", "REPL", "--format", "diff")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -52,7 +52,7 @@ func TestDiffIsAUnifiedPatch(t *testing.T) {
 func TestDiffNumbersTheSecondHunkAgainstTheFirst(t *testing.T) {
 	path := doc(t, ladder)
 	stdout, stderr, code := capture(t,
-		"alpha|zeta", path, "--replace", "one\ntwo", "--multi", "--format", "diff")
+		"alpha|zeta", path, "--replace-node", "one\ntwo", "--multi", "--format", "diff")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -74,7 +74,7 @@ func TestDiffNumbersTheSecondHunkAgainstTheFirst(t *testing.T) {
 func TestDiffRunsNeighbouringChangesIntoOneHunk(t *testing.T) {
 	path := doc(t, ladder)
 	stdout, stderr, code := capture(t,
-		"alpha|beta", path, "--replace", "X", "--multi", "--format", "diff")
+		"alpha|beta", path, "--replace-node", "X", "--multi", "--format", "diff")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -87,7 +87,7 @@ func TestDiffRunsNeighbouringChangesIntoOneHunk(t *testing.T) {
 // it back the way it found it.
 func TestDiffMarksAMissingFinalNewline(t *testing.T) {
 	path := doc(t, "# Doc\n\nalpha")
-	stdout, stderr, code := capture(t, "alpha", path, "--replace", "REPL", "--format", "diff")
+	stdout, stderr, code := capture(t, "alpha", path, "--replace-node", "REPL", "--format", "diff")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -112,7 +112,7 @@ func TestDiffLeavesOutANodeAlreadyAsAsked(t *testing.T) {
 // --format doc is what --write would have put in the file, on stdout instead.
 func TestDocPrintsTheDocumentTheEditProduced(t *testing.T) {
 	path := doc(t, ladder)
-	stdout, stderr, code := capture(t, "alpha", path, "--replace", "REPL", "--format", "doc")
+	stdout, stderr, code := capture(t, "alpha", path, "--replace-node", "REPL", "--format", "doc")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -129,7 +129,7 @@ func TestDocPrintsTheDocumentTheEditProduced(t *testing.T) {
 // the file the run was redirected into.
 func TestDocPassesTheDocumentThroughOnAMiss(t *testing.T) {
 	path := doc(t, ladder)
-	stdout, _, code := capture(t, "nothing here", path, "--replace", "X", "--format", "doc")
+	stdout, _, code := capture(t, "nothing here", path, "--replace-node", "X", "--format", "doc")
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
@@ -142,7 +142,7 @@ func TestDocPassesTheDocumentThroughOnAMiss(t *testing.T) {
 // nothing is printed and the caller is told why.
 func TestDocPrintsNothingWhenTheEditIsRefused(t *testing.T) {
 	path := doc(t, ladder)
-	stdout, stderr, code := capture(t, "alpha|zeta", path, "--replace", "X", "--format", "doc")
+	stdout, stderr, code := capture(t, "alpha|zeta", path, "--replace-node", "X", "--format", "doc")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -163,7 +163,7 @@ func TestDocRefusesMoreThanOneFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, stderr, code := capture(t, "alpha", dir, "--replace", "X", "--multi", "--format", "doc")
+	_, stderr, code := capture(t, "alpha", dir, "--replace-node", "X", "--multi", "--format", "doc")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2 (%s)", code, stderr)
 	}
@@ -191,7 +191,7 @@ func TestEditFormatsNeedAnEdit(t *testing.T) {
 func TestEditFormatsRefuseThePageFlags(t *testing.T) {
 	for _, flag := range []string{"-n", "-H", "--heading", "--span", "--breadcrumb"} {
 		_, stderr, code := capture(t,
-			"alpha", doc(t, ladder), "--replace", "X", "--format", "diff", flag)
+			"alpha", doc(t, ladder), "--replace-node", "X", "--format", "diff", flag)
 		if code != 2 {
 			t.Errorf("%s: exit = %d, want 2", flag, code)
 		}
@@ -206,7 +206,7 @@ func TestEditFormatsRefuseThePageFlags(t *testing.T) {
 // itself the way a named one does.
 func TestAnEditOnStdinReportsTheChange(t *testing.T) {
 	onStdin(t, ladder)
-	stdout, stderr, code := capture(t, "alpha", "--replace", "REPL")
+	stdout, stderr, code := capture(t, "alpha", "--replace-node", "REPL")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -220,7 +220,7 @@ func TestAnEditOnStdinReportsTheChange(t *testing.T) {
 // The filter shape: a document in, the document the edit produced out.
 func TestAnEditOnStdinPrintsTheDocument(t *testing.T) {
 	onStdin(t, ladder)
-	stdout, stderr, code := capture(t, "alpha", "--replace", "REPL", "--format", "doc")
+	stdout, stderr, code := capture(t, "alpha", "--replace-node", "REPL", "--format", "doc")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -233,7 +233,7 @@ func TestAnEditOnStdinPrintsTheDocument(t *testing.T) {
 // place.
 func TestWriteRefusesStdin(t *testing.T) {
 	onStdin(t, ladder)
-	_, stderr, code := capture(t, "alpha", "--replace", "REPL", "-W")
+	_, stderr, code := capture(t, "alpha", "--replace-node", "REPL", "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -247,7 +247,7 @@ func TestWriteRefusesStdin(t *testing.T) {
 func TestPlanTakesTheEditFormats(t *testing.T) {
 	t.Run("diff", func(t *testing.T) {
 		path := doc(t, ladder)
-		p := planFile(t, `{"path":`+quote(path)+`,"match":"alpha","op":"replace","text":"REPL"}`)
+		p := planFile(t, `{"path":`+quote(path)+`,"match":"alpha","op":"replace-node","text":"REPL"}`)
 		stdout, stderr, code := capture(t, "--apply", p, "--format", "diff")
 		if code != 0 {
 			t.Fatalf("exit = %d (%s)", code, stderr)
@@ -258,7 +258,7 @@ func TestPlanTakesTheEditFormats(t *testing.T) {
 	})
 	t.Run("doc", func(t *testing.T) {
 		path := doc(t, ladder)
-		p := planFile(t, `{"path":`+quote(path)+`,"match":"alpha","op":"replace","text":"REPL"}`)
+		p := planFile(t, `{"path":`+quote(path)+`,"match":"alpha","op":"replace-node","text":"REPL"}`)
 		stdout, stderr, code := capture(t, "--apply", p, "--format", "doc")
 		if code != 0 {
 			t.Fatalf("exit = %d (%s)", code, stderr)
@@ -270,8 +270,8 @@ func TestPlanTakesTheEditFormats(t *testing.T) {
 	t.Run("doc refuses two files", func(t *testing.T) {
 		first, second := doc(t, ladder), doc(t, ladder)
 		p := planFile(t,
-			`{"path":`+quote(first)+`,"match":"alpha","op":"replace","text":"X"}`,
-			`{"path":`+quote(second)+`,"match":"zeta","op":"replace","text":"Y"}`,
+			`{"path":`+quote(first)+`,"match":"alpha","op":"replace-node","text":"X"}`,
+			`{"path":`+quote(second)+`,"match":"zeta","op":"replace-node","text":"Y"}`,
 		)
 		_, stderr, code := capture(t, "--apply", p, "--format", "doc")
 		if code != 2 {

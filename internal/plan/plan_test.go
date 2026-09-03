@@ -10,7 +10,7 @@ import (
 )
 
 func change(entry, start, end int) planChange {
-	return planChange{entry: entry, Change: edit.Change{Op: edit.OpReplace, Start: start, End: end}}
+	return planChange{entry: entry, Change: edit.Change{Op: edit.OpReplaceNode, Start: start, End: end}}
 }
 
 // Two entries over one node refuse the plan, and the refusal names the entry

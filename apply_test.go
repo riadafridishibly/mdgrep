@@ -158,7 +158,7 @@ func TestApplyChecksWhatAnEntryAsksFor(t *testing.T) {
 		{"no path", `{"match":"a","op":"check"}`, `no "path"`},
 		{"no match", `{"path":"x.md","op":"check"}`, `no "match"`},
 		{"text an op cannot use", `{"path":"x.md","match":"a","op":"check","text":"b"}`, `takes no "text"`},
-		{"missing text", `{"path":"x.md","match":"a","op":"replace"}`, `wants "text"`},
+		{"missing text", `{"path":"x.md","match":"a","op":"replace-node"}`, `wants "text"`},
 		{"expect below one", `{"path":"x.md","match":"a","op":"check","expect":0}`, `above zero`},
 		{"negative expand", `{"path":"x.md","match":"a","op":"check","expand":-1}`, "cannot be negative"},
 		{"section on a node edit", `{"path":"x.md","match":"a","op":"check","section":true}`, "has nothing to widen"},
@@ -196,7 +196,7 @@ func TestApplyRefusesTwoEntriesOverTheSameLines(t *testing.T) {
 		{
 			"a node inside another entry's region",
 			[]string{
-				`{"path":"%s","match":"^## Setup","op":"replace","section":true,"text":"## Setup\n"}`,
+				`{"path":"%s","match":"^## Setup","op":"replace-node","section":true,"text":"## Setup\n"}`,
 				`{"path":"%s","match":"ship the docs","op":"check"}`,
 			},
 			"entry 2 edits line 5, which entry 1 already rewrites",
