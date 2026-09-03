@@ -1,0 +1,23 @@
+-- notes.md --
+# Notes
+
+## Install
+
+text
+
+### From source
+
+text
+
+## Usage
+
+text
+-- args --
+mdgrep --outline notes.md
+-- stdout --
+# Notes
+  ## Install
+    ### From source
+  ## Usage
+-- exit --
+0

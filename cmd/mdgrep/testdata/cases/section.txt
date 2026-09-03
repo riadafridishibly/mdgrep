@@ -1,0 +1,22 @@
+-- notes.md --
+# Notes
+
+## Install
+
+Run the installer.
+
+- [ ] verify checksum
+
+## Usage
+
+Call the binary.
+-- args --
+mdgrep "^## Install" --section notes.md
+-- stdout --
+## Install
+
+Run the installer.
+
+- [ ] verify checksum
+-- exit --
+0

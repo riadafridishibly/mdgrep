@@ -1,0 +1,38 @@
+-- notes.md --
+# Doc
+
+## API
+
+call v1 here
+
+leave this alone
+
+and v1 again
+
+## Other
+
+v1 stays
+-- args --
+mdgrep "^## API" --section notes.md --then "v1" --replace "v2" --multi -W
+-- stdout --
+- call v1 here
++ call v2 here
+--
+- and v1 again
++ and v2 again
+-- exit --
+0
+-- notes.md.after --
+# Doc
+
+## API
+
+call v2 here
+
+leave this alone
+
+and v2 again
+
+## Other
+
+v1 stays

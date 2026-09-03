@@ -1,0 +1,17 @@
+-- notes.md --
+# Notes
+
+## Release
+
+- [ ] ship the docs
+
+## Backlog
+
+- [ ] ship the icons
+-- args --
+mdgrep "^## Release" --section notes.md --stream
+-- stdout --
+{"mdgrep":1}
+{"path":"notes.md","start":3,"end":5}
+-- exit --
+0

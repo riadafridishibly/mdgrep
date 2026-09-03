@@ -1,0 +1,14 @@
+-- notes.md --
+# Notes
+
+- [ ] ship the docs
+- [ ] ship the tests
+-- args --
+mdgrep "ship" --check --expect 3 notes.md
+-- stdout --
+-- stderr --
+mdgrep: --expect 3, but 2 matched
+  notes.md:3: - [ ] ship the docs
+  notes.md:4: - [ ] ship the tests
+-- exit --
+2

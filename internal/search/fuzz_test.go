@@ -117,13 +117,12 @@ func FuzzSearchOptions(f *testing.F) {
 		n := doc.Src.NumLines()
 
 		opt := Options{
-			Before:  clampSmall(before),
-			After:   clampSmall(after),
-			Lines:   clampSmall(lines),
-			Expand:  clampSmall(expand),
-			Section: section,
-			Body:    body,
-			Rank:    rank,
+			Siblings:  clampSmall(before) + clampSmall(after) + clampSmall(lines),
+			Expand:    clampSmall(expand),
+			ExpandSet: expand != 0,
+			Section:   section,
+			Body:      body,
+			Rank:      rank,
 		}
 		for _, distinct := range []bool{false, true} {
 			opt.Distinct = distinct

@@ -81,7 +81,7 @@ func TestApplyLeavesNoFileWrittenWhenAnotherCannotBe(t *testing.T) {
 		`{"path":`+quote(good)+`,"match":"one","op":"check"}`,
 		`{"path":`+quote(bad)+`,"match":"two","op":"check"}`,
 	)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code == 0 {
 		t.Fatalf("exit = 0, want a refusal (%s)", stderr)
 	}
@@ -114,8 +114,8 @@ func TestKindItemSelectsOnlyItems(t *testing.T) {
 // scoped to bullets must not rewrite prose.
 func TestApplyKindItemDoesNotEditAParagraph(t *testing.T) {
 	path := doc(t, mixed)
-	p := planFile(t, `{"path":`+quote(path)+`,"match":"Some paragraph","kind":"item","op":"replace","text":"REWRITTEN"}`)
-	stdout, _, code := capture(t, "--apply", p, "--dry-run")
+	p := planFile(t, `{"path":`+quote(path)+`,"match":"Some paragraph","kind":"item","op":"replace-node","text":"REWRITTEN"}`)
+	stdout, _, code := capture(t, "--apply", p)
 	if code == 0 {
 		t.Errorf("an entry scoped to \"item\" matched a paragraph:\n%s", stdout)
 	}
@@ -130,7 +130,7 @@ func TestApplyKindItemDoesNotEditAParagraph(t *testing.T) {
 func TestRankedEditsAllReachTheFile(t *testing.T) {
 	path := doc(t, ranked)
 	stdout, stderr, code := capture(t,
-		"--fuzzy", "abc", path, "--min-score", "0.1", "--multi", "--check")
+		"--fuzzy", "abc", path, "--min-score", "0.1", "--multi", "--check", "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (%s)", code, stderr)
 	}
@@ -155,7 +155,7 @@ func TestOutlineRefusesTheFlagsThatWidenAResult(t *testing.T) {
 	path := doc(t, widened)
 	for _, args := range [][]string{
 		{"-B", "1"}, {"-A", "1"}, {"-C", "1"},
-		{"--lines", "2"}, {"--expand", "1"}, {"--section"}, {"--section-body"},
+		{"--siblings", "2"}, {"--expand", "1"}, {"--section"}, {"--section-body"},
 	} {
 		stdout, stderr, code := capture(t, append([]string{"--outline", path}, args...)...)
 		if code != 2 {
@@ -191,18 +191,18 @@ func TestOutlinePrintsOnlyHeadings(t *testing.T) {
 // be printed at their own depth.
 func TestOutlineIndentsByTheLevelOfTheHeadingItPrints(t *testing.T) {
 	path := doc(t, levels)
-	stdout, stderr, code := capture(t, "--outline", path)
+	stdout, stderr, code := capture(t, "--outline", path, "-n")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
 	seen := 0
 	for line := range strings.SplitSeq(stdout, "\n") {
-		bar := strings.Index(line, "│")
-		if bar < 0 {
+		// The prefix is "NN:", then two spaces per level below the first.
+		colon := strings.IndexByte(line, ':')
+		if colon < 0 {
 			continue // the path line
 		}
-		// The gutter is "  NN │ ", then two spaces per level below the first.
-		body := strings.TrimPrefix(line[bar+len("│"):], " ")
+		body := line[colon+1:]
 		text := strings.TrimLeft(body, " ")
 		if !strings.HasPrefix(text, "#") {
 			continue
@@ -226,7 +226,7 @@ func TestOutlineIndentsByTheLevelOfTheHeadingItPrints(t *testing.T) {
 // there the last element is a real ancestor and has to stay.
 func TestMergedResultKeepsTheAncestorTrail(t *testing.T) {
 	path := doc(t, interrupted)
-	stdout, stderr, code := capture(t, "--fuzzy", "--min-score", "0.1", "ndl", path)
+	stdout, stderr, code := capture(t, "--fuzzy", "--min-score", "0.1", "ndl", path, "--breadcrumb")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -258,8 +258,11 @@ func TestHelpPrintsTheManualDespiteAPattern(t *testing.T) {
 // context and leave out what the caller searched for.
 func TestTruncateKeepsTheMatchedNode(t *testing.T) {
 	path := doc(t, buried)
+	// --siblings is the flag that widens the region, so it is the one every
+	// format reads. -B pads only a printed page, and is refused where there
+	// is no page to pad.
 	for _, format := range [][]string{nil, {"--format", "compact"}, {"--json"}} {
-		args := append([]string{"needle", path, "-B", "3", "--truncate", "2"}, format...)
+		args := append([]string{"needle", path, "--siblings", "3", "--truncate", "2"}, format...)
 		stdout, stderr, code := capture(t, args...)
 		if code != 0 {
 			t.Fatalf("%v: exit = %d, want 0 (%s)", format, code, stderr)
@@ -267,6 +270,13 @@ func TestTruncateKeepsTheMatchedNode(t *testing.T) {
 		if !strings.Contains(stdout, "needle here") {
 			t.Errorf("%v: the match was truncated away:\n%s", format, stdout)
 		}
+	}
+	stdout, stderr, code := capture(t, "needle", path, "-B", "3", "--truncate", "2")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (%s)", code, stderr)
+	}
+	if !strings.Contains(stdout, "needle here") {
+		t.Errorf("the match was padded off the page:\n%s", stdout)
 	}
 }
 
@@ -308,7 +318,7 @@ func TestApplyRefusalIsAlwaysJSONWhenAskedFor(t *testing.T) {
 func TestCompactInsertionSpanIsReadable(t *testing.T) {
 	path := doc(t, widened)
 	p := planFile(t, `{"path":`+quote(path)+`,"match":"Beta paragraph","op":"append","text":"appended para"}`)
-	stdout, stderr, code := capture(t, "--apply", p, "--format", "compact", "--dry-run")
+	stdout, stderr, code := capture(t, "--apply", p, "--format", "compact")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -413,7 +423,7 @@ func TestEmptySectionBodyHasNoBackwardsSpan(t *testing.T) {
 // every adjacent hit costs more than the trail is worth.
 func TestTrailIsNotRepeatedForAdjacentResults(t *testing.T) {
 	path := doc(t, paired)
-	stdout, stderr, code := capture(t, "alpha", path)
+	stdout, stderr, code := capture(t, "alpha", path, "--breadcrumb")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -447,7 +457,7 @@ func TestMachineFormatsDropTheRedundantTrail(t *testing.T) {
 		t.Errorf("breadcrumb = %v, want [Notes]: the heading names itself", got.Breadcrumb)
 	}
 
-	stdout, stderr, code = capture(t, "^## Setup", path, "--set-text", "New", "--dry-run")
+	stdout, stderr, code = capture(t, "^## Setup", path, "--set-text", "New")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -456,35 +466,15 @@ func TestMachineFormatsDropTheRedundantTrail(t *testing.T) {
 	}
 }
 
-// A compact record is read by splitting on tabs. A count of held-back lines
-// spelled in English inside the text field cannot be told apart from a
-// document that says the same words, so it gets a field of its own.
-func TestCompactSaysHowMuchItTruncated(t *testing.T) {
-	path := doc(t, "# Doc\n\nalpha\nbeta\ngamma\ndelta\nepsilon\n")
-	stdout, stderr, code := capture(t, "alpha", path, "--format", "compact", "--truncate", "2")
-	if code != 0 {
-		t.Fatalf("exit = %d (%s)", code, stderr)
-	}
-	record := strings.Split(strings.TrimSpace(stdout), "\n")[1]
-	fields := strings.Split(record, "\t")
-	if len(fields) != 5 {
-		t.Fatalf("want 5 fields, got %d: %q", len(fields), record)
-	}
-	if fields[3] != "0" || fields[4] != "3" {
-		t.Errorf("before, after = %q, %q, want 0, 3: %q", fields[3], fields[4], record)
-	}
-	if strings.Contains(fields[2], "…") {
-		t.Errorf("the notice is still inside the text: %q", record)
-	}
-}
-
-// The span is the node's and the text is the window --truncate kept, so one
-// count of the lines held back leaves a reader unable to say which line the
-// text starts on. Held back on each side, start plus before is that line.
-func TestCompactPlacesTheTruncatedWindow(t *testing.T) {
+// A compact record is read by splitting on tabs, and --truncate must not put
+// an English notice about held-back lines inside the text field: a document
+// that says the same words could not be told from it. The record says nothing
+// about the cap at all -- the span stays the node's, the text is the window,
+// and the spans field is what --at takes back whole.
+func TestCompactTruncatesWithoutANotice(t *testing.T) {
 	path := doc(t, "# Doc\n\nalpha\n\nbeta\n\ngamma\n\ndelta\n")
 	stdout, stderr, code := capture(t,
-		"delta", path, "-B", "2", "--format", "compact", "--truncate", "2")
+		"delta", path, "--siblings", "2", "--format", "compact", "--truncate", "2")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -499,11 +489,11 @@ func TestCompactPlacesTheTruncatedWindow(t *testing.T) {
 	if fields[2] != `\ndelta` {
 		t.Errorf("text = %q, want the last two lines of it: %q", fields[2], record)
 	}
-	// 5 (the span's start) plus 3 held back before is line 8, where the text
-	// begins. Their sum, 3, would have said the same for a window anywhere in
-	// the region.
-	if fields[3] != "3" || fields[4] != "0" {
-		t.Errorf("before, after = %q, %q, want 3, 0: %q", fields[3], fields[4], record)
+	if strings.Contains(fields[2], "…") {
+		t.Errorf("a notice is inside the text: %q", record)
+	}
+	if fields[4] != "paragraph:9-9,section:1-9" {
+		t.Errorf("spans = %q, want the ladder to name the region: %q", fields[4], record)
 	}
 }
 
@@ -512,7 +502,7 @@ func TestCompactPlacesTheTruncatedWindow(t *testing.T) {
 // match a regular expression against English is not being told anything.
 func TestCompactRefusalIsRecords(t *testing.T) {
 	path := doc(t, "# Doc\n\nalpha one\n\nalpha two\n")
-	_, stderr, code := capture(t, "alpha", path, "--replace", "x", "--dry-run", "--format", "compact")
+	_, stderr, code := capture(t, "alpha", path, "--replace-node", "x", "--format", "compact")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -541,7 +531,7 @@ func TestCompactRefusalIsRecords(t *testing.T) {
 func TestEditJSONInsertionSpanIsReadable(t *testing.T) {
 	path := doc(t, "# Notes\n\n## Setup\n\nbody\n")
 	for _, op := range []string{"--append", "--prepend"} {
-		stdout, stderr, code := capture(t, "^## Setup", path, op, "x", "--dry-run", "--json")
+		stdout, stderr, code := capture(t, "^## Setup", path, op, "x", "--json")
 		if code != 0 {
 			t.Fatalf("%s: exit = %d (%s)", op, code, stderr)
 		}
@@ -796,7 +786,7 @@ func TestNegativeCountsAreRefused(t *testing.T) {
 		{"-B", "--before"},
 		{"-A", "--after"},
 		{"-C", "--context"},
-		{"--lines", "--lines"},
+		{"--siblings", "--siblings"},
 		{"-m", "--max-count"},
 		{"--truncate", "--truncate"},
 	} {

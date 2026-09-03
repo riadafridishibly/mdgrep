@@ -23,7 +23,10 @@ var editSeeds = []string{
 	"# h\n\npara one\n\npara two\n",
 }
 
-var ops = []Op{OpCheck, OpUncheck, OpToggle, OpReplace, OpSetText, OpDelete, OpAppend, OpPrepend}
+var ops = []Op{
+	OpCheck, OpUncheck, OpToggle, OpReplace, OpReplaceNode,
+	OpSetText, OpDelete, OpAppend, OpPrepend,
+}
 
 func opOf(n int) Op { return ops[((n%len(ops))+len(ops))%len(ops)] }
 
@@ -38,7 +41,9 @@ func runPlan(t *testing.T, src, pat string, op Op, text string, opt search.Optio
 	doc := mdoc.Parse("f.md", []byte(src))
 	opt.Distinct = true
 	res := search.File(doc, m, opt)
-	changes, err := Plan(doc.Src, res, Options{Op: op, Text: text})
+	// A substitution stands its text in for what the matcher found, so it gets
+	// the same matcher the search ran with.
+	changes, err := Plan(doc, res, Options{Op: op, Text: text, Matcher: m})
 	if err != nil {
 		return nil, "", false
 	}
@@ -95,6 +100,12 @@ func FuzzEditPipeline(f *testing.F) {
 			if last.End < mdoc.Parse("f.md", []byte(src)).Src.NumLines()-1 {
 				t.Fatalf("%v: gained a trailing newline the file never had", op)
 			}
+		}
+		// A substitution rewrites matched text in place, so it never moves a
+		// line the pattern did not reach. Every line outside a change has to
+		// come back byte for byte.
+		if op == OpReplace {
+			untouched(t, src, out, changes)
 		}
 		if op == OpDelete && len(out) > len(src) {
 			t.Fatalf("delete grew the document from %d to %d bytes", len(src), len(out))
@@ -170,6 +181,31 @@ func FuzzEditWiden(f *testing.F) {
 		}
 		mdoc.Parse("f.md", []byte(out))
 	})
+}
+
+// untouched checks that a substitution left every line outside its changes
+// alone. It is the property that separates --replace from --replace-node: the
+// region is what a substitution may reach, not what it overwrites.
+func untouched(t *testing.T, src, out string, changes []Change) {
+	t.Helper()
+	edited := map[int]bool{}
+	for _, c := range changes {
+		for n := c.Start; n <= c.End; n++ {
+			edited[n] = true
+		}
+	}
+	before, after := strings.Split(src, "\n"), strings.Split(out, "\n")
+	if len(before) != len(after) {
+		// A replacement carrying newlines adds lines, and then the two files
+		// no longer line up to be compared this way.
+		return
+	}
+	for i := range before {
+		if !edited[i] && before[i] != after[i] {
+			t.Fatalf("line %d was not part of any change but moved: %q -> %q",
+				i, before[i], after[i])
+		}
+	}
 }
 
 func allNoOp(changes []Change) bool {

@@ -1,0 +1,35 @@
+-- checklist.md --
+# Checklist
+
+- [ ] walk the rows
+- [ ] log the block
+-- setup.md --
+# Setup
+
+## Install
+
+Run the installer.
+-- plan.jsonl --
+{"path":"checklist.md","match":"walk the rows","op":"check"}
+{"path":"setup.md","match":"^## Install","op":"set-text","text":"Setup"}
+-- args --
+mdgrep --apply plan.jsonl -W
+-- stdout --
+- checklist.md:- [ ] walk the rows
++ checklist.md:- [x] walk the rows
+--
+- setup.md:## Install
++ setup.md:## Setup
+-- exit --
+0
+-- checklist.md.after --
+# Checklist
+
+- [x] walk the rows
+- [ ] log the block
+-- setup.md.after --
+# Setup
+
+## Setup
+
+Run the installer.

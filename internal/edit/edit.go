@@ -5,11 +5,14 @@
 package edit
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 	"github.com/riadafridishibly/mdgrep/internal/search"
 )
@@ -22,17 +25,26 @@ const (
 	OpCheck   Op = "check"
 	OpUncheck Op = "uncheck"
 	OpToggle  Op = "toggle"
-	OpReplace Op = "replace"
-	OpSetText Op = "set-text"
-	OpDelete  Op = "delete"
-	OpAppend  Op = "append"
-	OpPrepend Op = "prepend"
+	// OpReplace rewrites the text a matcher pointed at and leaves the rest of
+	// the node where it is, the way a substitution does in sed. OpReplaceNode
+	// is the other half of what used to be one "replace": it rewrites the
+	// whole selected node, text and syntax together.
+	OpReplace     Op = "replace"
+	OpReplaceNode Op = "replace-node"
+	OpSetText     Op = "set-text"
+	OpDelete      Op = "delete"
+	OpAppend      Op = "append"
+	OpPrepend     Op = "prepend"
 )
 
 // Options is one edit and the text it carries.
 type Options struct {
 	Op   Op
 	Text string
+	// Matcher is what OpReplace substitutes for, and nothing else reads. It is
+	// the last stage's matcher, which is the one that chose the nodes being
+	// edited.
+	Matcher match.Matcher
 }
 
 // Node reports whether the op rewrites the matched node itself rather than the
@@ -55,34 +67,98 @@ type Change struct {
 	Old, New   []string
 	Breadcrumb []string
 	NoOp       bool // the file already reads the way the edit asks
+	// cells are the cell rewrites this change carries, as byte offsets into
+	// the original line. Several cells of one row are one change to that
+	// line, so they are collected rather than each rewriting the line from
+	// what it said before the run -- which would keep only the last of them.
+	cells []cellEdit
+}
+
+// cellEdit is one cell's new text, placed by its byte range in the line.
+type cellEdit struct {
+	lo, hi int
+	text   string
 }
 
 // Plan turns search results into changes without touching the file, so a run
 // can be rejected whole before anything is written.
-func Plan(src *mdoc.Source, results []search.Result, opt Options) ([]Change, error) {
+func Plan(doc *mdoc.Doc, results []search.Result, opt Options) ([]Change, error) {
+	src := doc.Src
 	out := make([]Change, 0, len(results))
 	for _, r := range results {
-		c, err := plan(src, r, opt)
+		cs, err := plan(doc, r, opt)
 		if err != nil {
 			return nil, err
 		}
-		if c.Old == nil {
-			c.Old = src.Lines(c.Start, c.End)
+		for _, c := range cs {
+			if c.Old == nil {
+				c.Old = src.Lines(c.Start, c.End)
+			}
+			if at, ok := sameLineCell(out, c); ok {
+				out[at].cells = append(out[at].cells, c.cells...)
+				out[at].New = []string{applyCells(src.Line(c.Start), out[at].cells)}
+				continue
+			}
+			out = append(out, c)
 		}
-		out = append(out, c)
 	}
 	return out, nil
 }
 
-func plan(src *mdoc.Source, r search.Result, opt Options) (Change, error) {
+// sameLineCell finds a change already rewriting cells of the same line, which
+// is the one a further cell of that row belongs to.
+func sameLineCell(out []Change, c Change) (int, bool) {
+	if len(c.cells) == 0 {
+		return 0, false
+	}
+	for i := range out {
+		if len(out[i].cells) > 0 && out[i].Path == c.Path && out[i].Start == c.Start {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// applyCells writes every cell edit into the line it came from. They are
+// disjoint by construction -- a cell is a cell's worth of bytes -- so writing
+// them from the right leaves the offsets of the ones still to come alone.
+func applyCells(line string, cells []cellEdit) string {
+	sorted := append([]cellEdit(nil), cells...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].lo > sorted[j].lo })
+	for _, e := range sorted {
+		if e.lo < 0 || e.hi > len(line) || e.lo > e.hi {
+			continue
+		}
+		line = line[:e.lo] + e.text + line[e.hi:]
+	}
+	return line
+}
+
+// one adapts the edits that rewrite a single range. Only a substitution
+// produces more than one change from one result, because only it leaves the
+// lines it did not match alone.
+func one(c Change, err error) ([]Change, error) {
+	if err != nil {
+		return nil, err
+	}
+	return []Change{c}, nil
+}
+
+func plan(doc *mdoc.Doc, r search.Result, opt Options) ([]Change, error) {
+	src := doc.Src
 	c := Change{Path: src.Path, Op: opt.Op, Start: r.Start, End: r.End, Breadcrumb: r.Breadcrumb}
 	switch opt.Op {
 	case OpCheck, OpUncheck, OpToggle:
-		return checkbox(src, r, opt.Op, c)
+		return one(checkbox(src, r, opt.Op, c))
 	case OpSetText:
-		return setText(src, r, opt.Text, c)
+		return one(setText(doc, r, opt.Text, c))
 	case OpReplace:
+		return subst(doc, opt, c)
+	case OpReplaceNode:
 		c.New = lines(opt.Text)
+		if err := fitsInside(doc, r.Start, r.End, c.New); err != nil {
+			return nil, err
+		}
 		if c.End < c.Start {
 			// The region is an insertion point — an empty section body — so
 			// the text has to be parted from what surrounds it.
@@ -90,13 +166,19 @@ func plan(src *mdoc.Source, r search.Result, opt Options) (Change, error) {
 			c.Old = []string{}
 		}
 	case OpDelete:
+		if err := keepsTable(doc, c.Start, c.End); err != nil {
+			return nil, err
+		}
 		c.End = swallowBlank(src, c.Start, c.End)
 	case OpAppend, OpPrepend:
-		return insert(src, r, opt, c)
+		if err := fitsInside(doc, r.Start, r.End, lines(opt.Text)); err != nil {
+			return nil, err
+		}
+		return one(insert(src, r, opt, c))
 	default:
-		return c, fmt.Errorf("unknown edit %q", opt.Op)
+		return nil, fmt.Errorf("unknown edit %q", opt.Op)
 	}
-	return c, nil
+	return one(c, nil)
 }
 
 // taskMark finds the GFM checkbox at the head of a list item, whatever marker
@@ -140,7 +222,8 @@ var (
 // setText rewrites what a node says while leaving the markdown that makes it
 // that kind of node in place: a heading keeps its level, a task item keeps its
 // marker and its checkbox, a fenced block keeps its fences.
-func setText(src *mdoc.Source, r search.Result, text string, c Change) (Change, error) {
+func setText(doc *mdoc.Doc, r search.Result, text string, c Change) (Change, error) {
+	src := doc.Src
 	body := lines(text)
 	c.Start, c.End = r.HitStart, r.HitEnd
 
@@ -189,12 +272,200 @@ func setText(src *mdoc.Source, r search.Result, text string, c Change) (Change, 
 			return c, nil
 		}
 		c.New = prefixAll(indentOf(src.Line(r.HitStart)), body)
+	case mdoc.KindCell:
+		// A cell owns bytes rather than lines, so what is rewritten is the
+		// span inside the row it holds; the pipes and the cells beside it
+		// stay where they are. Fit escapes a pipe in the text and refuses a
+		// line break, either of which would rewrite the row's columns.
+		fitted, err := doc.BlockAt(r.HitStart, r.Lo).Constraint().Fit(text)
+		if err != nil {
+			return c, fmt.Errorf("%s:%d: %v", src.Path, r.HitStart+1, err)
+		}
+		line := src.Line(r.HitStart)
+		base := src.LineStart(r.HitStart)
+		lo, hi := r.Lo-base, r.Hi-base+1
+		if lo < 0 || hi > len(line) || lo > hi {
+			return c, fmt.Errorf("%s:%d: the cell is not on the line it names", src.Path, r.HitStart+1)
+		}
+		c.End = r.HitStart
+		c.cells = []cellEdit{{lo: lo, hi: hi, text: fitted}}
+		c.New = []string{applyCells(line, c.cells)}
 	case mdoc.KindParagraph, mdoc.KindTextBlock:
 		c.New = body
 	default:
-		return c, fmt.Errorf("--set-text does not apply to a %s; use --replace", r.Kind)
+		// A cell and a row are made of the text inside them, and --replace is
+		// the op that rewrites text knowing it is text. Sending them to
+		// --replace-node instead offers a region op a line of table syntax to
+		// write blind.
+		if r.Kind == mdoc.KindRow {
+			return c, fmt.Errorf(
+				"--set-text does not apply to a row; use --replace-node to write " +
+					"a row, or -k cell to name one cell of it")
+		}
+		return c, fmt.Errorf("--set-text does not apply to a %s; use --replace-node", r.Kind)
 	}
 	return c, nil
+}
+
+// tableRow is what a line has to look like to stand as a row: the pipes at
+// both ends. GFM would take a bare "a|b" as a row too, which is the reason to
+// insist -- text that was never meant as markup reads as markup there, and
+// silently.
+var tableRow = regexp.MustCompile(`^\s*\|.*\|\s*$`)
+
+// fitsInside refuses text that would be read as markup where it lands rather
+// than as the content it was meant to be. A pipe there opens a column and a line break ends the row, so a region
+// op writing "a|b" over a cell gives back two columns where one was asked for,
+// and two lines give back two rows. --replace escapes what it writes because
+// its matcher told it the text is text; a region op is handed lines and has to
+// be told. Replacing a table whole is left alone: what follows it is a
+// document, not a row.
+func fitsInside(doc *mdoc.Doc, start, end int, body []string) error {
+	if table := within(doc, start, end, mdoc.KindTable); table != nil {
+		for _, line := range body {
+			if tableRow.MatchString(line) {
+				continue
+			}
+			return fmt.Errorf(
+				"%s:%d: only a row belongs inside a table, and %q is not one; "+
+					"write the pipes, or use --replace to rewrite the text in a cell",
+				doc.Src.Path, start+1, line)
+		}
+	}
+	if code := within(doc, start, end, mdoc.KindCode); code != nil {
+		for _, line := range body {
+			if !isFence(line) {
+				continue
+			}
+			// A fence written inside a fenced block closes it, and everything
+			// under it -- the rest of the document -- becomes code.
+			return fmt.Errorf(
+				"%s:%d: %q would close the fenced block it is written into; "+
+					"replace the block itself, or use --replace to rewrite the text in it",
+				doc.Src.Path, start+1, line)
+		}
+	}
+	return nil
+}
+
+// keepsTable refuses a deletion that would take a table's header or the
+// delimiter under it. GFM reads the columns off those two lines, and without
+// them there is no table: the rows left behind are read as a paragraph full of
+// pipes. Deleting the table whole is another matter, and allowed.
+func keepsTable(doc *mdoc.Doc, start, end int) error {
+	table := within(doc, start, end, mdoc.KindTable)
+	if table == nil || start > table.Start+1 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s:%d: a table is built on its header and the line under it, and "+
+			"deleting either leaves the rows behind as text; delete the table "+
+			"itself, or empty the cells with --replace",
+		doc.Src.Path, start+1)
+}
+
+// within is the block of the given kind a region sits strictly inside, or nil
+// where the region sits in none or covers the whole of one. Replacing a node
+// whole is always allowed: what goes in its place answers to whatever holds
+// the node, not to the node being replaced.
+func within(doc *mdoc.Doc, start, end int, kind mdoc.Kind) *mdoc.Block {
+	for b := doc.Enclosing(start, end); b != nil; b = b.Parent {
+		if b.Kind != kind {
+			continue
+		}
+		if start <= b.Start && end >= b.End {
+			return nil
+		}
+		return b
+	}
+	return nil
+}
+
+// subst rewrites the text a matcher pointed at and leaves everything else on
+// the line where it was. Unlike every other edit it does not care what kind of
+// node it is standing in, only where in the document each match falls -- which
+// is what lets it run over a whole section as readily as over one bullet.
+//
+// The region it walks is the region the search reported, so what --expand and
+// --section widen a page to is what a substitution reaches. Its own node is
+// the default, and that is the only difference from a page.
+func subst(doc *mdoc.Doc, opt Options, c Change) ([]Change, error) {
+	rp, ok := opt.Matcher.(match.Replacer)
+	if !ok {
+		return nil, errNoSubstText
+	}
+	old := doc.Src.Lines(c.Start, c.End)
+	out := make([]string, len(old))
+	for i, line := range old {
+		rewritten, err := substLine(doc, c.Start+i, line, rp, opt.Text)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = rewritten
+	}
+	// One change per run of lines that moved, so a substitution across a whole
+	// section reports the lines it rewrote rather than the section it walked.
+	// The lines between two runs matched nothing and are not part of the edit.
+	var changes []Change
+	for i := 0; i < len(old); {
+		if old[i] == out[i] {
+			i++
+			continue
+		}
+		j := i
+		for j+1 < len(old) && old[j+1] != out[j+1] {
+			j++
+		}
+		run := c
+		run.Start, run.End = c.Start+i, c.Start+j
+		run.Old, run.New = old[i:j+1], out[i:j+1]
+		changes = append(changes, run)
+		i = j + 1
+	}
+	if len(changes) == 0 {
+		// Nothing moved. The result is still reported, as a no-op, so a run
+		// that selected a node and left it alone says so rather than going
+		// quiet.
+		c.Old, c.New, c.NoOp = old, out, true
+		return []Change{c}, nil
+	}
+	return changes, nil
+}
+
+// errNoSubstText is the refusal for a search that selected its nodes without
+// pointing at any text inside them. It is exported through Plan rather than
+// checked at the flag, because a pipeline's last stage is what decides it.
+var errNoSubstText = errors.New(
+	"--replace rewrites the text a pattern matched, and this search matched " +
+		"nodes without pointing at text in them; use --replace-node to rewrite the node")
+
+// substLine rewrites one line, asking the document at every match what may be
+// written there. That question is the reason a substitution needs the parse and
+// not just the matcher: a pipe is a character in a paragraph and a column
+// boundary in a table row, and only the tree knows which line is which.
+func substLine(doc *mdoc.Doc, n int, line string, rp match.Replacer, repl string) (string, error) {
+	reps := rp.Replacements(line, repl)
+	if len(reps) == 0 {
+		return line, nil
+	}
+	base := doc.Src.LineStart(n)
+	var sb strings.Builder
+	sb.Grow(len(line))
+	prev := 0
+	for _, m := range reps {
+		if m.Start < prev || m.End > len(line) {
+			continue
+		}
+		text, err := doc.BlockAt(n, base+m.Start).Constraint().Fit(m.Text)
+		if err != nil {
+			return "", fmt.Errorf("%s:%d: %v", doc.Src.Path, n+1, err)
+		}
+		sb.WriteString(line[prev:m.Start])
+		sb.WriteString(text)
+		prev = m.End
+	}
+	sb.WriteString(line[prev:])
+	return sb.String(), nil
 }
 
 // insert places text beside a node. It is indented to match, so a bullet
@@ -289,16 +560,41 @@ func Apply(src *mdoc.Source, changes []Change) string {
 		}
 		for i, line := range c.New {
 			sb.WriteString(line)
-			if i < len(c.New)-1 {
-				sb.WriteString(eol)
-			} else {
+			switch {
+			case i == len(c.New)-1:
 				sb.WriteString(last)
+			case c.Start+i <= c.End:
+				// A line that stands where an original one stood takes back
+				// that line's own ending rather than the file's commonest, so
+				// a document whose endings are not all alike keeps them.
+				sb.WriteString(ending(src, text, c.Start+i, hi))
+			default:
+				// A line the edit added stood where nothing did, so it takes
+				// the ending the rest of the file is written with.
+				sb.WriteString(eol)
 			}
 		}
 		prev = hi
 	}
 	sb.WriteString(text[prev:])
 	return sb.String()
+}
+
+// ending is what Source.Line trimmed from one line: the bytes between the end
+// of its text and the start of the next, clamped to the range being rewritten.
+// Reading it per line is what keeps a file whose endings are not uniform -- a
+// stray carriage return inside an otherwise LF document -- from having them
+// levelled to whichever one the file has most of.
+func ending(src *mdoc.Source, text string, n, hi int) string {
+	from := src.LineStart(n) + len(src.Line(n))
+	to := src.LineStart(n + 1)
+	if to > hi {
+		to = hi
+	}
+	if from > to || to > len(text) {
+		return ""
+	}
+	return text[from:to]
 }
 
 // trimmedEnding is what Source.Line trimmed from the last line of a replaced

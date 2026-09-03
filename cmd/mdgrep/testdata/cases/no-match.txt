@@ -1,0 +1,9 @@
+-- notes.md --
+# Notes
+
+Nothing to see.
+-- args --
+mdgrep "absent" notes.md
+-- stdout --
+-- exit --
+1

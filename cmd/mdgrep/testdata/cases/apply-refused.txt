@@ -1,0 +1,17 @@
+-- checklist.md --
+# Checklist
+
+- [ ] ship the docs
+- [ ] ship the tests
+-- plan.jsonl --
+{"path":"checklist.md","match":"ship","op":"check"}
+-- args --
+mdgrep --apply plan.jsonl -W
+-- stdout --
+-- stderr --
+mdgrep: entry 1: 2 matches; narrow "match" or set "multi": true
+  checklist.md:3: - [ ] ship the docs
+  checklist.md:4: - [ ] ship the tests
+mdgrep: 1 of 1 entries refused; nothing was written
+-- exit --
+2

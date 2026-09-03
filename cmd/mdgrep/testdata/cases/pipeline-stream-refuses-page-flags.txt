@@ -1,0 +1,14 @@
+-- notes.md --
+# Notes
+
+## Release
+
+- [ ] ship the docs
+-- args --
+mdgrep "^## Release" --section notes.md --stream -n
+-- stdout --
+-- stderr --
+mdgrep: a stream is a list of regions, so there is nothing for -n to say about it
+try 'mdgrep --help'
+-- exit --
+2

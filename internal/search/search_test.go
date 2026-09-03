@@ -80,16 +80,9 @@ func TestSectionExpansion(t *testing.T) {
 }
 
 func TestSiblingContext(t *testing.T) {
-	res := find(t, "brew install", Options{After: 1})
+	res := find(t, "brew install", Options{Siblings: 1})
 	if res[0].End != 6 {
 		t.Fatalf("end = %d, want 6 (next sibling bullet)", res[0].End)
-	}
-}
-
-func TestLinePadding(t *testing.T) {
-	res := find(t, "nothing relevant", Options{Lines: 2})
-	if res[0].Start != 9 {
-		t.Fatalf("start = %d, want 9 after blank trimming", res[0].Start)
 	}
 }
 

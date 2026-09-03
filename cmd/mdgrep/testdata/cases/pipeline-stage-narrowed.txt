@@ -1,0 +1,13 @@
+-- notes.md --
+# Notes
+
+## Release
+
+- [x] ship the docs
+-- args --
+mdgrep "^## Release" --section notes.md --then --todo --then "absent"
+-- stdout --
+-- stderr --
+mdgrep: stage 2 of 3 narrowed to nothing
+-- exit --
+1

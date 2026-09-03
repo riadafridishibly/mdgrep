@@ -1,0 +1,13 @@
+-- checklist.md --
+# Checklist
+
+- [ ] walk the rows
+-- plan.jsonl --
+{"path":"checklist.md","match":"walk the rows","op":"check","nope":true}
+-- args --
+mdgrep --apply plan.jsonl -W
+-- stdout --
+-- stderr --
+mdgrep: --apply: entry 1: json: unknown field "nope"
+-- exit --
+2

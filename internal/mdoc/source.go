@@ -81,6 +81,22 @@ func (s *Source) Slice(start, end int) string {
 // Text returns the file exactly as it was read.
 func (s *Source) Text() string { return s.text }
 
+// Bytes returns an inclusive byte range of the file, clamped to it. It is what
+// a cell is matched against: cells share a line with their neighbours, so the
+// line a block sits on cannot tell them apart and only the bytes can.
+func (s *Source) Bytes(lo, hi int) string {
+	if lo < 0 {
+		lo = 0
+	}
+	if hi >= len(s.text) {
+		hi = len(s.text) - 1
+	}
+	if lo > hi {
+		return ""
+	}
+	return s.text[lo : hi+1]
+}
+
 // ByteRange returns the byte offsets spanning an inclusive line range, the
 // trailing newline of the last line included. An empty range (end < start) is
 // an insertion point, and returns the start of that line twice.
@@ -114,4 +130,23 @@ func (s *Source) Lines(start, end int) []string {
 		out = append(out, s.Line(i))
 	}
 	return out
+}
+
+// LineStart returns the byte offset a zero-based line begins at, which is what
+// turns a column within a line into an offset the block tree can be addressed
+// by. A line past the end of the file starts at its end.
+func (s *Source) LineStart(i int) int {
+	if i < 0 {
+		return 0
+	}
+	if i >= len(s.lineStart) {
+		return len(s.text)
+	}
+	return s.lineStart[i]
+}
+
+// LineEnd returns the byte offset of the last byte of a zero-based line, its
+// ending excluded. It is inclusive, the way a block's byte range is.
+func (s *Source) LineEnd(i int) int {
+	return s.LineStart(i) + len(s.Line(i)) - 1
 }

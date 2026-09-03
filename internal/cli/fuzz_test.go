@@ -3,7 +3,10 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/riadafridishibly/mdgrep/internal/edit"
 )
@@ -39,8 +42,8 @@ var editFlags = []struct {
 // never quietly resolved to the wrong one.
 func FuzzBuildEdit(f *testing.F) {
 	f.Add(uint16(0), "text", 0, false, false)
-	f.Add(uint16(1<<4), "text", 0, false, false)       // --replace
-	f.Add(uint16(1<<4|1<<5), "text", 0, false, false)  // --replace and --replace-from
+	f.Add(uint16(1<<4), "text", 0, false, false)       // --replace-node
+	f.Add(uint16(1<<4|1<<5), "text", 0, false, false)  // --replace-node and --replace-from
 	f.Add(uint16(1<<8|1<<10), "text", 0, false, false) // --append and --prepend
 	f.Add(uint16(1<<9), "", 3, false, true)            // --append-from --expect 3
 	f.Add(uint16(0), "", 2, true, true)                // --expect with no edit
@@ -111,4 +114,87 @@ func FuzzBuildEdit(f *testing.F) {
 			t.Errorf("op %v carries %q, want %q", e.Op, e.Text, want)
 		}
 	})
+}
+
+// wordSeeds are the shapes --exec's argument comes in: quoting of every kind,
+// emptiness, and the separator written each of the ways that do and do not
+// divide two stages.
+var wordSeeds = []string{
+	``,
+	`foo`,
+	`   `,
+	`"^## Release" --section docs | "" --todo | --check`,
+	`"^(alpha|beta)"`,
+	`-F '|' docs`,
+	`-F \| docs`,
+	`a | b`,
+	`""`,
+	`''`,
+	`-k"heading"`,
+	`--replace-node "say \"hi\""`,
+	`"a\\b"`,
+	"a\tb\nc\r d",
+	`unclosed "quote`,
+	`unclosed 'quote`,
+	`trailing backslash \`,
+	`'` + `\'` + `'`,
+}
+
+// FuzzExecWords walks the string --exec is given. It is the one place mdgrep
+// does its own quoting rather than leaning on the shell's, so what matters is
+// that it never panics, that a string with no quoting in it is split exactly
+// as the shell would have split it, and that any word it produces can be
+// written back out and read again as the same word — which is what lets a
+// caller move a query between the two spellings of a pipeline.
+func FuzzExecWords(f *testing.F) {
+	for _, s := range wordSeeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, line string) {
+		words, err := execWords(line)
+		if err != nil {
+			return
+		}
+		// A line of plain ASCII with no quoting in it is a line a shell would
+		// have split on whitespace and nothing else, and so is this.
+		if !strings.ContainsAny(line, `'"\`) && ascii(line) {
+			var got []string
+			for _, w := range words {
+				if !w.bare {
+					t.Fatalf("%q: word %q is not bare, though nothing quoted it", line, w.text)
+				}
+				got = append(got, w.text)
+			}
+			if want := strings.Fields(line); !slices.Equal(got, want) {
+				t.Fatalf("%q split to %q, want %q", line, got, want)
+			}
+		}
+		for _, w := range words {
+			back, err := execWords(shellQuote(w.text))
+			if err != nil {
+				t.Fatalf("%q: requoting %q: %v", line, w.text, err)
+			}
+			if len(back) != 1 || back[0].text != w.text {
+				t.Fatalf("%q: %q written back reads as %v", line, w.text, back)
+			}
+		}
+	})
+}
+
+// ascii reports whether a line holds nothing but ASCII, so that the words it
+// splits into can be compared against a splitter that reads every space
+// character Unicode has.
+func ascii(line string) bool {
+	for i := range len(line) {
+		if line[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// shellQuote writes a word so that reading it again gives the same word,
+// closing the single quotes around every one the word itself holds.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

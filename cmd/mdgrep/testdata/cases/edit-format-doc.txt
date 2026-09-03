@@ -1,0 +1,16 @@
+-- notes.md --
+# Notes
+
+## Release
+
+- [ ] ship the docs
+-- args --
+mdgrep "ship the docs" --check --format doc notes.md
+-- stdout --
+# Notes
+
+## Release
+
+- [x] ship the docs
+-- exit --
+0

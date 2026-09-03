@@ -19,16 +19,16 @@ const Usage = `mdgrep — node-aware grep for markdown
 
 usage: mdgrep [OPTIONS] PATTERN [PATH...]
 
-A hit prints the markdown node it landed in — the whole bullet, row or
-paragraph — rather than the single line. PATTERN is a regular expression by
-default, and an empty one matches everything. With no PATH, mdgrep reads
-stdin when it is a pipe and searches the current directory otherwise.
+Prints the lines that matched and names the node they sit in -- the bullet,
+the row, the section -- with the span each one covers, so the next run can ask
+for one whole. PATTERN is a regular expression, and an empty one matches
+everything. With no PATH, mdgrep reads stdin when it is a pipe and searches the
+current directory otherwise.
 
 Matching
   -e, --regexp PATTERN  use PATTERN as the pattern; repeat for alternatives
   -F, --fixed-strings   match PATTERN literally
-      --fuzzy           fuzzy match: every token of PATTERN must appear,
-                        loosely and in order. Results come back best first
+      --fuzzy           fuzzy match, loosely and in order, best first
       --min-score N     fuzzy score threshold, 0..1 (default 0.7)
       --anchor          PATTERN is a heading link anchor: "#the-foo-bar",
                         "the-foo-bar" or "docs/x.md#the-foo-bar"
@@ -41,8 +41,8 @@ Matching
   -s, --case-sensitive  force case-sensitive
   -S, --smart-case      fold until PATTERN has an upper-case letter (default)
 
-Nodes match against the markdown as written, so "^## " finds every
-second-level heading and -F "**bold**" finds the emphasis markers.
+Patterns match the markdown as written, so "^## " finds every second-level
+heading and -F "**bold**" finds the emphasis markers.
 
 Filters
   -k, --kind LIST       heading (h, head), item (bullet, li), list,
@@ -52,70 +52,116 @@ Filters
       --unchecked       only unticked task items (alias --todo)
       --checked         only ticked task items (alias --done)
 
+A row and a cell are two ways of reading one line. -k row matches the line as
+written, pipes and all; -k cell matches inside one cell, so a pattern that
+spans a pipe finds a row and never a cell. Both print the row -- a line is what
+a page shows -- but a cell result names the cell it matched, which is what -c
+counts, what a highlight marks, and what --set-text rewrites.
+
 A filter never stands in for the pattern: pass an empty one to select by
 filter alone, as in "mdgrep '' docs --todo".
 
 Selection
-      --expand N        climb N ancestor levels from the matched node
+      --expand [N]      widen to the matched node; N, that many rungs up the
+                        expand ladder towards its section
       --section         widen to the enclosing heading section
       --section-body    that section without its heading line
-  -B, --before N        include N sibling blocks before
-  -A, --after N         include N sibling blocks after
+      --siblings N      include N sibling blocks each side
+      --at N-M          take lines N to M of one file outright, 1-based and
+                        inclusive, as the span note writes them; repeatable,
+                        and takes no PATTERN
+  -B, --before N        print N lines before each matching line
+  -A, --after N         print N lines after
   -C, --context N       shorthand for -B N -A N
-      --lines N         pad the result with N raw lines on each side
 
--B, -A and -C count sibling blocks, not lines; use --lines for raw lines.
+A widener is the switch from line output to node output. -B, -A and -C widen
+no region: they pad the page, counted and clipped the way grep counts them.
 
 Editing
       --check, --uncheck, --toggle
                         set the state of the selected task item
       --set-text TEXT   change what the matched node says, keeping the markup
                         that makes it a heading, an item or a fenced block
-      --replace TEXT    replace the selected region with TEXT
-      --delete          remove the selected region
+      --replace TEXT    rewrite the text the pattern matched with TEXT,
+                        leaving the rest of the line alone; "$1" and friends
+                        expand as they do in a regexp replacement
+      --replace-node TEXT
+                        replace the whole selected region with TEXT
+      --delete          remove the selected region, and the blank line it
+                        would otherwise leave stacked on another
       --append TEXT     insert TEXT after the selected region
       --prepend TEXT    insert TEXT before it
-      --replace-from FILE, --set-text-from FILE, --append-from FILE,
-      --prepend-from FILE
-                        the same four edits, TEXT read from a file ("-" is
+      --replace-from FILE, --replace-node-from FILE, --set-text-from FILE,
+      --append-from FILE, --prepend-from FILE
+                        the same five edits, TEXT read from a file ("-" is
                         stdin)
       --multi           edit every match; without it, more than one is an error
       --expect N        edit only if exactly N nodes matched, else fail
-      --dry-run         show the edit, write nothing
+  -W, --write           write the edit to the file; without it the edit is
+                        only shown
 
-An edit rewrites what the same flags would have printed: narrow the search to
-one node, then say what to do with it. --check and --set-text act on the
-matched node; --replace, --delete, --append and --prepend act on the region
---section and --expand widen it to. Every file is written in one atomic go.
+--check and --set-text act on the matched node; --replace-node, --delete,
+--append and --prepend act on the region a widener selected. --replace acts on
+neither: it rewrites the matched text wherever it falls inside that region, so
+--section widens what it reaches rather than what it overwrites.
+
+--replace needs a pattern that points at text, so it is refused beside -v,
+--fuzzy, --anchor and --at, which select nodes without naming text in them.
+What it writes is fitted to where it lands: a pipe written into a table cell
+leaves escaped, and a line break written into a cell or a heading is refused
+rather than allowed to end the row.
+
+The region ops write lines rather than text, and a line is read as markup
+wherever it lands. So they are refused where that would rewrite the structure
+the edit was not asked to touch: only a row goes inside a table, and no line
+that closes a fence goes inside a fenced block, and a table's header and the
+line under it cannot be deleted out of it. An edit that cannot be made without
+changing what the document is fails and writes nothing.
+
+An edit prints the lines it would remove behind "-" and add behind "+";
+--format diff prints a patch instead, and --format doc the whole document it
+produced.
 
 Plans
       --apply FILE      carry out a plan of edits read from FILE ("-" is
-                        stdin): one JSON object per line
+                        stdin): one JSON object per line, each naming "path",
+                        "op" and either "match" or "at", plus "text" for the
+                        ops that write one. A plan takes no PATTERN and no
+                        PATH, and applies whole or not at all
 
-  $ cat plan.jsonl
   {"path":"notes.md","match":"ship the docs","op":"check"}
   {"path":"notes.md","match":"^## Setup","op":"set-text","text":"Install"}
-  $ mdgrep --apply plan.jsonl
 
-An entry takes "path", "match" and "op", plus "text" for the edits that write
-one. "kind", "fixed", "expand", "section", "section-body", "expect" and
-"multi" say per entry what the flags of those names say here, and the plan
-carries its own search, so it takes no PATTERN and no PATH. Every entry is
-planned against the files as read, so none can match what another writes, and
-the plan applies whole or not at all.
+Pipelines
+      --then            search again over what the stage before it selected;
+                        the last stage is the one that prints or writes
+      --exec PIPELINE   the same as one string: words as a shell reads them,
+                        stages split on a bare "|"
+      --stream          hand one region per result to the next mdgrep as JSON
+                        rather than printing them; same as --format stream
+
+Only the first stage names files; only the last takes the Output and Editing
+flags. A flag that would change nothing where it stands is refused by name.
 
 Output
-  -n, --line-number     number the printed lines (the default)
-  -N, --no-line-number  drop the line-number gutter
-      --no-breadcrumb   hide the heading trail above each result
+  -n, --line-number     number the printed lines
+  -N, --no-line-number  do not
+  -H, --with-filename   print the file a result came from
+      --no-filename     do not
+      --heading         put that name above a file's results rather than in
+                        front of every line of them
+      --no-heading      the other way: "path:line:text" on every line
+      --breadcrumb      print the heading trail above each result
+      --no-breadcrumb   do not
       --outline         one indented line per heading; takes paths, no
                         PATTERN, and none of the Selection flags
-      --separator STR   what to print between two results of a file (default
-                        "--"); pass "" to leave them out
-      --truncate N      print at most N lines of a result, keeping the
-                        matched node, then a count of what was held back
+      --separator STR   what to print between two groups of lines that are
+                        not next to each other in the file (default "--")
+      --span            print the expand ladder after each result (default)
+      --no-span         do not
+      --truncate N      cap node output at N lines, keeping the matched one
       --color WHEN      auto, always or never (default auto)
-      --format WHEN     plain (default), compact or json
+      --format WHEN     plain (default), compact, json, stream, diff or doc
       --json            one JSON object per result (same as --format json)
   -c, --count           print only the number of results per file
   -l, --files-with-matches
@@ -128,21 +174,32 @@ Output
       --no-ignore       search past .gitignore, .ignore, .git/info/exclude
                         and the skip list (node_modules, vendor and friends)
   -h, --help [TOPIC]    the whole manual, or one part of it: matching,
-                        filters, selection, editing, plans, output. A flag
-                        name works too, as in "mdgrep --help anchor"
+                        filters, selection, editing, plans, pipelines,
+                        output, examples. A flag name works too, as in
+                        "mdgrep --help anchor"
   -V, --version         print the version and exit
 
-compact is one tab-separated record per result — "start[-end] kind text
-before after", newlines escaped — under the path, for a fraction of what json
-costs. before and after are the lines --truncate held back on each side, and
-the span is the node's, so the text starts at start plus before. json adds the
-breadcrumb and the score. Both keep two touching nodes apart where plain runs
-them into one passage, and both report a refusal in their own shape. Colour is
-off when stdout is not a terminal, NO_COLOR is set or TERM=dumb.
+A line is written "path:line:text", each part there only when it has something
+to say. The file name, the numbers and the trail follow the terminal: a tty
+gets all three, a pipe gets the markdown alone, and every default yields to
+the flag that answers it. A result ends with the spans it could be widened to,
+which is a cost table --at takes an entry of back:
+
+  (item 693-715, list 509-722, section 507-724)
+
+Examples
+  mdgrep "^## Release" --section docs
+  mdgrep "" docs --todo
+  mdgrep "#install" --anchor --section README.md
+  mdgrep "old text" --replace "new text" notes.md -W
+  mdgrep "^## Changelog" --section-body --replace-node-from new.md notes.md -W
+  mdgrep "^## Release" --section docs --then -k list --then --todo --check
+  mdgrep --exec '"^## Release" --section | -k list | --todo --check' docs
+  cat notes.md | mdgrep "old" --replace "new" --format doc > out.md
 
 A short flag takes its value attached or apart: -C2 and -C 2 are the same.
-Everything after -- is a PATTERN or a PATH, dashes and all.
-Exit status is 0 when something matched, 1 when nothing did, 2 on error.
+Everything after -- is a PATTERN or a PATH. Exit status is 0 when something
+matched, 1 when nothing did, 2 on error.
 `
 
 // Text answers --help, either in full or one titled part of it. Splitting the

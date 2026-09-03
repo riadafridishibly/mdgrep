@@ -1,0 +1,18 @@
+-- checklist.md --
+# Checklist
+
+- [ ] walk the rows
+- [ ] log the block
+-- plan.jsonl --
+{"path":"checklist.md","match":"walk the rows","op":"check"}
+{"path":"checklist.md","match":"log the block","op":"check"}
+-- args --
+mdgrep --apply plan.jsonl
+-- stdout --
+- checklist.md:- [ ] walk the rows
++ checklist.md:- [x] walk the rows
+--
+- checklist.md:- [ ] log the block
++ checklist.md:- [x] log the block
+-- exit --
+0

@@ -1,0 +1,17 @@
+-- checklist.md --
+# Checklist
+
+- [ ] walk the rows
+-- args --
+mdgrep --apply - -W
+-- stdin --
+{"path":"checklist.md","match":"walk the rows","op":"check"}
+-- stdout --
+- checklist.md:- [ ] walk the rows
++ checklist.md:- [x] walk the rows
+-- exit --
+0
+-- checklist.md.after --
+# Checklist
+
+- [x] walk the rows

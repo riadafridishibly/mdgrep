@@ -33,7 +33,11 @@ type planEntry struct {
 	// Match and Text are pointers because leaving a key out and giving it an
 	// empty string are different instructions, the way --replace "" asks for
 	// an empty replacement rather than for nothing.
-	Match   *string `json:"match"`
+	Match *string `json:"match"`
+	// At is the address, in --at's syntax: "693-715" or "700". An entry names
+	// its node one way or the other; "match" beside it is a guard rather than
+	// the selection.
+	At      *string `json:"at"`
 	Op      edit.Op `json:"op"`
 	Text    *string `json:"text"`
 	Kind    string  `json:"kind"`
@@ -51,7 +55,8 @@ var planOps = []struct {
 	text bool
 }{
 	{edit.OpCheck, false}, {edit.OpUncheck, false}, {edit.OpToggle, false},
-	{edit.OpReplace, true}, {edit.OpSetText, true}, {edit.OpDelete, false},
+	{edit.OpReplace, true}, {edit.OpReplaceNode, true},
+	{edit.OpSetText, true}, {edit.OpDelete, false},
 	{edit.OpAppend, true}, {edit.OpPrepend, true},
 }
 
@@ -77,11 +82,14 @@ func planOpNames() string {
 // selects nodes or rewrites them, which is what the entries are for, so one
 // passed alongside a plan is a misunderstanding worth reporting.
 var applyKeeps = map[string]bool{
-	"apply": true, "dry-run": true,
+	"apply": true, "write": true, "W": true,
 	"q": true, "quiet": true,
 	"format": true, "json": true,
 	"n": true, "line-number": true, "N": true, "no-line-number": true,
-	"no-breadcrumb": true, "separator": true, "color": true,
+	"H": true, "with-filename": true, "no-filename": true,
+	"heading": true, "no-heading": true,
+	"breadcrumb": true, "no-breadcrumb": true,
+	"separator": true, "color": true,
 }
 
 // Run carries out a plan of edits. Every entry is planned against the
@@ -90,6 +98,10 @@ var applyKeeps = map[string]bool{
 // none of it.
 func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 	if err := applyFlags(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
+		return 2
+	}
+	if err := cli.PageFlags(fs, format); err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
 	}
@@ -135,10 +147,19 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 		}
 	}
 
+	// A document is one file, and a plan reaches across as many as it names.
+	// The count is known only once every entry is planned, but it is asked
+	// before anything is written, so a run that cannot report itself has not
+	// changed anything either.
+	if err := cli.OneDocument(format, len(cache.order)); err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+		return 2
+	}
+
 	// A plan applies whole or not at all, so every file is written beside
 	// itself first and only renamed into place once all of them are there.
 	// A file that cannot be written is then found before any has been.
-	if !c.DryRun {
+	if c.Write {
 		if err := stageAll(cache, planned, format); err != nil {
 			return 2
 		}
@@ -146,13 +167,24 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
-	p := c.Printer(out, format)
+	// A plan names its own files and reaches across several of them, so the
+	// name of the one a change landed in is always worth printing.
+	p := c.Printer(out, format, cli.Page{TTY: cli.IsTTY(), ManyFiles: true})
 	for _, path := range cache.order {
 		changes := changesOf(planned[path])
-		if len(changes) == 0 || c.Quiet {
+		if c.Quiet {
 			continue
 		}
-		p.PrintEdits(cache.docs[path].Src, changes, c.DryRun)
+		src := cache.docs[path].Src
+		switch {
+		case format == render.Doc:
+			p.PrintDoc(edit.Apply(src, changes))
+		case len(changes) == 0:
+		case format == render.Diff:
+			p.PrintDiff(src, changes)
+		default:
+			p.PrintEdits(src, changes, c.Write)
+		}
 	}
 	out.Flush()
 	return 0
@@ -261,13 +293,16 @@ func planOne(n int, e planEntry, cache *docCache, format render.Format) ([]planC
 	if err != nil {
 		return fail("file", err)
 	}
+	if err := search.AddressHolds(doc, matcher, opt, `"at"`, `"match"`); err != nil {
+		return fail("entry", err)
+	}
 	res := search.File(doc, matcher, opt)
 	if why, code := report.Gate(len(res), e.Expect, e.Multi, report.PlanWords); code != 0 {
 		why.Entry = n
-		report.Refused(os.Stderr, []report.File{{Src: doc.Src, Res: res}}, len(res), why, format)
+		report.Refused(os.Stderr, []report.File{{Doc: doc, Src: doc.Src, Res: res}}, len(res), why, format)
 		return nil, "", false
 	}
-	changes, err := edit.Plan(doc.Src, res, ed)
+	changes, err := edit.Plan(doc, res, ed)
 	if err != nil {
 		return fail("edit", err)
 	}
@@ -289,10 +324,17 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	switch {
 	case e.Path == "":
 		return bad(`no "path": an entry says which file it edits`)
-	case e.Match == nil:
-		return bad(`no "match": the pattern that selects the node to edit`)
+	case e.Match == nil && e.At == nil:
+		return bad(`no "match" or "at": the pattern or the address that selects the node to edit`)
 	case e.Op == edit.OpNone:
 		return bad(`no "op": one of %s`, planOpNames())
+	case e.At != nil && (e.Multi || e.Expect != nil):
+		return bad(`"multi" and "expect" say how many nodes a search should have found; "at" found one by saying so`)
+	// An address takes its lines outright and runs no matcher over them, so a
+	// filter beside it would be read and then decide nothing -- the refusal a
+	// command line makes in its own words.
+	case e.At != nil && e.Kind != "":
+		return bad(`"at" names its lines outright, so there is nothing for "kind" to filter`)
 	}
 	takesText, ok := planOp(e.Op)
 	switch {
@@ -307,27 +349,51 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	case e.Expand < 0:
 		return bad(`"expand" is how many levels to climb from the matched node, so it cannot be negative`)
 	case e.Op.Node() && (e.Section || e.Body):
-		return bad(`op %q edits the matched node, so "section" has nothing to widen; use "replace"`, e.Op)
+		return bad(`op %q edits the matched node, so "section" has nothing to widen; use "replace-node"`, e.Op)
 	}
 
 	kinds, err := cli.ParseKinds(e.Kind)
 	if err != nil {
 		return bad("%v", err)
 	}
+	if e.At != nil {
+		at, err := cli.ParseAddress(*e.At)
+		if err != nil {
+			return bad(`"at" %q: %v`, *e.At, err)
+		}
+		opt.At = []search.Region{at}
+	}
 	opt = search.Options{
-		Kinds:   kinds,
-		Expand:  e.Expand,
-		Section: e.Section,
-		Body:    e.Body,
+		Kinds:     kinds,
+		At:        opt.At,
+		Expand:    e.Expand,
+		ExpandSet: e.Expand > 0,
+		Section:   e.Section,
+		Body:      e.Body,
 		// Each entry names one node, so neighbouring hits stay apart rather
 		// than being run together the way printing runs them.
 		Distinct: true,
+		// A refusal prints the nodes an entry found, so which of their lines
+		// matched is read the way it is on a printed page.
+		Hits: true,
 	}
 	switch e.Op {
 	case edit.OpCheck, edit.OpUncheck, edit.OpToggle:
 		opt.Task = search.TaskAny
 	}
 
+	ed = edit.Options{Op: e.Op}
+	if takesText {
+		ed.Text = *e.Text
+	}
+	// An entry that names its node by address alone has no pattern to build a
+	// matcher from, and needs none: the address is the selection.
+	if e.Match == nil {
+		if e.Op == edit.OpReplace {
+			return bad(`op "replace" stands its text in for what a pattern matched, so it wants "match"; use "replace-node" to rewrite the node an address names`)
+		}
+		return opt, ed, nil, nil
+	}
 	mode := match.Regexp
 	if e.Fixed {
 		mode = match.Substring
@@ -344,10 +410,9 @@ func planSearch(e planEntry) (search.Options, edit.Options, match.Matcher, error
 	if err != nil {
 		return bad("%v", err)
 	}
-	ed = edit.Options{Op: e.Op}
-	if takesText {
-		ed.Text = *e.Text
-	}
+	// A substitution stands its text in for what this entry's own matcher
+	// found, so the matcher travels with the edit rather than beside it.
+	ed.Matcher = matcher
 	return opt, ed, matcher, nil
 }
 

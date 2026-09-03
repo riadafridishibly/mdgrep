@@ -12,6 +12,7 @@ import (
 	"github.com/riadafridishibly/mdgrep/internal/match"
 	"github.com/riadafridishibly/mdgrep/internal/mdoc"
 	"github.com/riadafridishibly/mdgrep/internal/search"
+	"github.com/riadafridishibly/mdgrep/internal/stream"
 )
 
 const (
@@ -39,33 +40,171 @@ const (
 	// appear": one indented line per heading, which is the cheapest useful
 	// view of a tree.
 	Outline
+	// Stream is what one mdgrep hands the next in a pipe: the file and the
+	// span of each result, and none of the text, because the stage reading it
+	// opens the file itself.
+	Stream
+	// Diff is an edit as a unified diff, which is what patch and git apply
+	// read. It carries the same changes the report does, gathered into hunks
+	// and numbered against the file they were planned on.
+	Diff
+	// Doc is the document an edit produced, whole: what --write would have
+	// put in the file, on stdout instead. One document is one file, so it is
+	// refused where a run has more than one to print.
+	Doc
 )
+
+// machine reports whether a format is read by a program rather than by a
+// person: never coloured, and never run into prose.
+func (f Format) machine() bool {
+	return f == Compact || f == JSON || f == Stream || f == Diff || f == Doc
+}
 
 type Printer struct {
 	W           *bufio.Writer
 	Color       bool
 	LineNumbers bool
-	Breadcrumb  bool
-	Format      Format
-	// Separator goes between two results of the same file. It is there for a
-	// person scanning the output; an empty one leaves the results flush
-	// against each other.
+	// Filename prints which file a result came from, and Heading puts that
+	// name on a line above the file's results rather than in front of every
+	// line of them. Both are grep's and ripgrep's, and so are the two facts
+	// the caller settles them from when nobody said: a name is worth printing
+	// when more than one file could answer, and a heading when a person is
+	// reading the output rather than a program.
+	Filename bool
+	Heading  bool
+	// Breadcrumb writes the heading trail above a result. It is the one piece
+	// of the page with no counterpart in grep, and it goes wherever a
+	// Heading goes unless asked otherwise: a heading is what says a person
+	// is reading, and the trail is what tells a person where in the document
+	// they are.
+	Breadcrumb bool
+	Format     Format
+	// Separator goes between two groups of file lines that are not next to
+	// each other in the file: two results, two runs of match lines inside one
+	// result, and two files where no heading parts them. It is grep's and
+	// ripgrep's "--"; an empty one leaves the groups flush against each other.
 	Separator string
+	// Before and After are how many lines of context to print each side of a
+	// match line, counted in the file and clipped to it, exactly as in
+	// ripgrep. They pad the page and nothing else: an edit still rewrites the
+	// node, and a stream still hands on the node.
+	Before, After int
+	// Span writes the expand ladder after a result -- what the result could be
+	// widened to, and what each rung would cost.
+	Span bool
+	// Whole prints the region entire rather than the lines that matched
+	// inside it. Asking for a widener asks to see the region whole, which is
+	// the only switch between line output and node output.
+	Whole bool
 	// Truncate caps how many lines of any one result are printed, so that a
-	// hit inside a 400-line fenced block does not print 400 lines. Zero means
-	// print all of them.
+	// hit inside a 400-line fenced block does not print 400 lines. It caps
+	// node output alone -- see nodePage -- since the lines a matcher pointed
+	// at are the answer and holding one back is the one thing a search must
+	// not do. Zero means print all of them.
 	Truncate int
 
 	wroteAny bool
 }
 
+// inline reports whether the file name rides every line, as against standing
+// above a file's results.
+func (p *Printer) inline() bool { return p.Filename && !p.Heading }
+
+// writePrefix writes what stands in front of one printed line: the file name,
+// the line number, or neither, each closed by a marker, so that a line reads
+// "path:line:text" the way grep and rg write one. mark is ":" on a line that
+// matched and "-" on one a context flag pulled in, which is grep's convention
+// and ripgrep's. It writes straight to the buffer because it runs once per
+// line of output, which is the hottest path in the program.
+func (p *Printer) writePrefix(path string, n int, mark string) {
+	if p.inline() {
+		p.writePath(path, mark)
+	}
+	if p.LineNumbers {
+		p.W.WriteString(p.paint(green, strconv.Itoa(n+1)))
+		p.W.WriteString(p.paint(dim, mark))
+	}
+}
+
+// writePath writes a file name and the marker that closes it.
+func (p *Printer) writePath(path, mark string) {
+	p.W.WriteString(p.paint(magenta, path))
+	p.W.WriteString(p.paint(dim, mark))
+}
+
+// writeLine writes one line of a file behind its prefix.
+func (p *Printer) writeLine(path string, n int, text, mark string) {
+	p.writePrefix(path, n, mark)
+	p.W.WriteString(text)
+	p.W.WriteByte('\n')
+}
+
+// writeNote writes a line that is about the output rather than of the file:
+// what --truncate held back. It names its file the way every other line does
+// and takes no line number, having none, so a reader splitting on the colon
+// finds the path where it always is and prose where a number would be.
+func (p *Printer) writeNote(path, note string) {
+	if p.inline() {
+		p.writePath(path, ":")
+	}
+	p.W.WriteString(p.paint(dim, note))
+	p.W.WriteByte('\n')
+}
+
+// beginFile writes what stands between one file's results and the next. A
+// heading stands above a file's results with a blank line between two files,
+// the way rg writes a terminal. Without one there is nothing to stand above
+// and nothing to separate: the file name rides every line instead, and the
+// separator goes between two files as it goes between two results, the way
+// grep and rg print "--" between two groups whether or not a file boundary
+// lies between them.
+func (p *Printer) beginFile(path string) {
+	if p.Heading {
+		if p.wroteAny {
+			fmt.Fprintln(p.W)
+		}
+		if p.Filename {
+			fmt.Fprintln(p.W, p.paint(magenta, path))
+		}
+	} else if p.wroteAny && p.Separator != "" {
+		fmt.Fprintln(p.W, p.paint(dim, p.Separator))
+	}
+	p.wroteAny = true
+}
+
+// PrintFile answers -l: the file's name is the whole of the line.
+func (p *Printer) PrintFile(path string) {
+	fmt.Fprintln(p.W, p.paint(magenta, path))
+}
+
+// PrintCount answers -c. grep and rg name the file beside a tally on the same
+// terms they name it beside a result, and never above one: a tally is one
+// line, and a heading over one line is a line spent on nothing.
+func (p *Printer) PrintCount(path string, n int) {
+	if p.Filename {
+		p.writePath(path, ":")
+	}
+	p.W.WriteString(strconv.Itoa(n))
+	p.W.WriteByte('\n')
+}
+
 // paint colours a string for a person. Compact and JSON are read by programs,
 // so they are never coloured; Plain and Outline are read by people.
 func (p *Printer) paint(code, s string) string {
-	if !p.Color || s == "" || p.Format == Compact || p.Format == JSON {
+	if !p.Color || s == "" || p.Format.machine() {
 		return s
 	}
 	return code + s + reset
+}
+
+// Begin writes whatever a format puts before its first result. A stream says
+// it is one up front, and says so even when nothing matches: an empty stream
+// is a search that ran and selected nothing, where an empty pipe is no search
+// at all.
+func (p *Printer) Begin() {
+	if p.Format == Stream {
+		stream.WriteHeader(p.W)
+	}
 }
 
 // Print writes one file's results. src supplies the lines, m highlights them.
@@ -74,107 +213,282 @@ func (p *Printer) Print(src *mdoc.Source, results []search.Result, m match.Match
 		return
 	}
 	switch p.Format {
+	case Stream:
+		p.printStream(results)
+		return
 	case JSON:
-		p.printJSON(src, results, m)
+		p.printJSON(src, results)
 		return
 	case Compact:
-		p.printCompact(src, results, m)
+		p.printCompact(src, results)
 		return
 	case Outline:
 		p.printOutline(src, results)
 		return
 	}
-	if p.wroteAny {
-		fmt.Fprintln(p.W)
-	}
-	p.wroteAny = true
+	p.beginFile(src.Path)
 
-	fmt.Fprintln(p.W, p.paint(magenta, src.Path))
-	last := 0
+	// A page is the file's lines, not each result's own copy of them, so the
+	// two questions grep answers per line are answered over the file: whether
+	// the matcher pointed at it, wherever it was pointed at, and whether it
+	// has already been printed.
+	hit := make(map[int]bool)
 	for _, r := range results {
-		last = max(last, r.End+1)
+		for _, n := range r.MatchLines() {
+			hit[n] = true
+		}
 	}
-	width := len(strconv.Itoa(last))
+	// last is the file line the page is standing on, and -1 until one has been
+	// printed: nothing stands between a group and the top of the page.
+	last := -1
 	var shown []string
-	for i, r := range results {
-		if i > 0 && p.Separator != "" {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, p.Separator))
+	for _, r := range results {
+		full := p.page(src, r)
+		window := p.cap(full, r)
+		// Context is counted in the file and clipped to it, so two windows
+		// reaching the same line are one group of file lines rather than two
+		// copies of it. The lines a widener asked for are the region itself
+		// and are the result's own answer, so those are never dropped.
+		lines := window
+		if !p.Whole {
+			lines = past(window, last)
+		}
+		// grep prints "--" between two groups of file lines that are not next
+		// to each other, and nothing between two that are. Two results whose
+		// lines run on are one such group, the same as two runs of match lines
+		// inside one result are two.
+		if last >= 0 && len(lines) > 0 && lines[0].n != last+1 {
+			p.separate()
 		}
 		if p.Breadcrumb && len(r.Breadcrumb) > 0 && !slices.Equal(r.Breadcrumb, shown) {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
+			fmt.Fprintln(p.W, p.paint(cyanFaint, joinCrumb(r.Breadcrumb)))
 		}
 		shown = r.Breadcrumb
-		first, last, before, after := p.window(src, r, m)
-		if before > 0 {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(before)))
-		}
-		for n := first; n <= last; n++ {
-			line := src.Line(n)
-			body := line
-			if n >= r.HitStart && n <= r.HitEnd {
-				body = p.highlight(line, m)
+		for j, l := range lines {
+			if j > 0 && lines[j-1].n != l.n-1 {
+				p.separate()
 			}
-			if p.LineNumbers {
-				num := fmt.Sprintf("%*d", width, n+1)
-				fmt.Fprintf(p.W, "  %s %s %s\n", p.paint(green, num), p.paint(dim, "│"), body)
-			} else {
-				fmt.Fprintf(p.W, "  %s\n", body)
+			mark, body := "-", src.Line(l.n)
+			if l.match || hit[l.n] {
+				// A cell shares its line with its neighbours, so the
+				// highlight is held to the bytes the cell owns: the row
+				// prints whole, and what is marked in it is what matched.
+				lo, hi := cellRange(r, src, l.n)
+				mark, body = ":", p.highlight(body, m, lo, hi)
 			}
+			p.writeLine(src.Path, l.n, body, mark)
 		}
-		if after > 0 {
-			fmt.Fprintf(p.W, "  %s\n", p.paint(dim, elision(after)))
+		if len(lines) > 0 {
+			last = lines[len(lines)-1].n
+		}
+		// The note is a terminator rather than a group of file lines, so no
+		// separator stands in front of it. It is measured against the whole
+		// window rather than what was left of it: the lines dropped are on the
+		// page above, so a rung they cover is a rung the reader can see.
+		if note := p.spanNote(r, window); note != "" {
+			p.writeNote(src.Path, note)
 		}
 	}
 }
 
-// window applies Truncate to one result. The cap is a budget of lines and the
-// matched line is the one thing the caller asked for, so the window starts at
-// the top of the region and slides down only as far as it must to hold that
-// line, spending what is left of the budget below it. before is therefore
-// what was skipped to reach the hit, not context kept above it.
-func (p *Printer) window(src *mdoc.Source, r search.Result, m match.Matcher) (first, last, before, after int) {
-	if p.Truncate <= 0 || r.End-r.Start+1 <= p.Truncate {
-		return r.Start, r.End, 0, 0
+// past drops the lines a group already printed, so a window reaching back into
+// one is the rest of that group rather than a second copy of it.
+func past(lines []outLine, last int) []outLine {
+	for i, l := range lines {
+		if l.n > last {
+			return lines[i:]
+		}
 	}
-	hit := hitLine(src, r, m)
+	return nil
+}
+
+func (p *Printer) separate() {
+	if p.Separator != "" {
+		fmt.Fprintln(p.W, p.paint(dim, p.Separator))
+	}
+}
+
+// outLine is one line of the page: which line of the file it is, and whether
+// the matcher pointed at it or a context flag pulled it in.
+type outLine struct {
+	n     int
+	match bool
+}
+
+// page is the lines one result prints. A result prints the lines that matched,
+// not the node they sit in -- unless a widener asked for the region whole, or
+// the matcher could name no line at all and the node claimed them all.
+func (p *Printer) page(src *mdoc.Source, r search.Result) []outLine {
+	if p.Whole {
+		out := make([]outLine, 0, r.End-r.Start+1)
+		for n := r.Start; n <= r.End; n++ {
+			out = append(out, outLine{n, true})
+		}
+		return out
+	}
+	hits := r.MatchLines()
+	is := make(map[int]bool, len(hits))
+	for _, n := range hits {
+		is[n] = true
+	}
+	// Context is counted in the file and clipped to the file, not to the node
+	// or the region, exactly as in ripgrep.
+	lo, hi := 0, src.NumLines()-1
+	seen := make(map[int]bool, len(hits))
+	var out []outLine
+	for _, h := range hits {
+		for n := max(h-p.Before, lo); n <= min(h+p.After, hi); n++ {
+			if !seen[n] {
+				seen[n] = true
+				out = append(out, outLine{n, is[n]})
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b outLine) int { return a.n - b.n })
+	return out
+}
+
+// cap applies --truncate to a page. The cap is a budget of lines and the
+// matched line is the one thing the caller asked for, so the window starts at
+// the top of what would have printed and slides down only as far as it must to
+// hold that line, spending what is left of the budget below it.
+//
+// What it held back it does not count out. The span note is already the whole
+// of what a reader does next -- it names the node and says where it runs, and
+// --at takes it back -- while a count is only a count, and one measured over a
+// region no rung names cannot even be placed: --section-body 12-20 printed to
+// 18 says "+2" for lines a page showing "paragraph 12-18" has no way to point
+// at. --format compact and --format json carry the two counts as numbers, for
+// a caller that is doing arithmetic rather than reading.
+//
+// It caps node output alone. A page of match lines is already as short as the
+// answer is, and cutting it holds back lines that matched -- three hits in a
+// fence under --truncate 1 printed one of them and counted the other two as
+// held back, which is a search failing to answer rather than a page being
+// shortened.
+func (p *Printer) cap(lines []outLine, r search.Result) []outLine {
+	if p.Truncate <= 0 || !p.nodePage(r) || len(lines) <= p.Truncate {
+		return lines
+	}
+	hit := 0
+	for i, l := range lines {
+		if l.n >= hitLine(r) {
+			hit = i
+			break
+		}
+	}
+	first := 0
+	if hit > p.Truncate-1 {
+		first = min(hit, len(lines)-p.Truncate)
+	}
+	last := min(first+p.Truncate-1, len(lines)-1)
+	return lines[first : last+1]
+}
+
+// nodePage reports whether a page is a node's length rather than an answer's,
+// which is what --truncate caps. A widener asks for the region whole, and a
+// node matcher -- --todo, -k, -v, --outline, an empty pattern -- points at no
+// line at all, so the node claims every line it has. Everything else is the
+// lines the matcher pointed at, and those are the result.
+func (p *Printer) nodePage(r search.Result) bool {
+	return p.Whole || len(r.Hits) == 0
+}
+
+// spanNote is the expand ladder written out: one rung per entry, in ladder
+// order, widest last. A rung the printed lines already cover is left out --
+// the page is showing that region entire, so naming it offers the reader
+// nothing back -- and a note whose every rung is covered goes altogether.
+// Rungs nest, so what drops is always a prefix of the ladder, and what is
+// left is what there is still to gain; --at takes an entry of it back. That
+// costs the plain note the --expand count, which position carried while every
+// rung was printed: --format compact and --format json carry the ladder whole
+// and in order, for a caller counting rather than reading.
+//
+// A ladder that runs out before a section is still a ladder: a hit above the
+// first heading has no section to widen to, but the fence or the list around
+// it is a rung, --expand climbs it, and the machine formats name it, so the
+// note names it too.
+func (p *Printer) spanNote(r search.Result, shown []outLine) string {
+	if !p.Span || len(r.Rungs) == 0 {
+		return ""
+	}
+	on := make(map[int]bool, len(shown))
+	for _, l := range shown {
+		on[l.n] = true
+	}
+	var parts []string
+	for _, g := range r.Rungs {
+		if onPage(on, g) {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s %d-%d", g.Kind, g.Start+1, g.End+1))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
+}
+
+// onPage reports whether every line of a rung was printed.
+func onPage(on map[int]bool, g search.Rung) bool {
+	for n := g.Start; n <= g.End; n++ {
+		if !on[n] {
+			return false
+		}
+	}
+	return true
+}
+
+// window applies Truncate to the whole region a machine format reports. A
+// record carries the node, so the window is measured over Start..End rather
+// than over the lines a page would have printed.
+func (p *Printer) window(r search.Result) (first, last int) {
+	if p.Truncate <= 0 || r.End-r.Start+1 <= p.Truncate {
+		return r.Start, r.End
+	}
+	hit := hitLine(r)
 	first = r.Start
 	if hit > first+p.Truncate-1 {
 		first = min(hit, r.End-p.Truncate+1)
 	}
-	last = min(first+p.Truncate-1, r.End)
-	return first, last, first - r.Start, r.End - last
+	return first, min(first+p.Truncate-1, r.End)
 }
 
-// hitLine is the line the window has to keep. A block is scored whole -- the
+// hitLine is the line a window has to keep. A block is scored whole -- the
 // matcher reads the raw text of the fence or the table, not its lines -- so
 // HitStart is where the block begins and says nothing about where in it the
 // match is. Truncating from HitStart cuts a long block down to its opening
-// lines and drops the very line that was searched for. Spans finds that line
-// the same way the highlight does; a matcher with nothing to point at leaves
-// the block's first line, which is what an anchor search selects a heading by
-// and what a fuzzy score spread over several lines comes to anyway.
-func hitLine(src *mdoc.Source, r search.Result, m match.Matcher) int {
-	if m == nil {
-		return r.HitStart
-	}
-	for n := r.HitStart; n <= r.HitEnd && n < src.NumLines(); n++ {
-		if len(m.Spans(src.Line(n))) > 0 {
-			return n
-		}
+// lines and drops the very line that was searched for. The first of the lines
+// the matcher pointed at is that line; a matcher with nothing to point at
+// leaves the block's first line, which is what an anchor search selects a
+// heading by and what a fuzzy score spread over several lines comes to anyway.
+func hitLine(r search.Result) int {
+	if len(r.Hits) > 0 {
+		return r.Hits[0]
 	}
 	return r.HitStart
 }
 
-func elision(cut int) string {
-	if cut == 1 {
-		return "… +1 line"
+// cellRange is the part of a line a cell result owns, as offsets into that
+// line, or the whole line for every other kind. It is what keeps a highlight
+// inside the cell that matched.
+func cellRange(r search.Result, src *mdoc.Source, n int) (int, int) {
+	if !r.Cell() {
+		return 0, -1
 	}
-	return fmt.Sprintf("… +%d lines", cut)
+	base := src.LineStart(n)
+	return r.Lo - base, r.Hi - base + 1
 }
 
-func (p *Printer) highlight(line string, m match.Matcher) string {
+func (p *Printer) highlight(line string, m match.Matcher, lo, hi int) string {
 	if !p.Color {
 		return line
+	}
+	if hi < 0 || hi > len(line) {
+		hi = len(line)
+	}
+	if lo < 0 {
+		lo = 0
 	}
 	spans := m.Spans(line)
 	if len(spans) == 0 {
@@ -184,6 +498,9 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 	prev := 0
 	for _, s := range spans {
 		if s.Start < prev || s.End > len(line) {
+			continue
+		}
+		if s.Start < lo || s.End > hi {
 			continue
 		}
 		sb.WriteString(line[prev:s.Start])
@@ -198,27 +515,26 @@ func (p *Printer) highlight(line string, m match.Matcher) string {
 
 // printCompact writes the path once and then one record per result:
 //
-//	start[-end] <TAB> kind <TAB> text <TAB> before <TAB> after
+//	start[-end] <TAB> kind <TAB> text <TAB> hits <TAB> spans
 //
 // The text is escaped so a record is always one line, which is the whole point
 // of the format — a reader splits on newline and then on tab, and a path is
 // the line that has no tab in it. The path is escaped for the same reason: a
 // filename may hold a tab or a newline, and the format has to survive one.
 //
-// before and after are how many lines --truncate held back on each side, so
-// the count is read as a number rather than out of an English notice inside
-// the text, which a document that says the same thing would be
-// indistinguishable from. They are two fields and not their sum because the
-// span is the node's and the text is the window: a reader adds before to
-// start to find the line the text begins on, which one total cannot say.
-func (p *Printer) printCompact(src *mdoc.Source, results []search.Result, m match.Matcher) {
+// Under --truncate the span is still the node's and the text is only the
+// window kept, and the record says nothing about how much was held back: the
+// spans field already names the regions to ask for, and --at takes one back
+// whole.
+func (p *Printer) printCompact(src *mdoc.Source, results []search.Result) {
 	p.wroteAny = true
 	fmt.Fprintln(p.W, Escape(src.Path))
 	for _, r := range results {
-		first, last, before, after := p.window(src, r, m)
+		first, last := p.window(r)
 		text := strings.Join(src.Lines(first, last), "\n")
-		fmt.Fprintf(p.W, "%s\t%s\t%s\t%d\t%d\n",
-			lineSpan(r.Start, r.End), r.Kind, Escape(text), before, after)
+		fmt.Fprintf(p.W, "%s\t%s\t%s\t%s\t%s\n",
+			lineSpan(r.Start, r.End), r.Kind, Escape(text),
+			hitList(r.Hits), rungList(r.Rungs))
 	}
 }
 
@@ -227,29 +543,13 @@ func (p *Printer) printCompact(src *mdoc.Source, results []search.Result, m matc
 // sits at the outermost level rather than being dropped, since the caller
 // asked to see what matched.
 func (p *Printer) printOutline(src *mdoc.Source, results []search.Result) {
-	if p.wroteAny {
-		fmt.Fprintln(p.W)
-	}
-	p.wroteAny = true
-	fmt.Fprintln(p.W, p.paint(magenta, src.Path))
-
-	last := 0
-	for _, r := range results {
-		last = max(last, r.HitStart+1)
-	}
-	width := len(strconv.Itoa(last))
+	p.beginFile(src.Path)
 	for _, r := range results {
 		// HitStart, not Start: the line to print is the heading's own, and
 		// Start is wherever the region around it happens to begin.
 		indent := strings.Repeat("  ", max(r.Level-1, 0))
 		text := strings.TrimSpace(src.Line(r.HitStart))
-		if p.LineNumbers {
-			fmt.Fprintf(p.W, "  %s %s %s%s\n",
-				p.paint(green, fmt.Sprintf("%*d", width, r.HitStart+1)),
-				p.paint(dim, "│"), indent, text)
-		} else {
-			fmt.Fprintf(p.W, "  %s%s\n", indent, text)
-		}
+		p.writeLine(src.Path, r.HitStart, indent+text, ":")
 	}
 }
 
@@ -279,16 +579,83 @@ type jsonResult struct {
 	Checked    *bool    `json:"checked,omitempty"`
 	Breadcrumb []string `json:"breadcrumb,omitempty"`
 	Text       string   `json:"text"`
-	// TruncatedBefore and TruncatedAfter count the lines --truncate held back
-	// on each side, so a reader can tell a short node from a capped one
-	// without measuring the text against start and end -- and, since start is
-	// the node's and text is the window, can place the window by adding
-	// TruncatedBefore to start.
-	TruncatedBefore int `json:"truncated_before,omitempty"`
-	TruncatedAfter  int `json:"truncated_after,omitempty"`
+	// Cell is the byte range of the cell that matched, 1-based and inclusive,
+	// present only on a cell result. Two cells of one row report the same
+	// lines and the same text, and this is what tells them apart -- and what
+	// an edit takes back to rewrite one of them.
+	Cell *jsonCell `json:"cell,omitempty"`
+	// Hits are the lines that matched, 1-based. Empty for a node matcher,
+	// which is how a reader tells "every line" from "these lines".
+	Hits []int `json:"hits"`
+	// Spans is the expand ladder, so the array index is the --expand count
+	// and the last entry is what --section selects. Always present in full,
+	// including where the plain note would have dropped the lot for being
+	// wholly covered.
+	Spans []jsonRung `json:"spans"`
 }
 
-func (p *Printer) printJSON(src *mdoc.Source, results []search.Result, m match.Matcher) {
+// jsonCell is where in the line a cell's own text lies, and the text itself,
+// which is what the pattern was matched against.
+type jsonCell struct {
+	Lo   int    `json:"lo"`
+	Hi   int    `json:"hi"`
+	Text string `json:"text"`
+}
+
+// jsonRung is one rung of the ladder. An entry of it, written "start-end", is
+// what --at takes back.
+type jsonRung struct {
+	Kind  string `json:"kind"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+}
+
+// hitList and rungList are the two new compact fields: the match lines as
+// numbers, and the ladder as "kind:start-end", each comma-separated so a
+// record stays one line of tab-separated fields.
+func hitList(hits []int) string {
+	out := make([]string, len(hits))
+	for i, n := range hits {
+		out[i] = strconv.Itoa(n + 1)
+	}
+	return strings.Join(out, ",")
+}
+
+func rungList(rungs []search.Rung) string {
+	out := make([]string, len(rungs))
+	for i, g := range rungs {
+		out[i] = fmt.Sprintf("%s:%d-%d", g.Kind, g.Start+1, g.End+1)
+	}
+	return strings.Join(out, ",")
+}
+
+// oneBased renumbers the match lines for a reader that counts from one.
+func oneBased(hits []int) []int {
+	out := make([]int, len(hits))
+	for i, n := range hits {
+		out[i] = n + 1
+	}
+	return out
+}
+
+// ladderOf is the expand ladder in the shape json reports it.
+func ladderOf(rungs []search.Rung) []jsonRung {
+	out := make([]jsonRung, len(rungs))
+	for i, g := range rungs {
+		out[i] = jsonRung{Kind: string(g.Kind), Start: g.Start + 1, End: g.End + 1}
+	}
+	return out
+}
+
+// printStream writes one region per result: where it is, and nothing about
+// what it says. The next stage reads the file for the rest.
+func (p *Printer) printStream(results []search.Result) {
+	for _, r := range results {
+		stream.WriteRegion(p.W, r.Path, r.Start, r.End)
+	}
+}
+
+func (p *Printer) printJSON(src *mdoc.Source, results []search.Result) {
 	enc := json.NewEncoder(p.W)
 	for _, r := range results {
 		p.wroteAny = true
@@ -297,18 +664,23 @@ func (p *Printer) printJSON(src *mdoc.Source, results []search.Result, m match.M
 		if r.Task {
 			checked = &r.Checked
 		}
-		first, last, before, after := p.window(src, r, m)
+		first, last := p.window(r)
+		var cell *jsonCell
+		if r.Cell() {
+			cell = &jsonCell{Lo: r.Lo + 1, Hi: r.Hi + 1, Text: src.Bytes(r.Lo, r.Hi)}
+		}
 		enc.Encode(jsonResult{
-			Path:            r.Path,
-			Kind:            string(r.Kind),
-			Score:           r.Score,
-			Start:           r.Start + 1,
-			End:             max(r.End, r.Start) + 1,
-			Checked:         checked,
-			Breadcrumb:      r.Breadcrumb,
-			Text:            strings.Join(src.Lines(first, last), "\n"),
-			TruncatedBefore: before,
-			TruncatedAfter:  after,
+			Path:       r.Path,
+			Kind:       string(r.Kind),
+			Score:      r.Score,
+			Start:      r.Start + 1,
+			End:        max(r.End, r.Start) + 1,
+			Checked:    checked,
+			Breadcrumb: r.Breadcrumb,
+			Text:       strings.Join(src.Lines(first, last), "\n"),
+			Cell:       cell,
+			Hits:       oneBased(r.Hits),
+			Spans:      ladderOf(r.Rungs),
 		})
 	}
 }
