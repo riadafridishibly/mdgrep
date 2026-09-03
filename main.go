@@ -344,7 +344,7 @@ func run() (code int) {
 		return 2
 	}
 	if ed.Op != edit.OpNone && useStdin {
-		fmt.Fprintln(os.Stderr, "mdgrep: an edit needs files to write to, not stdin")
+		fmt.Fprintln(os.Stderr, "mdgrep: an edit names the file it rewrites, and stdin is not one")
 		return 2
 	}
 	// A stream names a file for the next stage to read, and stdin is not one:
@@ -587,7 +587,7 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 		planned[i] = changes
 	}
 
-	if !c.DryRun {
+	if c.Write {
 		var files []edit.File
 		for i, changes := range planned {
 			if len(changes) == 0 || !edit.Changed(changes) {
@@ -608,7 +608,7 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 			if len(changes) == 0 {
 				continue
 			}
-			p.PrintEdits(results[i].Src, changes, c.DryRun)
+			p.PrintEdits(results[i].Src, changes, c.Write)
 		}
 	}
 	out.Flush()

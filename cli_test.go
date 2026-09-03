@@ -123,7 +123,7 @@ func TestAppendFromWritesTheFile(t *testing.T) {
 	if err := os.WriteFile(body, []byte("- [ ] one\n- [ ] two\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, stderr, code := capture(t, "verify checksum", path, "--append-from", body, "-q")
+	_, stderr, code := capture(t, "verify checksum", path, "--append-from", body, "-q", "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -151,7 +151,7 @@ func TestExpectRefusesTheWrongCount(t *testing.T) {
 
 func TestExpectAllowsTheCountItStates(t *testing.T) {
 	path := doc(t, sample)
-	_, stderr, code := capture(t, "the", path, "--replace", "X", "--expect", "2", "-q")
+	_, stderr, code := capture(t, "the", path, "--replace", "X", "--expect", "2", "-q", "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -165,7 +165,7 @@ func TestExpectAllowsTheCountItStates(t *testing.T) {
 // them rather than into the stream being parsed.
 func TestRefusalJSONGoesToStderr(t *testing.T) {
 	path := doc(t, sample)
-	stdout, stderr, code := capture(t, "the", path, "--replace", "X", "--json", "--dry-run")
+	stdout, stderr, code := capture(t, "the", path, "--replace", "X", "--json")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -263,9 +263,9 @@ func TestCompactReportsEditStatus(t *testing.T) {
 		want  string
 		twice bool
 	}{
-		{name: "dry run", args: []string{"--dry-run"}, want: "\tcheck\tdry\t- [x] verify checksum"},
-		{name: "applied", want: "\tcheck\tapplied\t- [x] verify checksum"},
-		{name: "already ticked", want: "\tcheck\tunchanged\t", twice: true},
+		{name: "preview", want: "\tcheck\tpreview\t- [x] verify checksum"},
+		{name: "applied", args: []string{"-W"}, want: "\tcheck\tapplied\t- [x] verify checksum"},
+		{name: "already ticked", args: []string{"-W"}, want: "\tcheck\tunchanged\t", twice: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -345,8 +345,8 @@ func TestHelpTopicNarrowsTheManual(t *testing.T) {
 		// which is a section wearing a flag's clothes. It has one of its own,
 		// so Editing no longer carries it and "--help apply" finds Plans.
 		{"plans", "--apply", "--expect"},
-		{"apply", "--apply", "--dry-run"},
-		{"editing", "--dry-run", "--apply"},
+		{"apply", "--apply", "--write"},
+		{"editing", "--write", "--apply"},
 		// --uncheck and --toggle used to be named in --check's prose rather
 		// than in the flag column, where pickSection cannot see them.
 		{"uncheck", "--uncheck", "--apply"},
@@ -1054,10 +1054,10 @@ func TestMinScoreKeepsItsRange(t *testing.T) {
 	}
 }
 
-// A dry run prints the same lines a real edit does, so the one thing that
-// tells them apart has to be printed whatever the layout -- a page and a pipe
-// alike, and a plan as well as a search.
-func TestDryRunSaysSoInEveryLayout(t *testing.T) {
+// An edit shows the change and leaves the file alone; only --write writes.
+// That holds whatever the layout -- a page and a pipe alike, and a plan as
+// well as a search.
+func TestAnEditWritesNothingWithoutWrite(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
@@ -1069,12 +1069,9 @@ func TestDryRunSaysSoInEveryLayout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := doc(t, sample)
-			stdout, _, code := capture(t, append([]string{"verify checksum", path, "--check", "--dry-run"}, tt.args...)...)
+			stdout, _, code := capture(t, append([]string{"verify checksum", path, "--check"}, tt.args...)...)
 			if code != 0 {
 				t.Fatalf("exit = %d", code)
-			}
-			if !strings.Contains(stdout, "(dry run)") {
-				t.Errorf("nothing says the file was left alone:\n%s", stdout)
 			}
 			if !strings.Contains(stdout, "+ ") || read(t, path) != sample {
 				t.Errorf("want the change shown and the file untouched:\n%s", stdout)
@@ -1085,25 +1082,29 @@ func TestDryRunSaysSoInEveryLayout(t *testing.T) {
 	t.Run("a plan", func(t *testing.T) {
 		path := doc(t, sample)
 		p := planFile(t, `{"path":"`+path+`","match":"verify checksum","op":"check"}`)
-		stdout, _, code := capture(t, "--apply", p, "--dry-run")
+		stdout, _, code := capture(t, "--apply", p)
 		if code != 0 {
 			t.Fatalf("exit = %d", code)
 		}
-		if !strings.Contains(stdout, "(dry run)") || read(t, path) != sample {
-			t.Errorf("want the plan marked as a dry run and the file untouched:\n%s", stdout)
+		if !strings.Contains(stdout, "+ ") || read(t, path) != sample {
+			t.Errorf("want the change shown and the file untouched:\n%s", stdout)
 		}
 	})
 }
 
-// A real edit is not marked, so the marker means something when it is there.
-func TestARealEditIsNotMarkedAsADryRun(t *testing.T) {
-	path := doc(t, sample)
-	stdout, _, code := capture(t, "verify checksum", path, "--check")
+// The lines are the same either way, so a caller telling a preview from a
+// write reads the status the machine formats carry rather than the page.
+func TestWriteAndPreviewPrintTheSameLines(t *testing.T) {
+	preview, _, code := capture(t, "verify checksum", doc(t, sample), "--check", "--no-filename")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if strings.Contains(stdout, "dry run") {
-		t.Errorf("a write was reported as a dry run:\n%s", stdout)
+	wrote, _, code := capture(t, "verify checksum", doc(t, sample), "--check", "--no-filename", "-W")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if preview != wrote {
+		t.Errorf("a write and a preview printed different lines:\n%s\n---\n%s", preview, wrote)
 	}
 }
 
@@ -1213,7 +1214,7 @@ func TestApplyTakesThePageFlags(t *testing.T) {
 		t.Run(flag, func(t *testing.T) {
 			path := doc(t, sample)
 			p := planFile(t, `{"path":"`+path+`","match":"verify checksum","op":"check"}`)
-			_, stderr, code := capture(t, "--apply", p, "--dry-run", flag)
+			_, stderr, code := capture(t, "--apply", p, flag)
 			if code != 0 {
 				t.Fatalf("exit = %d, want 0:\n%s", code, stderr)
 			}

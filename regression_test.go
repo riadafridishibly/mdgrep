@@ -81,7 +81,7 @@ func TestApplyLeavesNoFileWrittenWhenAnotherCannotBe(t *testing.T) {
 		`{"path":`+quote(good)+`,"match":"one","op":"check"}`,
 		`{"path":`+quote(bad)+`,"match":"two","op":"check"}`,
 	)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code == 0 {
 		t.Fatalf("exit = 0, want a refusal (%s)", stderr)
 	}
@@ -115,7 +115,7 @@ func TestKindItemSelectsOnlyItems(t *testing.T) {
 func TestApplyKindItemDoesNotEditAParagraph(t *testing.T) {
 	path := doc(t, mixed)
 	p := planFile(t, `{"path":`+quote(path)+`,"match":"Some paragraph","kind":"item","op":"replace","text":"REWRITTEN"}`)
-	stdout, _, code := capture(t, "--apply", p, "--dry-run")
+	stdout, _, code := capture(t, "--apply", p)
 	if code == 0 {
 		t.Errorf("an entry scoped to \"item\" matched a paragraph:\n%s", stdout)
 	}
@@ -130,7 +130,7 @@ func TestApplyKindItemDoesNotEditAParagraph(t *testing.T) {
 func TestRankedEditsAllReachTheFile(t *testing.T) {
 	path := doc(t, ranked)
 	stdout, stderr, code := capture(t,
-		"--fuzzy", "abc", path, "--min-score", "0.1", "--multi", "--check")
+		"--fuzzy", "abc", path, "--min-score", "0.1", "--multi", "--check", "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (%s)", code, stderr)
 	}
@@ -318,7 +318,7 @@ func TestApplyRefusalIsAlwaysJSONWhenAskedFor(t *testing.T) {
 func TestCompactInsertionSpanIsReadable(t *testing.T) {
 	path := doc(t, widened)
 	p := planFile(t, `{"path":`+quote(path)+`,"match":"Beta paragraph","op":"append","text":"appended para"}`)
-	stdout, stderr, code := capture(t, "--apply", p, "--format", "compact", "--dry-run")
+	stdout, stderr, code := capture(t, "--apply", p, "--format", "compact")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -457,7 +457,7 @@ func TestMachineFormatsDropTheRedundantTrail(t *testing.T) {
 		t.Errorf("breadcrumb = %v, want [Notes]: the heading names itself", got.Breadcrumb)
 	}
 
-	stdout, stderr, code = capture(t, "^## Setup", path, "--set-text", "New", "--dry-run")
+	stdout, stderr, code = capture(t, "^## Setup", path, "--set-text", "New")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -502,7 +502,7 @@ func TestCompactTruncatesWithoutANotice(t *testing.T) {
 // match a regular expression against English is not being told anything.
 func TestCompactRefusalIsRecords(t *testing.T) {
 	path := doc(t, "# Doc\n\nalpha one\n\nalpha two\n")
-	_, stderr, code := capture(t, "alpha", path, "--replace", "x", "--dry-run", "--format", "compact")
+	_, stderr, code := capture(t, "alpha", path, "--replace", "x", "--format", "compact")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -531,7 +531,7 @@ func TestCompactRefusalIsRecords(t *testing.T) {
 func TestEditJSONInsertionSpanIsReadable(t *testing.T) {
 	path := doc(t, "# Notes\n\n## Setup\n\nbody\n")
 	for _, op := range []string{"--append", "--prepend"} {
-		stdout, stderr, code := capture(t, "^## Setup", path, op, "x", "--dry-run", "--json")
+		stdout, stderr, code := capture(t, "^## Setup", path, op, "x", "--json")
 		if code != 0 {
 			t.Fatalf("%s: exit = %d (%s)", op, code, stderr)
 		}

@@ -297,7 +297,7 @@ func TestAtRefusesTheFlagsThatSelectAnotherWay(t *testing.T) {
 // words it already uses.
 func TestAtIsWhatAnEditRewrites(t *testing.T) {
 	path := doc(t, notes)
-	if _, stderr, code := capture(t, "--at", "15", path, "--replace", "- [x] archived"); code != 0 {
+	if _, stderr, code := capture(t, "--at", "15", path, "--replace", "- [x] archived", "-W"); code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
 	if got := read(t, path); !strings.Contains(got, "- [x] archived\n") {
@@ -305,7 +305,7 @@ func TestAtIsWhatAnEditRewrites(t *testing.T) {
 	}
 
 	path = doc(t, notes)
-	if _, stderr, code := capture(t, "-e", "vault", "--at", "13-14", path, "--check"); code != 0 {
+	if _, stderr, code := capture(t, "-e", "vault", "--at", "13-14", path, "--check", "-W"); code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
 	if got := read(t, path); !strings.Contains(got, "- [x] rotate the foo key\n") {
@@ -313,7 +313,7 @@ func TestAtIsWhatAnEditRewrites(t *testing.T) {
 	}
 
 	// Lines no block draws are a region, and --set-text has no markup to keep.
-	_, stderr, code := capture(t, "--at", "12-14", doc(t, notes), "--set-text", "x")
+	_, stderr, code := capture(t, "--at", "12-14", doc(t, notes), "--set-text", "x", "-W")
 	if code != 2 || !strings.Contains(stderr, "--set-text does not apply to a region") {
 		t.Errorf("exit = %d, wanted the region refusal:\n%s", code, stderr)
 	}

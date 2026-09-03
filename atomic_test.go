@@ -51,7 +51,7 @@ func TestEditWritesNothingWhenOneFileCannotBeWritten(t *testing.T) {
 	root, first, second := twoTrees(t)
 	unwritable(t, filepath.Dir(second))
 
-	_, stderr, code := capture(t, "--check", "--multi", "task", root)
+	_, stderr, code := capture(t, "--check", "--multi", "task", root, "-W")
 	if code != 2 {
 		t.Fatalf("code %d, want 2\n%s", code, stderr)
 	}
@@ -67,7 +67,7 @@ func TestEditWritesNothingWhenOneFileCannotBeWritten(t *testing.T) {
 // not a reason for a run that can be carried out to carry out less.
 func TestEditStillWritesEveryFileItCan(t *testing.T) {
 	root, first, second := twoTrees(t)
-	stdout, stderr, code := capture(t, "--check", "--multi", "task", root)
+	stdout, stderr, code := capture(t, "--check", "--multi", "task", root, "-W")
 	if code != 0 {
 		t.Fatalf("code %d, want 0\n%s", code, stderr)
 	}

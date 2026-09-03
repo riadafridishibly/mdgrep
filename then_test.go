@@ -60,7 +60,7 @@ func TestThenEndsInAnEdit(t *testing.T) {
 
 	_, stderr, code := capture(t, "^## Some header", "--section", path,
 		"--then", "-k", "list",
-		"--then", "--todo", "--check", "--multi")
+		"--then", "--todo", "--check", "--multi", "-W")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
@@ -335,7 +335,7 @@ func TestExecEndsInAnEdit(t *testing.T) {
 	path := doc(t, pipedDoc)
 
 	_, stderr, code := capture(t, "--exec",
-		`"^### Sub" --section `+path+` | --todo | --check`)
+		`"^### Sub" --section `+path+` | --todo | --check -W`)
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}

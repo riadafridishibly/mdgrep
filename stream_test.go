@@ -86,7 +86,7 @@ func TestStreamEndsInAnEdit(t *testing.T) {
 
 	first, _, _ := capture(t, "^## Some header", "--section", path, "--stream")
 	second, _, _ := runStage(t, first, "", "-k", "list", "--stream")
-	_, stderr, code := runStage(t, second, "", "--todo", "--check", "--multi")
+	_, stderr, code := runStage(t, second, "", "--todo", "--check", "--multi", "-W")
 	if code != 0 {
 		t.Fatalf("edit exit %d: %s", code, stderr)
 	}

@@ -227,14 +227,14 @@ rewriting them is not what asking to see them meant.
 | `--replace-from FILE` and friends | the same, with TEXT read from a file (`-` is stdin) |
 | `--multi` | edit every match |
 | `--expect N` | edit only if exactly N nodes matched |
-| `--dry-run` | show the edit, write nothing |
+| `-W`, `--write` | write the edit; without it the edit is only shown |
 | `--apply FILE` | run a plan of edits, one JSON object per line (`-` is stdin) |
 
 ```bash
-mdgrep "ship the docs" --check                  # - [ ] ship the docs -> - [x]
-mdgrep --anchor "#setup" --set-text "Install"   # ## Setup -> ## Install
-mdgrep "^## Changelog" --section-body --replace-from new.md
-mdgrep "obsolete note" --delete
+mdgrep "ship the docs" --check -W               # - [ ] ship the docs -> - [x]
+mdgrep --anchor "#setup" --set-text "Install" -W  # ## Setup -> ## Install
+mdgrep "^## Changelog" --section-body --replace-from new.md -W
+mdgrep "obsolete note" --delete -W
 ```
 
 `--check`, `--uncheck`, `--toggle` and `--set-text` act on **the matched
@@ -283,20 +283,25 @@ and the next command rewrites it without searching for it again. That matters
 most where the pattern that found a node is not a pattern that would find it
 *only*.
 
-An edit reports what it did, one line per line: `-` before a line it removed
+An edit shows the change and leaves the file alone. `-W` writes it. The
+report is the same either way, one line per line: `-` before a line it removed
 and `+` before one it added, each numbered where it sits in its own version of
 the file, and `=` before a line it left as it found it. After the mark, the
-line is written the way a search writes one. A dry run prints `(dry run)`
-first, since the lines are otherwise the same:
+line is written the way a search writes one:
 
 ```
-$ mdgrep "ship the docs" notes.md --check --dry-run
-(dry run)
+$ mdgrep "ship the docs" notes.md --check
 
 Release
 - 5:- [ ] ship the docs
 + 5:- [x] ship the docs
+
+$ mdgrep "ship the docs" notes.md --check -W    # same lines, and the file changes
 ```
+
+Nothing on the page tells a written edit from a shown one, since the flag that
+asked for it is on the command line. A program reads which it was from the
+machine formats, where a change is `applied` or `preview`.
 
 ### A plan of edits
 
@@ -348,8 +353,8 @@ mdgrep: 1 of 3 entries refused; nothing was written
 An entry that matches nothing, matches more than it may, or names a file that
 cannot be read refuses the run, as does a pair of entries reaching for the same
 lines. Every failure is reported against its number, so one round trip says
-everything the next plan has to fix. `--dry-run` and `-q` mean what they mean
-for a single edit.
+everything the next plan has to fix. `-W` and `-q` mean what they mean for a
+single edit: a plan is shown until `-W` says to write it.
 
 ### Pipelines
 
@@ -693,7 +698,7 @@ them apart, so a record can be counted and a count is a count of nodes.
 Neither machine format prints a page, so `-A`, `-B`, `-C` and `--span` are
 refused beside them the way `--stream` and `--outline` refuse them.
 
-An edit reports the span, the operation, `applied`/`dry`/`unchanged`, and the
+An edit reports the span, the operation, `applied`/`preview`/`unchanged`, and the
 new text. Compact leaves out the breadcrumb and the score; it costs about a
 third of what `--json` costs on the same results, so it is the cheaper choice
 whenever those two are not what is wanted.

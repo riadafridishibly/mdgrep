@@ -81,7 +81,7 @@ func planOpNames() string {
 // selects nodes or rewrites them, which is what the entries are for, so one
 // passed alongside a plan is a misunderstanding worth reporting.
 var applyKeeps = map[string]bool{
-	"apply": true, "dry-run": true,
+	"apply": true, "write": true, "W": true,
 	"q": true, "quiet": true,
 	"format": true, "json": true,
 	"n": true, "line-number": true, "N": true, "no-line-number": true,
@@ -145,7 +145,7 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 	// A plan applies whole or not at all, so every file is written beside
 	// itself first and only renamed into place once all of them are there.
 	// A file that cannot be written is then found before any has been.
-	if !c.DryRun {
+	if c.Write {
 		if err := stageAll(cache, planned, format); err != nil {
 			return 2
 		}
@@ -161,7 +161,7 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 		if len(changes) == 0 || c.Quiet {
 			continue
 		}
-		p.PrintEdits(cache.docs[path].Src, changes, c.DryRun)
+		p.PrintEdits(cache.docs[path].Src, changes, c.Write)
 	}
 	out.Flush()
 	return 0

@@ -14,28 +14,19 @@ import (
 // that came, each numbered where it sits in its own version of the file: "-"
 // before a line the edit removed, "+" before one it added, and "=" before one
 // it left as it found it, which is how a checkbox already in the asked-for
-// state is reported.
-func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, dry bool) {
+// state is reported. wrote says whether the file on disk was changed, which
+// only --write does; the lines are the same either way.
+func (p *Printer) PrintEdits(src *mdoc.Source, changes []edit.Change, wrote bool) {
 	if len(changes) == 0 {
 		return
 	}
 	switch p.Format {
 	case JSON:
-		p.printEditJSON(changes, dry)
+		p.printEditJSON(changes, wrote)
 		return
 	case Compact:
-		p.printEditCompact(src, changes, dry)
+		p.printEditCompact(src, changes, wrote)
 		return
-	}
-	// A dry run prints the same lines a real one does, so the one thing
-	// telling them apart has to be printed too, and once is enough: it is a
-	// fact about the run, not about any file of it, so it stands first,
-	// before any file is named.
-	if dry && !p.wroteAny {
-		fmt.Fprintln(p.W, p.paint(dim, "(dry run)"))
-		if p.Heading {
-			fmt.Fprintln(p.W)
-		}
 	}
 	p.beginFile(src.Path)
 
@@ -79,26 +70,26 @@ func (p *Printer) editLine(path, color, mark string, num int, line string) {
 // printEditCompact reports a change the way printCompact reports a result:
 // the path once, then one record per change.
 //
-//	start[-end] <TAB> op <TAB> applied|dry|unchanged <TAB> new text
+//	start[-end] <TAB> op <TAB> applied|preview|unchanged <TAB> new text
 //
-// The old text is left out — the caller either has the file or asked for a dry
-// run against it — and "new" is empty for a deletion.
-func (p *Printer) printEditCompact(src *mdoc.Source, changes []edit.Change, dry bool) {
+// The old text is left out — the caller either has the file or is being shown
+// the edit against it — and "new" is empty for a deletion.
+func (p *Printer) printEditCompact(src *mdoc.Source, changes []edit.Change, wrote bool) {
 	p.wroteAny = true
 	fmt.Fprintln(p.W, Escape(src.Path))
 	for _, c := range changes {
 		fmt.Fprintf(p.W, "%s\t%s\t%s\t%s\n",
 			lineSpan(c.Start, c.End), c.Op,
-			editStatus(c.NoOp, dry), Escape(strings.Join(c.New, "\n")))
+			editStatus(c.NoOp, wrote), Escape(strings.Join(c.New, "\n")))
 	}
 }
 
-func editStatus(noop, dry bool) string {
+func editStatus(noop, wrote bool) string {
 	switch {
 	case noop:
 		return "unchanged"
-	case dry:
-		return "dry"
+	case !wrote:
+		return "preview"
 	}
 	return "applied"
 }
@@ -114,7 +105,7 @@ type jsonEdit struct {
 	Breadcrumb []string `json:"breadcrumb,omitempty"`
 }
 
-func (p *Printer) printEditJSON(changes []edit.Change, dry bool) {
+func (p *Printer) printEditJSON(changes []edit.Change, wrote bool) {
 	enc := json.NewEncoder(p.W)
 	for _, c := range changes {
 		p.wroteAny = true
@@ -125,7 +116,7 @@ func (p *Printer) printEditJSON(changes []edit.Change, dry bool) {
 			End:        max(c.End, c.Start) + 1,
 			Old:        c.Old,
 			New:        c.New,
-			Applied:    !dry && !c.NoOp,
+			Applied:    wrote && !c.NoOp,
 			Breadcrumb: c.Breadcrumb,
 		})
 	}

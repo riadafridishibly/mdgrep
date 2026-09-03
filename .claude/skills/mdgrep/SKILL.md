@@ -101,7 +101,7 @@ back whole. `hits` are the lines that matched, comma-separated and **empty for a
 node matcher** (`-v`, or the empty pattern behind a filter) — which is how a
 reader tells "every line" from "these lines". `spans` is the expand ladder as
 `kind:start-end`, in ladder order, so the index is the `--expand` count. An
-edit records `start[-end] op applied|dry|unchanged new`, an insertion the one
+edit records `start[-end] op applied|preview|unchanged new`, an insertion the one
 line it lands on.
 
 Neither machine format prints a page, so `-A`, `-B`, `-C` and `--span` are
@@ -115,7 +115,7 @@ before it selected. Only the first names files, only the last prints or
 writes; a flag on the wrong stage is refused by name.
 
 ```bash
-mdgrep "^## Release" --section docs --then -k list --then --todo --check --multi
+mdgrep "^## Release" --section docs --then -k list --then --todo --check --multi -W
 mdgrep --exec '"^## Release" --section | -k list | --todo' docs   # the same, one string
 ```
 
@@ -147,15 +147,17 @@ stderr which stage narrowed to nothing, exit 1 either way.
 | `--set-text TEXT` | change what the node says, keeping its markup |
 | `--replace TEXT` / `--delete` | replace / remove the region |
 | `--append TEXT` / `--prepend TEXT` | insert after / before it |
-| `--dry-run` / `--expect N` / `--multi` | show only / require N matches / edit all |
+| `-W` / `--expect N` / `--multi` | write it / require N matches / edit all |
 
 Rows 1–2 act on the **matched node** and are refused with `--section`; rows 3–4
 act on the **region** `--section` and `--expand` widen to.
 
-**More than one match is an error**: nothing written, hits listed — narrow it,
-or say `--expect N` / `--multi`. Search → `--dry-run` → `--expect N`. An edit
-reports `- ` and `+ ` lines in the search shape, `= ` for a node already as
-asked (exit 0), and `(dry run)` first under `--dry-run`. The flags that only
+**An edit shows the change and writes nothing until `-W`.** More than one
+match is an error: nothing written, hits listed — narrow it, or say
+`--expect N` / `--multi`. Search → edit → `-W`. An edit reports `- ` and `+ `
+lines in the search shape, `= ` for a node already as asked (exit 0); the
+lines are the same with or without `-W`, and `--format compact`/`--json` call
+a change `preview` or `applied`. The flags that only
 report refuse an edit: `-c`, `-l`, `-m`, `--truncate`, `-A`/`-B`/`-C`,
 `--siblings`, `--outline`, and stdin input. `--at` selects the region an edit
 rewrites, which is what makes an edit by line number possible — pair it with
@@ -164,7 +166,8 @@ rewrites, which is what makes an edit by line number possible — pair it with
 ### `--apply` — 2 or more edits in one process
 
 One JSON object per line, from a file or stdin as `-`; one parse and one write
-per file however many entries name it. Entries are independent and the plan
+per file however many entries name it. `-W` gates a plan the way it gates a
+single edit. Entries are independent and the plan
 applies whole or not at all, failures printing as `entry N: ...` with nothing
 written. `mdgrep --help plans` for the keys.
 
@@ -181,10 +184,10 @@ EOF
 mdgrep "retry budget" docs --section            # the section documenting X
 mdgrep "" . --todo --format compact             # every open box, parseable
 mdgrep --outline docs -N                        # what is in this tree
-mdgrep "sign the tarball" --check --expect 1    # tick exactly one task
-mdgrep "^## Changelog" --section-body --replace-from CHANGELOG.md --dry-run
-mdgrep -e "rotate the key" --at 693-715 notes.md --check   # tick a span the note gave back
-mdgrep "^## Release" --section docs --then --todo --check --multi  # tick the boxes in one section
+mdgrep "sign the tarball" --check --expect 1 -W  # tick exactly one task
+mdgrep "^## Changelog" --section-body --replace-from CHANGELOG.md  # shown, not written
+mdgrep -e "rotate the key" --at 693-715 notes.md --check -W  # tick a span the note gave back
+mdgrep "^## Release" --section docs --then --todo --check --multi -W  # tick the boxes in one section
 ```
 
 **`mdgrep --help <flag>` for:** `--anchor` / `--anchor-style` (a heading from a

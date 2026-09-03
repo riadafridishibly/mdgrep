@@ -56,7 +56,7 @@ func TestApplyRunsEveryEntryInOnePass(t *testing.T) {
 		`{"path":"`+path+`","match":"^## Setup","op":"set-text","text":"Install"}`,
 		`{"path":"`+path+`","match":"ship the tests","op":"check"}`,
 	)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 	}
@@ -71,7 +71,7 @@ func TestApplyRunsEveryEntryInOnePass(t *testing.T) {
 func TestApplyReadsThePlanFromStdin(t *testing.T) {
 	path := doc(t, tasks)
 	onStdin(t, `{"path":"`+path+`","match":"ship the docs","op":"check"}`+"\n")
-	_, stderr, code := capture(t, "--apply", "-")
+	_, stderr, code := capture(t, "--apply", "-", "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 	}
@@ -88,7 +88,7 @@ func TestApplyRefusesTheWholePlanForOneBadEntry(t *testing.T) {
 		`{"path":"`+path+`","match":"ship the docs","op":"check"}`,
 		`{"path":"`+path+`","match":"ship","op":"check"}`,
 	)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -106,7 +106,7 @@ func TestApplyRefusesTheWholePlanForOneBadEntry(t *testing.T) {
 func TestApplyRefusesAnEntryThatMatchesNothing(t *testing.T) {
 	path := doc(t, tasks)
 	p := planFile(t, `{"path":"`+path+`","match":"ship the moon","op":"check"}`)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -121,7 +121,7 @@ func TestApplyRefusalJSONCarriesTheEntryNumber(t *testing.T) {
 		`{"path":"`+path+`","match":"ship the docs","op":"check"}`,
 		`{"path":"`+path+`","match":"ship","op":"check"}`,
 	)
-	_, stderr, code := capture(t, "--apply", p, "--json")
+	_, stderr, code := capture(t, "--apply", p, "--json", "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -138,7 +138,7 @@ func TestApplyRefusalJSONCarriesTheEntryNumber(t *testing.T) {
 // A misspelled key would otherwise be a silently different edit.
 func TestApplyRefusesAnUnknownKey(t *testing.T) {
 	p := planFile(t, `{"path":"x.md","matches":"ship","op":"check"}`)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -166,7 +166,7 @@ func TestApplyChecksWhatAnEntryAsksFor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, stderr, code := capture(t, "--apply", planFile(t, tt.entry))
+			_, stderr, code := capture(t, "--apply", planFile(t, tt.entry), "-W")
 			if code != 2 {
 				t.Fatalf("exit = %d, want 2", code)
 			}
@@ -217,7 +217,7 @@ func TestApplyRefusesTwoEntriesOverTheSameLines(t *testing.T) {
 			for i, e := range tt.entries {
 				entries[i] = fmt.Sprintf(e, path)
 			}
-			_, stderr, code := capture(t, "--apply", planFile(t, entries...))
+			_, stderr, code := capture(t, "--apply", planFile(t, entries...), "-W")
 			if code != 2 {
 				t.Fatalf("exit = %d, want 2", code)
 			}
@@ -241,7 +241,7 @@ func TestApplyCannotMatchWhatAnotherEntryWrites(t *testing.T) {
 		`{"path":"`+path+`","match":"^## Usage","op":"set-text","text":"Running"}`,
 		`{"path":"`+path+`","match":"^## Running","op":"append","text":"see below"}`,
 	)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -263,7 +263,7 @@ func TestApplyKeepsLaterEntriesInPlaceWhenAnEarlierOneShiftsTheFile(t *testing.T
 		`{"path":"`+path+`","match":"Call the binary","op":"set-text","text":"Run the binary."}`,
 		`{"path":"`+path+`","match":"ship the tests","op":"check"}`,
 	)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 	}
@@ -295,7 +295,7 @@ func TestApplyTakesTwoInsertionsAtTheSamePoint(t *testing.T) {
 		`{"path":"`+path+`","match":"First para","op":"append","text":"after first"}`,
 		`{"path":"`+path+`","match":"Second para","op":"prepend","text":"before second"}`,
 	)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 	}
@@ -308,7 +308,7 @@ func TestApplyTakesTwoInsertionsAtTheSamePoint(t *testing.T) {
 func TestApplyTakesTheKeysThatStandInForFlags(t *testing.T) {
 	path := doc(t, tasks)
 	p := planFile(t, `{"path":"`+path+`","match":"ship","op":"check","multi":true,"expect":2,"kind":"item"}`)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 	}
@@ -320,7 +320,7 @@ func TestApplyTakesTheKeysThatStandInForFlags(t *testing.T) {
 func TestApplyMatchesLiterallyWhenAskedTo(t *testing.T) {
 	path := doc(t, "- [ ] ship v1.0 (final)\n- [ ] ship v1x0 final\n")
 	p := planFile(t, `{"path":"`+path+`","match":"v1.0 (final)","op":"check","fixed":true}`)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 	}
@@ -329,15 +329,15 @@ func TestApplyMatchesLiterallyWhenAskedTo(t *testing.T) {
 	}
 }
 
-func TestApplyDryRunWritesNothing(t *testing.T) {
+func TestApplyWithoutWriteWritesNothing(t *testing.T) {
 	path := doc(t, tasks)
 	p := planFile(t, `{"path":"`+path+`","match":"ship the docs","op":"check"}`)
-	stdout, stderr, code := capture(t, "--apply", p, "--dry-run", "--format", "compact")
+	stdout, stderr, code := capture(t, "--apply", p, "--format", "compact")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 	}
-	if !strings.Contains(stdout, "check\tdry") {
-		t.Errorf("the edit was not reported as a dry run:\n%s", stdout)
+	if !strings.Contains(stdout, "check\tpreview") {
+		t.Errorf("the edit was not reported as a preview:\n%s", stdout)
 	}
 	if read(t, path) != tasks {
 		t.Errorf("the file was written anyway:\n%s", read(t, path))
@@ -372,7 +372,7 @@ func TestApplyRefusesTheFlagsItSupersedes(t *testing.T) {
 
 func TestApplyWantsObjectsRatherThanAnArray(t *testing.T) {
 	p := planFile(t, `[{"path":"x.md","match":"a","op":"check"}]`)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -386,7 +386,7 @@ func TestApplyRefusesAnEmptyPlan(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, stderr, code := capture(t, "--apply", path)
+	_, stderr, code := capture(t, "--apply", path, "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -398,7 +398,7 @@ func TestApplyRefusesAnEmptyPlan(t *testing.T) {
 func TestApplyReportsAFileItCannotRead(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "gone.md")
 	p := planFile(t, `{"path":"`+missing+`","match":"a","op":"check"}`)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -419,7 +419,7 @@ func TestApplyTakesOneFileNamedTwoWaysAsOneFile(t *testing.T) {
 			`{"path":"`+path+`","match":"ship the docs","op":"check"}`,
 			`{"path":"`+alias+`","match":"ship the tests","op":"check"}`,
 		)
-		_, stderr, code := capture(t, "--apply", p)
+		_, stderr, code := capture(t, "--apply", p, "-W")
 		if code != 0 {
 			t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 		}
@@ -436,7 +436,7 @@ func TestApplyTakesOneFileNamedTwoWaysAsOneFile(t *testing.T) {
 			`{"path":"`+path+`","match":"ship the docs","op":"check"}`,
 			`{"path":"`+alias+`","match":"ship the docs","op":"uncheck"}`,
 		)
-		_, stderr, code := capture(t, "--apply", p)
+		_, stderr, code := capture(t, "--apply", p, "-W")
 		if code != 2 {
 			t.Fatalf("exit = %d, want 2", code)
 		}
@@ -465,7 +465,7 @@ func TestApplyGathersEverySpellingOfOnePath(t *testing.T) {
 		fmt.Sprintf(`{"path":%q,"match":"ship the tests","op":"check"}`, alias),
 		fmt.Sprintf(`{"path":%q,"match":"^## Setup","op":"set-text","text":"Install"}`, alias),
 	)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
@@ -487,7 +487,7 @@ func TestApplyTakesAnAddress(t *testing.T) {
 		`{"path":"`+path+`","at":"5","op":"check"}`,
 		`{"path":"`+path+`","at":"3","match":"^## Setup","op":"set-text","text":"Install"}`,
 	)
-	if _, stderr, code := capture(t, "--apply", p); code != 0 {
+	if _, stderr, code := capture(t, "--apply", p, "-W"); code != 0 {
 		t.Fatalf("exit = %d (%s)", code, stderr)
 	}
 	got := read(t, path)
@@ -505,7 +505,7 @@ func TestApplyTakesAnAddress(t *testing.T) {
 func TestApplyRefusesAnAddressWhoseGuardIsGone(t *testing.T) {
 	path := doc(t, tasks)
 	p := planFile(t, `{"path":"`+path+`","at":"5","match":"ship the tests","op":"check"}`)
-	_, stderr, code := capture(t, "--apply", p)
+	_, stderr, code := capture(t, "--apply", p, "-W")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -519,7 +519,7 @@ func TestApplyRefusesAnAddressWhoseGuardIsGone(t *testing.T) {
 	// The other half of the same rule, in the same words: an entry outlives the
 	// file it was written against, so the lines it names have to still be there.
 	p = planFile(t, `{"path":"`+path+`","at":"99","op":"check"}`)
-	_, stderr, code = capture(t, "--apply", p)
+	_, stderr, code = capture(t, "--apply", p, "-W")
 	if code != 2 || !strings.Contains(stderr, `"at" 99-99`) {
 		t.Errorf("exit = %d, want 2 and the address quoted back:\n%s", code, stderr)
 	}
@@ -536,7 +536,7 @@ func TestApplyRefusesTheKeysAnAddressSupersedes(t *testing.T) {
 		`{"path":"` + path + `","at":"0","op":"check"}`,
 		`{"path":"` + path + `","op":"check"}`,
 	} {
-		_, stderr, code := capture(t, "--apply", planFile(t, entry))
+		_, stderr, code := capture(t, "--apply", planFile(t, entry), "-W")
 		if code != 2 {
 			t.Errorf("%s: exit = %d, want 2", entry, code)
 		}

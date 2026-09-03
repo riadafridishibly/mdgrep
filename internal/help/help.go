@@ -108,9 +108,11 @@ Editing
                         stdin)
       --multi           edit every match; without it, more than one is an error
       --expect N        edit only if exactly N nodes matched, else fail
-      --dry-run         show the edit, write nothing
+  -W, --write           write the edit to the file; without it the edit is
+                        only shown
 
-An edit rewrites what the same flags would have printed. --check and
+An edit shows the change and leaves the file alone; -W writes it. What an
+edit rewrites is what the same flags would have printed. --check and
 --set-text act on the matched node; --replace, --delete, --append and
 --prepend act on the region --section and --expand widen it to. --siblings is
 refused beside an edit, along with -A, -B and -C: it keeps the blocks either
@@ -120,7 +122,8 @@ meant. Each file is written in one atomic go.
 An edit reports each line it removed behind "-" and each it added behind "+",
 numbered where it sits in its own version of the file, and a node already as
 asked behind "="; after the mark, the line is written as a search writes one.
-A dry run says "(dry run)" first, since the lines are otherwise the same.
+The lines are the same whether or not -W was given; --format compact and
+--format json say which by calling a change "preview" or "applied".
 
 Plans
       --apply FILE      carry out a plan of edits read from FILE ("-" is

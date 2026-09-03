@@ -76,7 +76,7 @@ type Config struct {
 	PreFrom   OptString
 	Multi     bool
 	Expect    OptInt
-	DryRun    bool
+	Write     bool
 	Apply     OptString
 
 	// The matching flags are read together rather than one at a time: --fuzzy
@@ -374,7 +374,7 @@ func Parse(args []string) (*Config, *flag.FlagSet, error) {
 	fs.Var(&c.PreFrom, "prepend-from", "")
 	fs.BoolVar(&c.Multi, "multi", false, "")
 	fs.Var(&c.Expect, "expect", "")
-	fs.BoolVar(&c.DryRun, "dry-run", false, "")
+	bind(func(n string) { fs.BoolVar(&c.Write, n, false, "") }, "W", "write")
 	fs.Var(&c.Apply, "apply", "")
 	bind(func(n string) { fs.Var(padFlag{"--before", &c.Before, nil}, n, "") }, "B", "before")
 	bind(func(n string) { fs.Var(padFlag{"--after", nil, &c.After}, n, "") }, "A", "after")
@@ -613,8 +613,8 @@ func (c *Config) Edit() (edit.Options, error) {
 	}
 
 	if len(ops) == 0 {
-		if c.Multi || c.DryRun || c.Expect.set {
-			return edit.Options{}, fmt.Errorf("--multi, --expect and --dry-run only mean something with an edit")
+		if c.Multi || c.Write || c.Expect.set {
+			return edit.Options{}, fmt.Errorf("--multi, --expect and --write only mean something with an edit")
 		}
 		return edit.Options{}, nil
 	}
@@ -1000,7 +1000,7 @@ var streamEdits = map[string]bool{
 	"check": true, "uncheck": true, "toggle": true, "delete": true,
 	"replace": true, "replace-from": true, "set-text": true, "set-text-from": true,
 	"append": true, "append-from": true, "prepend": true, "prepend-from": true,
-	"multi": true, "expect": true, "dry-run": true, "apply": true,
+	"multi": true, "expect": true, "write": true, "W": true, "apply": true,
 }
 
 // StreamFlags refuses the flags a stream cannot honour, the way OutlineFlags
