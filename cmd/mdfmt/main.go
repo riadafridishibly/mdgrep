@@ -16,6 +16,10 @@
 // byte-identical, "reformats" when the bytes differ but both sides render to
 // the same HTML, and "lost" when the HTML differs -- a render that changed
 // what the document means.
+//
+// Out of scope: this is a scratch tool for probing the parser, not part of
+// mdgrep. Nothing here is tested and nothing imports it. Excluded from the
+// conformance suite and from coverage.
 package main
 
 import (
