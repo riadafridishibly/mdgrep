@@ -1,0 +1,20 @@
+-- notes.md --
+# Notes
+
+## Release
+
+Prose before the list.
+
+- [ ] ship the docs
+- [x] ship the tests
+
+## Backlog
+
+- [ ] ship the icons
+-- args --
+mdgrep "^## Release" --section notes.md --then -k list --then --todo
+-- stdout --
+- [ ] ship the docs
+(list 7-8, section 3-8)
+-- exit --
+0

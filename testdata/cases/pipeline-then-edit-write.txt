@@ -1,0 +1,32 @@
+-- notes.md --
+# Notes
+
+## Release
+
+- [ ] ship the docs
+- [ ] ship the tests
+
+## Backlog
+
+- [ ] ship the icons
+-- args --
+mdgrep "^## Release" --section notes.md --then --todo --check --multi -W
+-- stdout --
+- - [ ] ship the docs
++ - [x] ship the docs
+--
+- - [ ] ship the tests
++ - [x] ship the tests
+-- exit --
+0
+-- notes.md.after --
+# Notes
+
+## Release
+
+- [x] ship the docs
+- [x] ship the tests
+
+## Backlog
+
+- [ ] ship the icons
