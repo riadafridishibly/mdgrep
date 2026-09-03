@@ -3,6 +3,7 @@ package render
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -123,3 +124,123 @@ func (p *Printer) printEditJSON(changes []edit.Change, wrote bool) {
 }
 
 func joinCrumb(crumb []string) string { return strings.Join(crumb, " › ") }
+
+// diffContext is how many unchanged lines a hunk carries either side of a
+// change: three, which is what diff -u has printed since it was written and
+// what patch and git apply expect when nothing says otherwise.
+const diffContext = 3
+
+// PrintDiff writes one file's changes as a unified diff, the format patch and
+// git apply read. No lines are matched up here: edit.Plan already knows the
+// exact lines that go and the exact lines that come, so the patch says what
+// the edit planned rather than what a line-matching algorithm would guess
+// about it. A replacement that happens to share words with what it replaces
+// is one block out and one block in, not the two spliced together.
+func (p *Printer) PrintDiff(src *mdoc.Source, changes []edit.Change) {
+	// A node already as asked contributes no line to a patch, and dropping
+	// those first is what lets a file whose changes are all no-ops print
+	// nothing rather than a header with no hunk under it.
+	real := make([]edit.Change, 0, len(changes))
+	for _, c := range changes {
+		if !c.NoOp {
+			real = append(real, c)
+		}
+	}
+	if len(real) == 0 {
+		return
+	}
+	old, new := patchNames(src.Path)
+	fmt.Fprintf(p.W, "--- %s\n+++ %s\n", old, new)
+
+	// Two changes closer than twice the context share a hunk: the lines
+	// between them are context for both, and printed once rather than twice.
+	offset := 0
+	for i := 0; i < len(real); {
+		j := i + 1
+		for j < len(real) && real[j].Start-oldEnd(real[j-1]) <= 2*diffContext {
+			j++
+		}
+		offset = p.hunk(src, real[i:j], offset)
+		i = j
+	}
+}
+
+// patchNames writes the two sides of a patch header. A relative path takes
+// git's "a/" and "b/", so "git apply" reads the patch as it stands; an
+// absolute path takes neither, since prefixing one would make a name no
+// strip level can turn back into the file it came from. Both spellings are
+// read by patch, which strips nothing unless told to.
+func patchNames(path string) (string, string) {
+	if filepath.IsAbs(path) {
+		return path, path
+	}
+	return "a/" + path, "b/" + path
+}
+
+// oldEnd is the line after the last one a change removes. A change that
+// removes nothing is an insertion and covers no line of the old file at all,
+// which is why the span comes from len(Old) rather than from Change.End.
+func oldEnd(c edit.Change) int { return c.Start + len(c.Old) }
+
+// hunk writes one run of changes with the context around it, numbered on both
+// sides, and returns the offset the next hunk's new side is shifted by.
+func (p *Printer) hunk(src *mdoc.Source, changes []edit.Change, offset int) int {
+	lo := max(changes[0].Start-diffContext, 0)
+	hi := min(oldEnd(changes[len(changes)-1])+diffContext, src.NumLines())
+
+	oldCount := hi - lo
+	newCount := oldCount
+	for _, c := range changes {
+		newCount += len(c.New) - len(c.Old)
+	}
+	fmt.Fprintf(p.W, "@@ -%s +%s @@\n", hunkSpan(lo+1, oldCount), hunkSpan(lo+1+offset, newCount))
+
+	// A file that does not end in a newline says so after the last line of
+	// whichever side owns it, which is how diff -u marks it and how patch
+	// puts it back.
+	noEOL := !strings.HasSuffix(src.Text(), "\n")
+	last := hi == src.NumLines()
+
+	cur := lo
+	for n, c := range changes {
+		for ; cur < c.Start; cur++ {
+			p.diffLine(" ", src.Line(cur), noEOL && last && cur == hi-1)
+		}
+		ends := last && n == len(changes)-1 && oldEnd(c) == hi
+		for i, line := range c.Old {
+			p.diffLine("-", line, noEOL && ends && i == len(c.Old)-1)
+		}
+		for i, line := range c.New {
+			p.diffLine("+", line, noEOL && ends && i == len(c.New)-1)
+		}
+		cur = oldEnd(c)
+	}
+	for ; cur < hi; cur++ {
+		p.diffLine(" ", src.Line(cur), noEOL && last && cur == hi-1)
+	}
+	return offset + newCount - oldCount
+}
+
+// diffLine writes one line of a hunk behind its marker, and the note that the
+// file stops there without a newline.
+func (p *Printer) diffLine(mark, line string, noEOL bool) {
+	p.W.WriteString(mark)
+	p.W.WriteString(line)
+	p.W.WriteByte('\n')
+	if noEOL {
+		p.W.WriteString("\\ No newline at end of file\n")
+	}
+}
+
+// hunkSpan writes one side of a hunk header. A side with no lines at all sits
+// after the line before it, which is what "-0,0" on a new file means.
+func hunkSpan(start, count int) string {
+	if count == 0 {
+		return fmt.Sprintf("%d,0", start-1)
+	}
+	return fmt.Sprintf("%d,%d", start, count)
+}
+
+// PrintDoc writes a document the way an edit left it. There is nothing to lay
+// out: the answer is the file, so it goes out as it would have been written.
+func (p *Printer) PrintDoc(text string) { p.W.WriteString(text) }

@@ -44,11 +44,21 @@ const (
 	// span of each result, and none of the text, because the stage reading it
 	// opens the file itself.
 	Stream
+	// Diff is an edit as a unified diff, which is what patch and git apply
+	// read. It carries the same changes the report does, gathered into hunks
+	// and numbered against the file they were planned on.
+	Diff
+	// Doc is the document an edit produced, whole: what --write would have
+	// put in the file, on stdout instead. One document is one file, so it is
+	// refused where a run has more than one to print.
+	Doc
 )
 
 // machine reports whether a format is read by a program rather than by a
 // person: never coloured, and never run into prose.
-func (f Format) machine() bool { return f == Compact || f == JSON || f == Stream }
+func (f Format) machine() bool {
+	return f == Compact || f == JSON || f == Stream || f == Diff || f == Doc
+}
 
 type Printer struct {
 	W           *bufio.Writer

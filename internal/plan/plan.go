@@ -100,6 +100,10 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
 	}
+	if err := cli.PageFlags(fs, format); err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
+		return 2
+	}
 	path, _ := c.Apply.Value()
 	text, err := cli.ReadText(path)
 	if err != nil {
@@ -142,6 +146,15 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 		}
 	}
 
+	// A document is one file, and a plan reaches across as many as it names.
+	// The count is known only once every entry is planned, but it is asked
+	// before anything is written, so a run that cannot report itself has not
+	// changed anything either.
+	if err := cli.OneDocument(format, len(cache.order)); err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+		return 2
+	}
+
 	// A plan applies whole or not at all, so every file is written beside
 	// itself first and only renamed into place once all of them are there.
 	// A file that cannot be written is then found before any has been.
@@ -158,10 +171,19 @@ func Run(c *cli.Config, fs *flag.FlagSet, format render.Format) int {
 	p := c.Printer(out, format, cli.Page{TTY: cli.IsTTY(), ManyFiles: true})
 	for _, path := range cache.order {
 		changes := changesOf(planned[path])
-		if len(changes) == 0 || c.Quiet {
+		if c.Quiet {
 			continue
 		}
-		p.PrintEdits(cache.docs[path].Src, changes, c.Write)
+		src := cache.docs[path].Src
+		switch {
+		case format == render.Doc:
+			p.PrintDoc(edit.Apply(src, changes))
+		case len(changes) == 0:
+		case format == render.Diff:
+			p.PrintDiff(src, changes)
+		default:
+			p.PrintEdits(src, changes, c.Write)
+		}
 	}
 	out.Flush()
 	return 0

@@ -230,9 +230,20 @@ func run() (code int) {
 	// rather than inside it -- so none of them pays for a second pass of the
 	// matcher over every line of every result.
 	last.c.Opt.Hits = !last.c.Count && !last.c.FilesOnly && !last.c.Quiet &&
-		format != render.Stream && format != render.Outline
+		format != render.Stream && format != render.Outline &&
+		format != render.Diff && format != render.Doc
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+		return 2
+	}
+	// --format diff and --format doc name what an edit produced, so they are
+	// refused where nothing is being edited.
+	if err := cli.EditFormat(format, ed.Op != edit.OpNone); err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
+		return 2
+	}
+	if err := cli.PageFlags(last.fs, format); err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n%s\n", err, help.Hint)
 		return 2
 	}
 
@@ -339,12 +350,21 @@ func run() (code int) {
 	// An address names lines of one file. Applying the same numbers to each of
 	// several is not what anybody meant by them, so the run is refused rather
 	// than answered.
-	if n := len(files) + boolCount(useStdin); len(first.c.Opt.At) > 0 && n != 1 {
+	n := len(files) + boolCount(useStdin)
+	if len(first.c.Opt.At) > 0 && n != 1 {
 		fmt.Fprintf(os.Stderr, "mdgrep: --at names lines of one file, and %d could answer\n", n)
 		return 2
 	}
-	if ed.Op != edit.OpNone && useStdin {
-		fmt.Fprintln(os.Stderr, "mdgrep: an edit names the file it rewrites, and stdin is not one")
+	// A document is one file, however many the run selected.
+	if err := cli.OneDocument(format, n); err != nil {
+		fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+		return 2
+	}
+	// An edit reads a document to work out the change and prints what it
+	// worked out, which stdin can answer for. Writing the change back needs
+	// somewhere to write it, and a pipe is not a place.
+	if ed.Op != edit.OpNone && useStdin && last.c.Write {
+		fmt.Fprintln(os.Stderr, "mdgrep: --write names the file it writes to, and stdin is not one")
 		return 2
 	}
 	// A stream names a file for the next stage to read, and stdin is not one:
@@ -391,13 +411,22 @@ func run() (code int) {
 	// reached[i] is whether stage i selected anything in any file, which is
 	// what lets a run of several stages say where the narrowing stopped.
 	reached := make([]atomic.Bool, len(stages))
+	var piped *report.File
 	if useStdin {
 		doc := mdoc.Parse("<stdin>", stdinData)
 		if err := atCheck(doc, first.c, first.m, guard); err != nil {
 			fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
 			return 2
 		}
-		emit(doc.Src, pipeline(doc, stages, nil, reached))
+		res := pipeline(doc, stages, nil, reached)
+		// An edit reports on what it selected rather than printing it, so a
+		// piped document joins the files the edit is planned over instead of
+		// being written out here.
+		if ed.Op != edit.OpNone {
+			piped = &report.File{Src: doc.Src, Res: res}
+		} else {
+			emit(doc.Src, res)
+		}
 	}
 
 	results := make([]report.File, len(files))
@@ -432,6 +461,9 @@ func run() (code int) {
 	close(jobs)
 	wg.Wait()
 
+	if piped != nil {
+		results = append([]report.File{*piped}, results...)
+	}
 	if ed.Op != edit.OpNone {
 		return done(runEdits(out, p, results, ed, last.c))
 	}
@@ -563,6 +595,20 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 		// here as it is everywhere else.
 		if why.Kind != "nomatch" {
 			report.Refused(os.Stderr, results, total, why, p.Format)
+			return code
+		}
+		// --format doc prints the document as the edit left it, and an edit
+		// that matched nothing left it as it was. Printing it is what keeps a
+		// miss from emptying the file the run was redirected into; a refusal
+		// above prints nothing, because there the run failed rather than
+		// found nothing to do.
+		if p.Format == render.Doc && !c.Quiet {
+			for _, r := range results {
+				if r.Src != nil {
+					p.PrintDoc(r.Src.Text())
+				}
+			}
+			out.Flush()
 		}
 		return code
 	}
@@ -605,10 +651,19 @@ func runEdits(out *bufio.Writer, p *render.Printer, results []report.File, e edi
 	// edit is a report of an edit that happened.
 	if !c.Quiet {
 		for i, changes := range planned {
-			if len(changes) == 0 {
-				continue
+			src := results[i].Src
+			switch {
+			// A document is printed whether or not the edit changed it: the
+			// format is the file as the edit left it, and a run that selected
+			// it has said which file that is.
+			case p.Format == render.Doc && src != nil:
+				p.PrintDoc(edit.Apply(src, changes))
+			case len(changes) == 0:
+			case p.Format == render.Diff:
+				p.PrintDiff(src, changes)
+			default:
+				p.PrintEdits(src, changes, c.Write)
 			}
-			p.PrintEdits(results[i].Src, changes, c.Write)
 		}
 	}
 	out.Flush()

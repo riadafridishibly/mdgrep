@@ -148,6 +148,7 @@ stderr which stage narrowed to nothing, exit 1 either way.
 | `--replace TEXT` / `--delete` | replace / remove the region |
 | `--append TEXT` / `--prepend TEXT` | insert after / before it |
 | `-W` / `--expect N` / `--multi` | write it / require N matches / edit all |
+| `--format diff` / `--format doc` | the patch it would apply / the document it produced |
 
 Rows 1–2 act on the **matched node** and are refused with `--section`; rows 3–4
 act on the **region** `--section` and `--expand` widen to.
@@ -157,9 +158,16 @@ match is an error: nothing written, hits listed — narrow it, or say
 `--expect N` / `--multi`. Search → edit → `-W`. An edit reports `- ` and `+ `
 lines in the search shape, `= ` for a node already as asked (exit 0); the
 lines are the same with or without `-W`, and `--format compact`/`--json` call
-a change `preview` or `applied`. The flags that only
+a change `preview` or `applied`. Where the document came from never changes
+what an edit prints; two formats print something else instead. `--format diff`
+is a unified patch for any number of files. `--format doc` is the document the
+edit produced, so it wants exactly one and refuses a run with more — that is
+the filter shape, `cat f.md | mdgrep PATTERN --replace X --format doc > out.md`,
+and it prints the document unchanged on a miss so a redirect is never emptied.
+The flags that only
 report refuse an edit: `-c`, `-l`, `-m`, `--truncate`, `-A`/`-B`/`-C`,
-`--siblings`, `--outline`, and stdin input. `--at` selects the region an edit
+`--siblings`, `--outline`. `-W` is refused on stdin, which has no file to
+write to. `--at` selects the region an edit
 rewrites, which is what makes an edit by line number possible — pair it with
 `-e GUARD` so a stale address is refused rather than applied.
 

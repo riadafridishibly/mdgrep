@@ -1090,7 +1090,7 @@ func parseFormat(spec OptString, jsonFlag, streamFlag, outline bool) (render.For
 	}
 	f, ok := formats[strings.ToLower(strings.TrimSpace(spec.val))]
 	if !ok {
-		return 0, fmt.Errorf("unknown format %q: plain, compact, json or stream", spec.val)
+		return 0, fmt.Errorf("unknown format %q: plain, compact, json, stream, diff or doc", spec.val)
 	}
 	if jsonFlag && f != render.JSON {
 		return 0, fmt.Errorf("--json and --format %s ask for different output", spec.val)
@@ -1104,6 +1104,67 @@ func parseFormat(spec OptString, jsonFlag, streamFlag, outline bool) (render.For
 var formats = map[string]render.Format{
 	"plain": render.Plain, "compact": render.Compact,
 	"json": render.JSON, "stream": render.Stream,
+	"diff": render.Diff, "doc": render.Doc,
+}
+
+// EditFormat refuses the two formats that report an edit where there is no
+// edit to report. Both name what an edit produced -- the patch it would
+// apply, the document it would write -- so neither has anything to say about
+// a search, and saying so beats printing an empty patch or the file entire.
+func EditFormat(format render.Format, editing bool) error {
+	if editing {
+		return nil
+	}
+	switch format {
+	case render.Diff:
+		return errors.New("--format diff is the patch an edit would apply; there is no edit here")
+	case render.Doc:
+		return errors.New("--format doc is the document an edit produced; there is no edit here")
+	}
+	return nil
+}
+
+// pageLayout names the flags that say how results are laid out on a page.
+// None of them has anything to say about a patch, which numbers its own
+// lines, or about a document, which is the file exactly as the edit left it.
+var pageLayout = map[string]bool{
+	"span": true, "no-span": true,
+	"n": true, "line-number": true, "N": true, "no-line-number": true,
+	"H": true, "with-filename": true, "no-filename": true,
+	"heading": true, "no-heading": true,
+	"breadcrumb": true, "no-breadcrumb": true,
+	"separator": true,
+}
+
+// PageFlags refuses those flags beside the two formats that print no page. It
+// is the rule --outline and the machine formats already follow: a flag that
+// would be read and then change nothing is refused by name rather than
+// quietly dropped.
+func PageFlags(fs *flag.FlagSet, format render.Format) error {
+	which := ""
+	switch format {
+	case render.Diff:
+		which = "--format diff numbers its own lines"
+	case render.Doc:
+		which = "--format doc is the file itself"
+	default:
+		return nil
+	}
+	if named := Given(fs, func(name string) bool { return pageLayout[name] }); named != "" {
+		return fmt.Errorf("%s, so there is nothing for %s to lay out", which, named)
+	}
+	return nil
+}
+
+// OneDocument refuses --format doc where a run has more than one document to
+// print. Two documents run together are not a document: nothing in the format
+// says where one ends, so the output would be neither writable nor readable
+// as the file it claims to be.
+func OneDocument(format render.Format, n int) error {
+	if format != render.Doc || n == 1 {
+		return nil
+	}
+	return fmt.Errorf("--format doc prints the document an edit produced, and %d files are not one document", n)
 }
 
 // ParseKinds reads --kind's list into the set a search filters by. A name no

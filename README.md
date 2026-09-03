@@ -228,6 +228,8 @@ rewriting them is not what asking to see them meant.
 | `--multi` | edit every match |
 | `--expect N` | edit only if exactly N nodes matched |
 | `-W`, `--write` | write the edit; without it the edit is only shown |
+| `--format diff` | print the edit as a unified patch instead |
+| `--format doc` | print the document the edit produced instead |
 | `--apply FILE` | run a plan of edits, one JSON object per line (`-` is stdin) |
 
 ```bash
@@ -302,6 +304,40 @@ $ mdgrep "ship the docs" notes.md --check -W    # same lines, and the file chang
 Nothing on the page tells a written edit from a shown one, since the flag that
 asked for it is on the command line. A program reads which it was from the
 machine formats, where a change is `applied` or `preview`.
+
+Where the document came from does not change what an edit prints: a piped
+document, one named file and a tree of them all report the same way. Two
+formats print something else instead of the report.
+
+`--format diff` is a unified patch, for any number of files:
+
+```
+$ mdgrep "ship the docs" notes.md --check --format diff
+--- a/notes.md
++++ b/notes.md
+@@ -2,5 +2,5 @@
+ 
+ ## Release
+ 
+-- [ ] ship the docs
++- [x] ship the docs
+ - [ ] tag the release
+```
+
+`--format doc` is the document the edit produced — what `-W` would have
+written, on stdout instead. One document is one file, so a run with more than
+one is refused: two documents run together are not a document. That makes the
+filter shape work, which is the one thing a piped document can do that a named
+one cannot:
+
+```bash
+cat notes.md | mdgrep "old text" --replace "new text" --format doc > out.md
+```
+
+`-W` has nowhere to write a piped document and says so. Under `--format doc` a
+search that matched nothing prints the document unchanged, so a miss cannot
+empty the file the run was redirected into; a *refused* edit prints nothing,
+because there the run failed rather than found nothing to do.
 
 ### A plan of edits
 
@@ -489,7 +525,7 @@ matches", for the same reason an unreadable directory is.
 | `--no-span` | do not |
 | `--truncate N` | cap node output at N lines; matched lines are never capped |
 | `--color WHEN` | `auto` (default), `always`, `never` |
-| `--format WHEN` | `plain` (default), `compact`, `json` or `stream` |
+| `--format WHEN` | `plain` (default), `compact`, `json`, `stream`, `diff` or `doc` |
 | `--json` | one JSON object per result (same as `--format json`) |
 | `--stream` | hand the regions to the next mdgrep (same as `--format stream`) |
 | `--then` | narrow what the search before it selected; everything after it is another search |

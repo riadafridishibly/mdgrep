@@ -125,6 +125,20 @@ asked behind "="; after the mark, the line is written as a search writes one.
 The lines are the same whether or not -W was given; --format compact and
 --format json say which by calling a change "preview" or "applied".
 
+What an edit prints does not depend on where its document came from: a piped
+document, one named file and a tree of them all report the same way. Two
+formats print something else instead. --format diff is a unified patch, which
+patch and git apply read, for any number of files. --format doc is the
+document the edit produced, which is what -W would have written -- so it wants
+exactly one document and refuses a run with more, since two documents run
+together are not a document. An edit on stdin is the filter shape:
+
+  $ cat notes.md | mdgrep "old text" --replace "new text" --format doc > out.md
+
+-W has nowhere to write a piped document and says so. A search that matched
+nothing prints the document unchanged under --format doc, so a miss does not
+empty the file a run was redirected into; a refused edit prints nothing.
+
 Plans
       --apply FILE      carry out a plan of edits read from FILE ("-" is
                         stdin): one JSON object per line
@@ -212,7 +226,9 @@ Output
                         since a cap spent on the first of them would drop
                         the rest
       --color WHEN      auto, always or never (default auto)
-      --format WHEN     plain (default), compact, json or stream
+      --format WHEN     plain (default), compact, json, stream, diff or doc.
+                        diff and doc report an edit: the patch it would
+                        apply, and the document it produced
       --json            one JSON object per result (same as --format json)
   -c, --count           print only the number of results per file
   -l, --files-with-matches
