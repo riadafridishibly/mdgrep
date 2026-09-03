@@ -805,6 +805,55 @@ matter is one searchable node; every result is a verbatim slice of the file.
 go test ./...
 ```
 
+### Case files
+
+`testdata/cases/*.txt` holds end-to-end runs written out in full: the documents
+a run reads, the command line, and everything the command produced. Each file
+is a txtar archive — sections opened by a line of the form `-- name --` and
+running to the next one.
+
+```
+-- notes.md --
+# Notes
+
+## Release
+
+- [ ] ship the docs
+- [ ] ship the tests
+-- args --
+mdgrep "ship the docs" --check -W notes.md
+-- stdout --
+- - [ ] ship the docs
++ - [x] ship the docs
+-- exit --
+0
+-- notes.md.after --
+# Notes
+
+## Release
+
+- [x] ship the docs
+- [ ] ship the tests
+```
+
+Everything above `args` is a document written into a directory of its own, and
+the command runs there, so the paths in the output are the ones in the file.
+Below `args` everything is generated: `stdout`, `stderr` when the run wrote any,
+`exit`, and `NAME.after` for each document the run rewrote — which is what makes
+an edit inspectable, the document before and after sitting side by side. An
+optional `stdin` section feeds the run's standard input.
+
+Writing a case means writing the first two sections and letting the test fill in
+the rest:
+
+```bash
+go test -run TestCases -update
+```
+
+Read the diff it produces: that is the assertion. A case whose output drifts
+fails with both versions printed, and `-update` accepts the new one once the
+change is the one you meant.
+
 Every layer that converts between byte offsets, line numbers and rune indices
 has a fuzz target, since that is where the three have to agree. Seeds run as
 ordinary tests, so `go test ./...` covers the inputs already known. Looking for

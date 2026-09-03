@@ -1,0 +1,19 @@
+-- notes.md --
+# Notes
+
+## Setup
+
+Run the installer.
+-- args --
+mdgrep "^## Setup" --set-text "Install" -W notes.md
+-- stdout --
+- ## Setup
++ ## Install
+-- exit --
+0
+-- notes.md.after --
+# Notes
+
+## Install
+
+Run the installer.

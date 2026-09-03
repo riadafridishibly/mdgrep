@@ -1,0 +1,17 @@
+-- notes.md --
+# Notes
+
+- keep this
+- obsolete note
+- keep this too
+-- args --
+mdgrep "obsolete note" --delete -W notes.md
+-- stdout --
+- - obsolete note
+-- exit --
+0
+-- notes.md.after --
+# Notes
+
+- keep this
+- keep this too

@@ -1,0 +1,27 @@
+-- notes.md --
+# Notes
+
+## Changelog
+
+old entry
+
+## Usage
+
+text
+-- args --
+mdgrep "^## Changelog" --section-body --replace "new entry" -W notes.md
+-- stdout --
+- old entry
++ new entry
+-- exit --
+0
+-- notes.md.after --
+# Notes
+
+## Changelog
+
+new entry
+
+## Usage
+
+text

@@ -1,0 +1,13 @@
+-- args --
+mdgrep "ship"
+-- stdin --
+# Notes
+
+- [ ] ship the docs
+- [ ] ship the tests
+-- stdout --
+- [ ] ship the docs
+- [ ] ship the tests
+(section 1-4)
+-- exit --
+0

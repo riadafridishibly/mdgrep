@@ -1,0 +1,21 @@
+-- notes.md --
+# Notes
+
+## Install
+
+Steps:
+
+- Download the tarball
+- On macOS run `brew install foo`
+- Verify the checksum
+
+## Usage
+
+Call the binary.
+-- args --
+mdgrep "brew install" notes.md
+-- stdout --
+- On macOS run `brew install foo`
+(list 7-9, section 3-9)
+-- exit --
+0

@@ -1,0 +1,19 @@
+-- notes.md --
+# Notes
+
+## Release
+
+- [ ] ship the docs
+-- args --
+mdgrep "ship the docs" --check --format diff notes.md
+-- stdout --
+--- a/notes.md
++++ b/notes.md
+@@ -2,4 +2,4 @@
+ 
+ ## Release
+ 
+-- [ ] ship the docs
++- [x] ship the docs
+-- exit --
+0

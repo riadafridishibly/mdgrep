@@ -1,0 +1,10 @@
+-- notes.md --
+# Notes
+-- args --
+mdgrep --nope "x" notes.md
+-- stdout --
+-- stderr --
+mdgrep: flag provided but not defined: -nope
+try 'mdgrep --help'
+-- exit --
+2

@@ -1,0 +1,10 @@
+-- notes.md --
+# Notes
+
+- [ ] ship the docs
+-- args --
+mdgrep "ship" --json notes.md
+-- stdout --
+{"path":"notes.md","kind":"item","score":1,"start":3,"end":3,"checked":false,"breadcrumb":["Notes"],"text":"- [ ] ship the docs","hits":[3],"spans":[{"kind":"item","start":3,"end":3},{"kind":"list","start":3,"end":3},{"kind":"section","start":1,"end":3}]}
+-- exit --
+0
